@@ -4,6 +4,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG ROOT=/opt/GSM
 ENV container=docker
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 # 1. Dépendances système
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,18 +12,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf automake libtool pkg-config wget curl tmux systemd systemd-sysv \
     iptables iproute2 libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev \
     libdbi-dev libdbd-sqlite3 libsqlite3-dev libc-ares-dev libgnutls28-dev \
-    libortp-dev libfftw3-dev libusb-1.0-0-dev \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* && update-ca-certificates
+    libortp-dev libfftw3-dev libusb-1.0-0-dev sqlite3 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 SHELL ["/bin/bash", "-c"]
 WORKDIR ${ROOT}
 
-# 2. Libosmocore (Version 1.12.0)
-# 1. On définit les variables d'environnement de manière persistante
-ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
-ENV LD_LIBRARY_PATH=/usr/local/lib
+# 2. Création de l'utilisateur osmocom
+RUN groupadd osmocom && useradd -r -g osmocom -s /sbin/nologin -d /var/lib/osmocom osmocom && \
+    mkdir -p /var/lib/osmocom && chown osmocom:osmocom /var/lib/osmocom
 
-# 2. La boucle de compilation
+# 3. Compilation de la pile Osmocom (Ordre respecté)
 RUN for repo in \
     libosmocore:1.12.1 \
     libosmo-netif:1.7.0 \
@@ -44,7 +44,7 @@ RUN for repo in \
     \
     if [ "$name" = "libosmocore" ]; then \
         GIT_URL="https://github.com/osmocom/$name"; \
-    elif [ "$name" = "libosmo-netif" ] || [ "$name" = "libosmo-abis" ] || [ "$name" = "libosmo-sigtran" ]; then \
+    elif [[ "$name" =~ "libosmo" ]]; then \
         GIT_URL="https://gitea.osmocom.org/osmocom/$name"; \
     else \
         GIT_URL="https://gitea.osmocom.org/cellular-infrastructure/$name"; \
@@ -66,23 +66,42 @@ RUN for repo in \
     ldconfig; \
     done
 
-# 5. Configuration du système et des services
+# 4. Installation des fichiers du projet
 WORKDIR /etc/osmocom
-# On copie vos fichiers locaux (.service, .cfg, .sh) vers /etc/osmocom
-COPY . /etc/osmocom/
+COPY scripts/. /etc/osmocom/
+COPY configs/. /etc/osmocom/
 
-# Correction des chemins dans les fichiers de service pour pointer vers /usr/local/bin
-# et s'assurer que les binaires sont accessibles
+# Copie des binaires vers /usr/bin pour systemd et installation des .service
 RUN cp -f /usr/local/bin/osmo* /usr/bin/ || true && \
-    chmod +x /etc/osmocom/entrypoint.sh /etc/osmocom/run_simulated.sh
+    # Si tu as des fichiers .service dans configs/
+    cp /etc/osmocom/configs/*.service /lib/systemd/system/ 2>/dev/null || true
 
-# 6. Fix Login & Console
-# Supprime le mot de passe root pour permettre l'accès console sans mdp
-RUN passwd -d root && \
-    # Masque le getty pour éviter l'invite de login bloquante sur le TTY principal
+# 5. Fix Permissions & Systemd (Status 214/217)
+RUN sed -i 's/^CPUScheduling/#CPUScheduling/g' /lib/systemd/system/osmo-*.service && \
+    sed -i 's/User=osmocom/User=root/g' /lib/systemd/system/osmo-ggsn.service && \
+    sed -i 's/User=osmocom/User=root/g' /lib/systemd/system/osmo-sgsn.service && \
+    chmod +x /etc/osmocom/*.sh
+
+# 6. Configuration de l'Auto-Start au boot du conteneur
+RUN cat <<EOF > /lib/systemd/system/osmo-autostart.service
+[Unit]
+Description=Lancement auto de la pile Osmocom
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/osmocom/osmo-start.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+RUN systemctl enable osmo-autostart.service && \
+    passwd -d root && \
     systemctl mask getty@tty1.service serial-getty@tty1.service
 
 # Point d'entrée pour systemd
 STOPSIGNAL SIGRTMIN+3
 ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
-CMD ["/etc/osmocom/run_simulated.sh"]
+CMD ["/bin/bash"]

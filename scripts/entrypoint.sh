@@ -1,20 +1,29 @@
 #!/bin/bash
 set -e
 
-# [cite_start]Configuration de l'environnement pour Docker [cite: 48]
+# --- AJOUT DE LA PARTIE TUN ---
+echo "[*] Initialisation du périphérique TUN pour osmo-ggsn..."
+mkdir -p /dev/net
+if [ ! -c /dev/net/tun ]; then
+    # Création du nœud de périphérique (c = caractère, 10 = majeur, 200 = mineur)
+    mknod /dev/net/tun c 10 200
+    chmod 666 /dev/net/tun
+fi
+
+# --- CONFIGURATION ENVIRONNEMENT ---
 container=docker
 export container
 
-# [cite_start]Vérification de la présence d'une commande [cite: 49]
+# Vérification de la présence d'une commande
 if [ $# -eq 0 ]; then
   echo >&2 'ERROR: No command specified. You probably want to run bash or a script.'
   exit 1
 fi
 
-# [cite_start]Export des variables d'environnement pour les sessions systemd [cite: 51]
+# Export des variables pour les sessions systemd
 env > /etc/docker-entrypoint-env
 
-# [cite_start]Création du service de démarrage pour votre script de simulation [cite: 51]
+# Création du service de démarrage
 quoted_args="$(printf " %q" "${@}")"
 echo "${quoted_args}" > /etc/docker-entrypoint-cmd
 
@@ -35,12 +44,12 @@ EnvironmentFile=/etc/docker-entrypoint-env
 WantedBy=multi-user.target
 EOT
 
-# [cite_start]Désactivation des services systemd conflictuels en container [cite: 52]
+# Désactivation des services systemd conflictuels
 systemctl mask systemd-firstboot.service systemd-udevd.service systemd-modules-load.service \
                systemd-udevd-kernel systemd-udevd-control 2>/dev/null || true
 systemctl enable docker-entrypoint.service
 
-# [cite_start]Localisation et exécution de systemd [cite: 53]
+# Localisation et exécution de systemd
 if [ -x /lib/systemd/systemd ]; then
   exec /lib/systemd/systemd --show-status=false --unit=multi-user.target
 elif [ -x /usr/lib/systemd/systemd ]; then
