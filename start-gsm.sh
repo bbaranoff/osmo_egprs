@@ -18,16 +18,22 @@ fi
 # --- 3. Lancement du Docker ---
 echo "[*] Lancement du conteneur sdr-egprs..."
 
-# On enchaîne le script de démarrage Osmocom PUIS le bash interactif
-docker run -ti --rm \
-    --name sdr-egprs \
-    --cap-add SYS_ADMIN \
+# On lance en arrière-plan (-d) avec l'entrypoint par défaut qui démarre systemd
+docker run -d \
+    --rm \
+    --name egprs \
+    --privileged \
     --cap-add NET_ADMIN \
-    --security-opt apparmor=unconfined \
+    --cap-add SYS_ADMIN \
     --cgroupns host \
     --net host \
     --device /dev/net/tun:/dev/net/tun \
     -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
     --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-    sdr-build-env \
-    /bin/bash -c "cd /etc/osmocom; /bin/bash"
+    osmocom-nitb
+
+echo "[*] Attente du démarrage de systemd..."
+sleep 2
+
+# On rentre dedans interactivement sans arrêter le container
+docker exec -it egprs /bin/bash

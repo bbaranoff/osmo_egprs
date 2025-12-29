@@ -1,4 +1,3 @@
-cat <<'EOF' > /etc/osmocom/osmo-start.sh
 #!/bin/bash
 
 # Couleurs pour la lisibilité
@@ -20,7 +19,6 @@ check_service() {
 
 # 1. Préparation du réseau (Interface apn0 et NAT)
 echo "[1/4] Configuration réseau et interface TUN..."
-/etc/osmocom/osmo-config.sh
 
 # 2. Services de base (Signalisation et Base de données)
 echo "[2/4] Lancement de la signalisation (STP, HLR, MGW)..."
@@ -36,15 +34,18 @@ sleep 2 # Laisse le temps au MSC de se lier au STP via SIGTRAN
 systemctl start osmo-bsc
 
 # 4. GPRS / EDGE (SGSN, GGSN, PCU) et Radio (BTS)
-echo "[4/4] Lancement des services DATA et Radio..."
+echo "[4/5] Lancement des services DATA et Radio..."
 systemctl start osmo-ggsn
 systemctl start osmo-sgsn
 sleep 1
 systemctl start osmo-pcu
 systemctl start osmo-bts
 
+echo "[5/5] Lancement des services DATA et Radio..."
+systemctl start osmo-sip-connector
+
 echo -e "\n${GREEN}--- Vérification du statut final ---${NC}"
-SERVICES="osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc osmo-ggsn osmo-sgsn osmo-pcu osmo-bts"
+SERVICES="osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc osmo-ggsn osmo-sgsn osmo-pcu osmo-bts osmo-sip-connector"
 
 for svc in $SERVICES; do
     check_service $svc
@@ -52,6 +53,3 @@ done
 
 echo -e "\n${GREEN}Logiciel défini par radio (SDR) prêt.${NC}"
 echo "Pour surveiller les logs en temps réel : journalctl -f"
-EOF
-
-chmod +x /etc/osmocom/osmo-start.sh

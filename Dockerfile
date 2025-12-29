@@ -6,16 +6,22 @@ ENV container=docker
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
-# 1. Dépendances système
+# 1. Dépendances système complètes (Infrastructure + Osmocom-BB)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 libpython3-dev liburing-dev ca-certificates git gcc g++ make cmake \
-    autoconf automake libtool pkg-config wget curl tmux systemd systemd-sysv \
-    iptables iproute2 libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev \
-    libdbi-dev libdbd-sqlite3 libsqlite3-dev libc-ares-dev libgnutls28-dev \
-    libortp-dev libfftw3-dev libusb-1.0-0-dev sqlite3 \
+    # Outils de build
+    build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
+    # Dépendances Osmocom Core & Network
+    libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev liburing-dev \
+    libdbi-dev libdbd-sqlite3 libsqlite3-dev sqlite3 libc-ares-dev libgnutls28-dev \
+    # Audio, Radio & SIP
+    libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
+    # Python & Outils système
+    python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv \
+    iptables iproute2 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 SHELL ["/bin/bash", "-c"]
+
 WORKDIR ${ROOT}
 
 # 2. Création de l'utilisateur osmocom
@@ -37,7 +43,9 @@ RUN for repo in \
     osmo-msc:1.15.0 \
     osmo-bsc:1.14.0 \
     osmo-pcu:1.5.2 \
-    osmo-bts:1.10.0; \
+    osmo-bts:1.10.0 \
+    osmo-sip-connector:1.7.2 \
+    libosmo-gprs:0.2.1; \
     do \
     name=$(echo $repo | cut -d: -f1) && \
     version=$(echo $repo | cut -d: -f2) && \
@@ -65,7 +73,12 @@ RUN for repo in \
     make install && \
     ldconfig; \
     done
-
+    
+RUN cd ${ROOT} && \
+    git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
+    cd osmocom-bb/src && \
+    # nofirmware désactive la compilation des firmwares .bin pour les téléphones
+    make nofirmware -j$(nproc)
 # 4. Installation des fichiers du projet
 WORKDIR /etc/osmocom
 COPY scripts/. /etc/osmocom/
@@ -82,26 +95,50 @@ RUN sed -i 's/^CPUScheduling/#CPUScheduling/g' /lib/systemd/system/osmo-*.servic
     sed -i 's/User=osmocom/User=root/g' /lib/systemd/system/osmo-sgsn.service && \
     chmod +x /etc/osmocom/*.sh
 
-# 6. Configuration de l'Auto-Start au boot du conteneur
-RUN cat <<EOF > /lib/systemd/system/osmo-autostart.service
+# 6. Configuration de osmo-bts.service
+RUN cat <<EOF > /lib/systemd/system/osmo-bts.service
 [Unit]
-Description=Lancement auto de la pile Osmocom
-After=network.target
+Description=Osmocom GSM Base Transceiver Station (BTS)
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
-Type=oneshot
-ExecStart=/etc/osmocom/osmo-start.sh
-RemainAfterExit=yes
+Type=simple
+# Utilisation de root pour éviter les problèmes de permissions sur les interfaces réseau/SDR
+User=root
+Group=root
+
+# On utilise le binaire compilé avec l'option virtual (osmo-bts-virtual) 
+# ou le binaire standard (osmo-bts-trx) selon ta config.
+# -c pointe vers ton dossier de configuration défini en section 4
+ExecStart=/usr/bin/osmo-bts-virtual -c /etc/osmocom/osmo-bts.cfg
+
+Restart=always
+RestartSec=5
+
+# Désactivation des options qui causent des erreurs en Docker (Status 214/217)
+# On commente les politiques de scheduling temps réel non supportées par le kernel Docker par défaut
+# CPUSchedulingPolicy=rr
+# CPUSchedulingPriority=1
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-RUN systemctl enable osmo-autostart.service && \
+# Activation du service et nettoyage
+RUN systemctl enable osmo-bts.service && \
     passwd -d root && \
     systemctl mask getty@tty1.service serial-getty@tty1.service
 
 # Point d'entrée pour systemd
 STOPSIGNAL SIGRTMIN+3
 ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
-CMD ["/bin/bash"]
+RUN mkdir -p /root/.osmocom/bb/
+RUN cp /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py /usr/local/bin
+RUN cp /opt/GSM/osmocom-bb/src/host/trxcon/src/trxcon /usr/local/bin
+RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/mobile/mobile /usr/local/bin
+RUN cp /opt/GSM/osmocom-bb/src/host/virt_phy/src/virtphy /usr/local/bin
+RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/misc/ccch_scan /usr/local/bin
+
+COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
+CMD ["systemctl start osmo-sip-connector && /bin/bash"]
