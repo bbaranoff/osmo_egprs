@@ -63,7 +63,3 @@ subscriber msisdn 89862 sms sender msisdn 111 send How are you
 * **MSC (4254)** : Gère le routage du SMS.
 * **HLR (4258)** : Fournit les infos sur l'abonné.
 * **Mobile (4247)** : Reçoit le message sur l'interface virtuelle.
-
----
-
-**Veux-tu que j'ajoute une section sur la capture des paquets avec Wireshark (via l'interface GSMTAP) pour voir les SMS circuler en temps réel ?**
