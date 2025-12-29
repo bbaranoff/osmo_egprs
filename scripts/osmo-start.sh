@@ -41,7 +41,7 @@ sleep 1
 systemctl start osmo-pcu
 systemctl start osmo-bts
 
-echo "[5/5] Lancement des services DATA et Radio..."
+echo "[5/5] Lancement des services Voix..."
 systemctl start osmo-sip-connector
 
 echo -e "\n${GREEN}--- Vérification du statut final ---${NC}"
