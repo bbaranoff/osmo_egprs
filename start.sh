@@ -1,10 +1,12 @@
 #!/bin/bash
-sudo docker stop egprs
+
 # --- 1. Vérification des privilèges ROOT ---
 if [[ $EUID -ne 0 ]]; then
    echo -e "\033[0;31m[ERREUR] Ce script doit être lancé en tant que root (sudo).\033[0m" 
    exit 1
 fi
+
+[ "$(sudo docker inspect -f '{{.State.Running}}' egprs 2>/dev/null)" = "true" ] && sudo docker stop egprs
 
 # --- 2. Préparation du noyau sur l'hôte ---
 echo "[*] Configuration du module TUN sur l'hôte..."
