@@ -36,4 +36,4 @@ echo "[*] Attente du démarrage de systemd..."
 sleep 2
 
 # On rentre dedans interactivement sans arrêter le container
-docker exec -it egprs /bin/bash
+docker exec -it egprs /root/run.sh

@@ -83,7 +83,7 @@ RUN cd ${ROOT} && \
 WORKDIR /etc/osmocom
 COPY scripts/. /etc/osmocom/
 COPY configs/. /etc/osmocom/
-
+RUN mv /etc/osmocom/run.sh /root/run.sh
 # Copie des binaires vers /usr/bin pour systemd et installation des .service
 RUN cp -f /usr/local/bin/osmo* /usr/bin/ || true && \
     # Si tu as des fichiers .service dans configs/
@@ -140,4 +140,5 @@ RUN cp /opt/GSM/osmocom-bb/src/host/virt_phy/src/virtphy /usr/local/bin
 RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/misc/ccch_scan /usr/local/bin
 RUN echo "alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc && source ~/.bashrc
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
-CMD ["systemctl start osmo-sip-connector && /bin/bash"]
+RUN chmod +x /root/run.sh
+CMD ["/root/run.sh"]

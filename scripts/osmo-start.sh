@@ -18,17 +18,17 @@ check_service() {
 }
 
 # 1. Préparation du réseau (Interface apn0 et NAT)
-echo "[1/4] Configuration réseau et interface TUN..."
+echo "[1/5] Configuration réseau et interface TUN..."
 
 # 2. Services de base (Signalisation et Base de données)
-echo "[2/4] Lancement de la signalisation (STP, HLR, MGW)..."
+echo "[2/5] Lancement de la signalisation (STP, HLR, MGW)..."
 systemctl start osmo-stp
 sleep 1
 systemctl start osmo-hlr
 systemctl start osmo-mgw
 
 # 3. Cœur de réseau (MSC et BSC)
-echo "[3/4] Lancement du Core Network (MSC, BSC)..."
+echo "[3/5] Lancement du Core Network (MSC, BSC)..."
 systemctl start osmo-msc
 sleep 2 # Laisse le temps au MSC de se lier au STP via SIGTRAN
 systemctl start osmo-bsc
