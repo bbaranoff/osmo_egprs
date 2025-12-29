@@ -65,7 +65,7 @@ RUN for repo in \
     autoreconf -fi && \
     EXTRA_FLAGS="" && \
     if [ "$name" = "libosmo-abis" ]; then EXTRA_FLAGS="--disable-dahdi"; fi && \
-    if [ "$name" = "osmo-bts" ]; then EXTRA_FLAGS="--enable-virtual"; fi && \
+    if [ "$name" = "osmo-bts" ]; then EXTRA_FLAGS="--enable-virtual --enable-trx"; fi && \
     if [ "$name" = "osmo-ggsn" ]; then EXTRA_FLAGS="--enable-gtp-linux"; fi && \
     \
     ./configure $EXTRA_FLAGS && \
@@ -111,7 +111,7 @@ Group=root
 # On utilise le binaire compilé avec l'option virtual (osmo-bts-virtual) 
 # ou le binaire standard (osmo-bts-trx) selon ta config.
 # -c pointe vers ton dossier de configuration défini en section 4
-ExecStart=/usr/bin/osmo-bts-virtual -c /etc/osmocom/osmo-bts.cfg
+ExecStart=/usr/bin/osmo-bts-trx -c /etc/osmocom/osmo-bts.cfg
 
 Restart=always
 RestartSec=5
@@ -134,11 +134,10 @@ RUN systemctl enable osmo-bts.service && \
 STOPSIGNAL SIGRTMIN+3
 ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
 RUN mkdir -p /root/.osmocom/bb/
-RUN cp /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py /usr/local/bin
 RUN cp /opt/GSM/osmocom-bb/src/host/trxcon/src/trxcon /usr/local/bin
 RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/mobile/mobile /usr/local/bin
 RUN cp /opt/GSM/osmocom-bb/src/host/virt_phy/src/virtphy /usr/local/bin
 RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/misc/ccch_scan /usr/local/bin
-
+RUN echo "alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc && source ~/.bashrc
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 CMD ["systemctl start osmo-sip-connector && /bin/bash"]
