@@ -1,0 +1,205 @@
+● osmo-hlr.service - Osmocom Home Location Register (OsmoHLR)
+     Loaded: loaded (/lib/systemd/system/osmo-hlr.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:56 UTC; 1min 5s ago
+       Docs: https://osmocom.org/projects/osmo-hlr/wiki/OsmoHLR
+   Main PID: 92 (osmo-hlr)
+      Tasks: 1 (limit: 2745)
+     Memory: 2.5M
+        CPU: 14ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-hlr.service
+             └─92 /usr/bin/osmo-hlr -c /etc/osmocom/osmo-hlr.cfg -l /var/lib/osmocom/hlr.db
+
+Dec 29 17:22:56 acer systemd[1]: Started Osmocom Home Location Register (OsmoHLR).
+Dec 29 17:22:56 acer osmo-hlr[92]: 20251229172256176 NOTICE <0000> hlr.c:812 hlr starting
+Dec 29 17:22:56 acer osmo-hlr[92]: 20251229172256176 NOTICE <0001> db.c:600 using database: /var/lib/osmocom/hlr.db
+Dec 29 17:22:56 acer osmo-hlr[92]: 20251229172256190 NOTICE <0001> db.c:668 Missing database tables detected; Bootstrapping database '/var/lib/osmocom/hlr.db'
+Dec 29 17:22:56 acer osmo-hlr[92]: 20251229172256196 NOTICE <0001> db.c:679 Database '/var/lib/osmocom/hlr.db' has HLR DB schema version 7
+Dec 29 17:22:56 acer osmo-hlr[92]: 20251229172256197 NOTICE <0009> telnet_interface.c:88 Available via telnet 127.0.0.1 4258
+Dec 29 17:22:56 acer osmo-hlr[92]: 20251229172256197 NOTICE <0010> control_if.c:1026 CTRL at 127.0.0.1 4259
+Dec 29 17:22:57 acer osmo-hlr[92]: 20251229172257193 NOTICE <000b> input/ipa.c:321 127.0.0.2:4222 accept()ed new link from 127.0.0.1:40627
+Dec 29 17:22:58 acer osmo-hlr[92]: 20251229172258209 NOTICE <000b> input/ipa.c:321 127.0.0.2:4222 accept()ed new link from 127.0.0.1:32953
+
+● osmo-msc.service - Osmocom Mobile Switching Center (MSC)
+     Loaded: loaded (/lib/systemd/system/osmo-msc.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:56 UTC; 1min 5s ago
+   Main PID: 98 (osmo-msc)
+      Tasks: 1 (limit: 2745)
+     Memory: 3.5M
+        CPU: 16ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-msc.service
+             └─98 /usr/bin/osmo-msc -c /etc/osmocom/osmo-msc.cfg
+
+Dec 29 17:23:26 acer osmo-msc[98]: <0023> m3ua.c:772 XUA_ASP(asp-clnt-OsmoMSC-A)[0x5ca1292dbb50]{ASP_ACTIVE}: Received Event ASPSM_BEAT_ACK
+Dec 29 17:23:26 acer osmo-msc[98]: <0023> xua_asp_fsm.c:868 XUA_ASP(asp-clnt-OsmoMSC-A)[0x5ca1292dbb50]{ASP_ACTIVE}: Rx HEARTBEAT ACK
+Dec 29 17:23:56 acer osmo-msc[98]: <0023> xua_asp_fsm.c:447 XUA_ASP(asp-clnt-OsmoMSC-A)[0x5ca1292dbb50]{ASP_ACTIVE}: Tx HEARTBEAT (0 unacked)
+Dec 29 17:23:56 acer osmo-msc[98]: <0023> ss7_asp.c:1400 0: ASP(asp-clnt-OsmoMSC-A) Tx 8 bytes: [L2]> 01 00 03 03 00 00 00 08 
+Dec 29 17:23:56 acer osmo-msc[98]: <0023> ss7_asp.c:1308 0: ASP(asp-clnt-OsmoMSC-A) xua_cli_read_cb(): sctp_recvmsg() returned 8 (flags=0x0)
+Dec 29 17:23:56 acer osmo-msc[98]: <0023> m3ua.c:772 XUA_ASP(asp-clnt-OsmoMSC-A)[0x5ca1292dbb50]{ASP_ACTIVE}: Received Event ASPSM_BEAT
+Dec 29 17:23:56 acer osmo-msc[98]: <0023> ss7_asp.c:1400 0: ASP(asp-clnt-OsmoMSC-A) Tx 8 bytes: [L2]> 01 00 03 06 00 00 00 08 
+Dec 29 17:23:56 acer osmo-msc[98]: <0023> ss7_asp.c:1308 0: ASP(asp-clnt-OsmoMSC-A) xua_cli_read_cb(): sctp_recvmsg() returned 8 (flags=0x0)
+Dec 29 17:23:56 acer osmo-msc[98]: <0023> m3ua.c:772 XUA_ASP(asp-clnt-OsmoMSC-A)[0x5ca1292dbb50]{ASP_ACTIVE}: Received Event ASPSM_BEAT_ACK
+Dec 29 17:23:56 acer osmo-msc[98]: <0023> xua_asp_fsm.c:868 XUA_ASP(asp-clnt-OsmoMSC-A)[0x5ca1292dbb50]{ASP_ACTIVE}: Rx HEARTBEAT ACK
+
+● osmo-mgw.service - Osmocom Media Gateway (MGW)
+     Loaded: loaded (/lib/systemd/system/osmo-mgw.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:56 UTC; 1min 5s ago
+   Main PID: 95 (osmo-mgw)
+      Tasks: 1 (limit: 2745)
+     Memory: 2.0M
+        CPU: 9ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-mgw.service
+             └─95 /usr/bin/osmo-mgw -s -c /etc/osmocom/osmo-mgw.cfg
+
+Dec 29 17:22:56 acer systemd[1]: Started Osmocom Media Gateway (MGW).
+Dec 29 17:22:56 acer osmo-mgw[95]: % Deprecated 'sdp audio-payload number <0-255>' config no longer has any effect
+Dec 29 17:22:56 acer osmo-mgw[95]: % Deprecated 'sdp audio-payload name NAME' config no longer has any effect
+Dec 29 17:22:56 acer osmo-mgw[95]: % Deprecated 'loop (0|1)' config no longer has any effect
+Dec 29 17:22:56 acer osmo-mgw[95]: % Deprecated 'allow-transcoding' config no longer has any effect
+Dec 29 17:22:56 acer osmo-mgw[95]: <0003> telnet_interface.c:88 Available via telnet 127.0.0.1 4243
+Dec 29 17:22:56 acer osmo-mgw[95]: <000a> control_if.c:1026 CTRL at 127.0.0.1 4267
+Dec 29 17:22:56 acer osmo-mgw[95]: <0013> mgw_main.c:412 Configured for MGCP, listen on 127.0.0.1:2427
+
+● osmo-stp.service - Osmocom STP (Signal Transfer Point)
+     Loaded: loaded (/lib/systemd/system/osmo-stp.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:55 UTC; 1min 6s ago
+       Docs: https://osmocom.org/projects/osmo-stp/wiki
+   Main PID: 88 (osmo-stp)
+      Tasks: 1 (limit: 2745)
+     Memory: 2.0M
+        CPU: 11ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-stp.service
+             └─88 /usr/bin/osmo-stp -c /etc/osmocom/osmo-stp.cfg
+
+Dec 29 17:23:58 acer osmo-stp[88]: DLSS7 <000c> xua_asp_fsm.c:447 XUA_ASP(asp-dyn-1){ASP_ACTIVE}: Tx HEARTBEAT (0 unacked)
+Dec 29 17:23:58 acer osmo-stp[88]: DLSS7 <000c> ss7_asp.c:1400 0: ASP(asp-dyn-1) Tx 8 bytes: [L2]> 01 00 03 03 00 00 00 08 
+Dec 29 17:23:58 acer osmo-stp[88]: DLSS7 <000c> ss7_asp.c:1107 0: ASP(asp-dyn-1) ss7_asp_xua_srv_conn_rx_cb(): sctp_recvmsg() returned 0 (flags=0x0)
+Dec 29 17:23:58 acer osmo-stp[88]: DLM3UA <000f> m3ua.c:811 0: ASP(asp-dyn-1) Received M3UA Message (ASPSM:BEAT)
+Dec 29 17:23:58 acer osmo-stp[88]: DLSS7 <000c> m3ua.c:772 XUA_ASP(asp-dyn-1){ASP_ACTIVE}: Received Event ASPSM_BEAT
+Dec 29 17:23:58 acer osmo-stp[88]: DLSS7 <000c> ss7_asp.c:1400 0: ASP(asp-dyn-1) Tx 8 bytes: [L2]> 01 00 03 06 00 00 00 08 
+Dec 29 17:23:58 acer osmo-stp[88]: DLSS7 <000c> ss7_asp.c:1107 0: ASP(asp-dyn-1) ss7_asp_xua_srv_conn_rx_cb(): sctp_recvmsg() returned 0 (flags=0x0)
+Dec 29 17:23:58 acer osmo-stp[88]: DLM3UA <000f> m3ua.c:811 0: ASP(asp-dyn-1) Received M3UA Message (ASPSM:BEAT-ACK)
+Dec 29 17:23:58 acer osmo-stp[88]: DLSS7 <000c> m3ua.c:772 XUA_ASP(asp-dyn-1){ASP_ACTIVE}: Received Event ASPSM_BEAT_ACK
+Dec 29 17:23:58 acer osmo-stp[88]: DLSS7 <000c> xua_asp_fsm.c:868 XUA_ASP(asp-dyn-1){ASP_ACTIVE}: Rx HEARTBEAT ACK
+
+● osmo-bsc.service - Osmocom Base Station Controller (BSC)
+     Loaded: loaded (/lib/systemd/system/osmo-bsc.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:58 UTC; 1min 3s ago
+   Main PID: 102 (osmo-bsc)
+      Tasks: 1 (limit: 2745)
+     Memory: 4.5M
+        CPU: 31ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-bsc.service
+             └─102 /usr/bin/osmo-bsc -c /etc/osmocom/osmo-bsc.cfg -s
+
+Dec 29 17:23:28 acer osmo-bsc[102]: <0023> xua_asp_fsm.c:868 XUA_ASP(asp-clnt-OsmoBSC-A)[0x56b31fbd7df0]{ASP_ACTIVE}: Rx HEARTBEAT ACK
+Dec 29 17:23:58 acer osmo-bsc[102]: <0023> xua_asp_fsm.c:447 XUA_ASP(asp-clnt-OsmoBSC-A)[0x56b31fbd7df0]{ASP_ACTIVE}: Tx HEARTBEAT (0 unacked)
+Dec 29 17:23:58 acer osmo-bsc[102]: <0023> ss7_asp.c:1400 0: ASP(asp-clnt-OsmoBSC-A) Tx 8 bytes: [L2]> 01 00 03 03 00 00 00 08
+Dec 29 17:23:58 acer osmo-bsc[102]: <0023> ss7_asp.c:1308 0: ASP(asp-clnt-OsmoBSC-A) xua_cli_read_cb(): sctp_recvmsg() returned 8 (flags=0x0)
+Dec 29 17:23:58 acer osmo-bsc[102]: <0023> m3ua.c:772 XUA_ASP(asp-clnt-OsmoBSC-A)[0x56b31fbd7df0]{ASP_ACTIVE}: Received Event ASPSM_BEAT
+Dec 29 17:23:58 acer osmo-bsc[102]: <0023> ss7_asp.c:1400 0: ASP(asp-clnt-OsmoBSC-A) Tx 8 bytes: [L2]> 01 00 03 06 00 00 00 08
+Dec 29 17:23:58 acer osmo-bsc[102]: <0023> ss7_asp.c:1308 0: ASP(asp-clnt-OsmoBSC-A) xua_cli_read_cb(): sctp_recvmsg() returned 8 (flags=0x0)
+Dec 29 17:23:58 acer osmo-bsc[102]: <0023> m3ua.c:772 XUA_ASP(asp-clnt-OsmoBSC-A)[0x56b31fbd7df0]{ASP_ACTIVE}: Received Event ASPSM_BEAT_ACK
+Dec 29 17:23:58 acer osmo-bsc[102]: <0023> xua_asp_fsm.c:868 XUA_ASP(asp-clnt-OsmoBSC-A)[0x56b31fbd7df0]{ASP_ACTIVE}: Rx HEARTBEAT ACK
+Dec 29 17:23:59 acer osmo-bsc[102]: <0004> abis_nm.c:352 OC=BTS(01) INST=(00,ff,ff): Reported connected PCU version 1.5.2
+
+● osmo-ggsn.service - OsmoGGSN
+     Loaded: loaded (/lib/systemd/system/osmo-ggsn.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:58 UTC; 1min 3s ago
+   Main PID: 105 (osmo-ggsn)
+      Tasks: 1 (limit: 2745)
+     Memory: 5.8M
+        CPU: 10ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-ggsn.service
+             └─105 /usr/bin/osmo-ggsn -c /etc/osmocom/osmo-ggsn.cfg
+
+Dec 29 17:22:58 acer osmo-ggsn[105]: DGGSN INFO GGSN(ggsn0): Starting GGSN (ggsn.c:941)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DLGTP NOTICE GTP: gtp_newgsn() started at 192.168.1.69 (gsn.c:489)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DLGTP NOTICE State information file (/var/lib/osmocom/osmo-ggsn/gsn_restart) not found. Creating new file. (gsn.c:410)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DGGSN NOTICE GGSN(ggsn0): Successfully started (ggsn.c:978)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DLGLOBAL NOTICE Available via telnet 127.0.0.1 4260 (telnet_interface.c:88)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DLCTRL NOTICE CTRL at 127.0.0.1 4257 (control_if.c:1026)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DLGLOBAL NOTICE NETDEV(apn0,if=apn0/297,ns=): MTU changed: 1500 (netdev.c:361)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DLGLOBAL NOTICE TUN(apn0,if=apn0/297,ns=): netdev changed MTU: 1500 (tun.c:219)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DLGLOBAL NOTICE NETDEV(apn0,if=apn0/297,ns=): Physical link state changed: UP (netdev.c:374)
+Dec 29 17:22:58 acer osmo-ggsn[105]: DLGLOBAL NOTICE TUN(apn0,if=apn0/297,ns=): Physical link state changed: UP (tun.c:190)
+
+● osmo-sgsn.service - Osmocom SGSN (Serving GPRS Support Node)
+     Loaded: loaded (/lib/systemd/system/osmo-sgsn.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:58 UTC; 1min 3s ago
+   Main PID: 108 (osmo-sgsn)
+      Tasks: 1 (limit: 2745)
+     Memory: 6.2M
+        CPU: 10ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-sgsn.service
+             └─108 /usr/bin/osmo-sgsn -c /etc/osmocom/osmo-sgsn.cfg
+
+Dec 29 17:22:58 acer osmo-sgsn[108]: rate_ctr.c:86 validating counter group 0x59ed5df11740(sgsn) with 23 counters
+Dec 29 17:22:58 acer osmo-sgsn[108]: DLGLOBAL NOTICE Available via telnet 127.0.0.1 4245 (telnet_interface.c:88)
+Dec 29 17:22:58 acer osmo-sgsn[108]: DLGTP NOTICE GTP: gtp_newgsn() started at 127.0.0.1 (gsn.c:489)
+Dec 29 17:22:58 acer osmo-sgsn[108]: DLGTP NOTICE State information file (/var/lib/osmocom/osmo-sgsn/gsn_restart) not found. Creating new file. (gsn.c:410)
+Dec 29 17:22:58 acer osmo-sgsn[108]: DGPRS NOTICE Created GTP on 127.0.0.1 (sgsn_libgtp.c:969)
+Dec 29 17:22:58 acer osmo-sgsn[108]: DGPRS NOTICE libGTP v1.14.0 initialized (sgsn_main.c:456)
+Dec 29 17:22:58 acer osmo-sgsn[108]: DLCTRL NOTICE CTRL at 127.0.0.1 4251 (control_if.c:1026)
+Dec 29 17:22:58 acer osmo-sgsn[108]: DLGSUP NOTICE GSUP connecting to 127.0.0.2:4222 (gsup_client.c:77)
+Dec 29 17:22:58 acer osmo-sgsn[108]: DLINP NOTICE 127.0.0.2:4222 connection done (ipa.c:144)
+Dec 29 17:22:58 acer osmo-sgsn[108]: DLINP NOTICE received ID_GET for unit ID 0/0/0 (ipa.c:617)
+
+● osmo-sip-connector.service - Osmo SIP Connector
+     Loaded: loaded (/lib/systemd/system/osmo-sip-connector.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:59 UTC; 1min 2s ago
+   Main PID: 117 (osmo-sip-connec)
+      Tasks: 1 (limit: 2745)
+     Memory: 2.0M
+        CPU: 15ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-sip-connector.service
+             └─117 /usr/bin/osmo-sip-connector -c /etc/osmocom/osmo-sip-connector.cfg
+
+Dec 29 17:22:59 acer systemd[1]: Started Osmo SIP Connector.
+Dec 29 17:22:59 acer osmo-sip-connector[117]: <0004> telnet_interface.c:88 Available via telnet 127.0.0.1 4256
+Dec 29 17:22:59 acer osmo-sip-connector[117]: <0001> mncc.c:1179 Scheduling MNCC connect
+Dec 29 17:22:59 acer osmo-sip-connector[117]: <0000> sip.c:741 su_source_port_create() returns 0x647180075da0
+Dec 29 17:22:59 acer osmo-sip-connector[117]: <0000> sip.c:741 sres: /etc/resolv.conf: unknown option
+Dec 29 17:22:59 acer osmo-sip-connector[117]: <0001> mncc.c:1031 Reconnected to /tmp/msc_mncc
+Dec 29 17:22:59 acer osmo-sip-connector[117]: <0001> mncc.c:918 Got hello message version 8
+
+● osmo-bts.service - Osmocom GSM Base Transceiver Station (BTS)
+     Loaded: loaded (/lib/systemd/system/osmo-bts.service; enabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:46 UTC; 1min 15s ago
+   Main PID: 49 (osmo-bts-trx)
+      Tasks: 1 (limit: 2745)
+     Memory: 4.9M
+        CPU: 2.121s
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-bts.service
+             └─49 /usr/bin/osmo-bts-trx -c /etc/osmocom/osmo-bts.cfg
+
+Dec 29 17:24:00 acer osmo-bts-trx[49]: DL1C INFO GSM clock jitter: -4744us (elapsed_fn=-1) (scheduler_trx.c:585)
+Dec 29 17:24:00 acer osmo-bts-trx[49]: DL1C NOTICE We were 1 FN faster than TRX, compensating (scheduler_trx.c:595)
+Dec 29 17:24:01 acer osmo-bts-trx[49]: DL1C INFO TRX Clock Ind: elapsed_us= 470717, elapsed_fn=102, error_us=  -13 (scheduler_trx.c:566)
+Dec 29 17:24:01 acer osmo-bts-trx[49]: DL1C INFO GSM clock jitter: 141us (elapsed_fn=1) (scheduler_trx.c:585)
+Dec 29 17:24:01 acer osmo-bts-trx[49]: DL1C NOTICE We were 1 FN slower than TRX, compensated (scheduler_trx.c:608)
+Dec 29 17:24:01 acer osmo-bts-trx[49]: DL1C INFO TRX Clock Ind: elapsed_us= 470723, elapsed_fn=102, error_us=   -7 (scheduler_trx.c:566)
+Dec 29 17:24:01 acer osmo-bts-trx[49]: DL1C INFO GSM clock jitter: -4478us (elapsed_fn=0) (scheduler_trx.c:585)
+Dec 29 17:24:01 acer osmo-bts-trx[49]: DL1C INFO TRX Clock Ind: elapsed_us= 470719, elapsed_fn=102, error_us=  -11 (scheduler_trx.c:566)
+Dec 29 17:24:01 acer osmo-bts-trx[49]: DL1C INFO GSM clock jitter: -4429us (elapsed_fn=0) (scheduler_trx.c:585)
+Dec 29 17:24:02 acer osmo-bts-trx[49]: DRSL INFO Tx RSL RF RESource INDication (rsl.c:517)
+
+● osmo-pcu.service - Osmocom osmo-pcu
+     Loaded: loaded (/lib/systemd/system/osmo-pcu.service; disabled; vendor preset: enabled)
+     Active: active (running) since Mon 2025-12-29 17:22:59 UTC; 1min 2s ago
+   Main PID: 112 (osmo-pcu)
+      Tasks: 1 (limit: 2745)
+     Memory: 2.2M
+        CPU: 42ms
+     CGroup: /system.slice/docker-9ba45843bfd003b0a822b38581e0f1ac0ee05977113cc9e7b2905dd0b3c467c5.scope/system.slice/osmo-pcu.service
+             └─112 /usr/bin/osmo-pcu -c /etc/osmocom/osmo-pcu.cfg
+
+Dec 29 17:23:19 acer osmo-pcu[112]: <0001> pcuif_sock.c:210 Failed to connect to the BTS (/tmp/pcu_bts). Retrying...
+Dec 29 17:23:24 acer osmo-pcu[112]: <0001> pcuif_sock.c:210 Failed to connect to the BTS (/tmp/pcu_bts). Retrying...
+Dec 29 17:23:29 acer osmo-pcu[112]: <0001> pcuif_sock.c:210 Failed to connect to the BTS (/tmp/pcu_bts). Retrying...
+Dec 29 17:23:34 acer osmo-pcu[112]: <0001> pcuif_sock.c:210 Failed to connect to the BTS (/tmp/pcu_bts). Retrying...
+Dec 29 17:23:39 acer osmo-pcu[112]: <0001> pcuif_sock.c:210 Failed to connect to the BTS (/tmp/pcu_bts). Retrying...
+Dec 29 17:23:44 acer osmo-pcu[112]: <0001> pcuif_sock.c:210 Failed to connect to the BTS (/tmp/pcu_bts). Retrying...
+Dec 29 17:23:49 acer osmo-pcu[112]: <0001> pcuif_sock.c:210 Failed to connect to the BTS (/tmp/pcu_bts). Retrying...
+Dec 29 17:23:54 acer osmo-pcu[112]: <0001> pcuif_sock.c:210 Failed to connect to the BTS (/tmp/pcu_bts). Retrying...
+Dec 29 17:23:59 acer osmo-pcu[112]: <0001> pcuif_sock.c:220 osmo-bts PCU socket /tmp/pcu_bts has been connected
+Dec 29 17:23:59 acer osmo-pcu[112]: <0001> pcu_l1_if.cpp:1246 Received message for new BTS0
