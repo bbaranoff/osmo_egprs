@@ -1,95 +1,69 @@
-# Osmocom EGPRS/GPRS Stack for Docker
+# Osmocom Virtual GSM Network (NITB)
 
-Ce projet fournit une infrastructure complète **Osmocom** (BSC, MSC, HLR, STP, GGSN, SGSN) conteneurisée pour simuler ou opérer un réseau mobile avec support **EGPRS**. La solution est optimisée pour fonctionner avec **Systemd** à l'intérieur de Docker et gère automatiquement la configuration des interfaces réseau (TUN/apn0).
+Ce projet déploie une pile GSM complète (2G) virtualisée.
 
-## 🚀 Fonctionnalités
-
-* **Pile Osmocom complète** : Tous les services nécessaires au cœur de réseau (Core Network).
-* **Support EGPRS** : Configuration spécifique pour le débit de données amélioré.
-* **Gestion Systemd** : Les services sont gérés proprement via des unités systemd dans le conteneur.
-* **Auto-Configuration** : Scripts inclus pour le NAT, le routage IP et la création de l'interface `apn0`.
-
-## 🛠 Prérequis (Hôte Acer)
-
-Le système hôte doit être sous Linux (Ubuntu recommandé) avec Docker installé.
+## 🚀 Installation & Build
 
 ```bash
-# Charger le module TUN/TAP
-sudo modprobe tun
-
-# S'assurer que les cgroups sont accessibles (nécessaire pour systemd)
-sudo mkdir -p /sys/fs/cgroup
-
-```
-
-## 📦 Installation
-
-1. **Cloner le dépôt :**
-```bash
-git clone https://github.com/bbaranoff/osmo_egprs.git
-cd osmo_egprs
-
-```
-
-
-2. **Builder l'image :**
-```bash
-docker build -t sdr-stack .
-
-```
-
-
-
-## 🚦 Démarrage
-
-Pour lancer l'infrastructure, utilise le script `start-gsm.sh` fourni (ou la commande Docker directe ci-dessous). Ce script vérifie les droits root et configure le périphérique TUN.
-
-```bash
+docker build . -t osmocom-nitb
 sudo ./start-gsm.sh
 
 ```
 
-**Commande Docker manuelle :**
+## 📻 Simulation Radio (via Tmux)
+
+Utilisez `tmux` pour diviser votre écran et lancer les composants :
+
+1. **`faketrx`** : Simule l'interface physique (Air).
+2. **`trxcon`** : Gère la couche L1.
+3. **`mobile`** : Lance le téléphone virtuel.
+
+---
+
+## 🛠 Administration Telnet (VTY)
+
+Voici les commandes pour interagir avec ton réseau une fois qu'il est "UP" :
+
+### 1. Contrôle du Mobile (Allumer le téléphone)
+
+Pour que le mobile tente de s'enregistrer, il doit être activé :
 
 ```bash
-sudo docker run -ti --rm \
-    --name sdr-egprs \
-    --privileged \
-    --cap-add SYS_ADMIN --cap-add NET_ADMIN \
-    --security-opt apparmor=unconfined \
-    --cgroupns host \
-    --net host \
-    -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-    --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-    --device /dev/net/tun:/dev/net/tun \
-    sdr-stack
+telnet 0 4247
+# Commandes suggérées : mobile 1, unit 1, service
 
 ```
 
-## 📂 Structure du projet
+### 2. Gestion des Abonnés (HLR)
 
-* `entrypoint.sh` : Prépare le nœud `/dev/net/tun` et lance Systemd comme PID 1.
-* `osmo-start.sh` : Script d'orchestration qui démarre les services Osmocom dans le bon ordre.
-* `osmo-config.sh` : Configure le routage IP, les règles `iptables` et l'interface `apn0`.
-* `configs/` : Contient les fichiers `.cfg` pour chaque composant Osmocom.
-
-## 🔍 Débogage
-
-Une fois le conteneur lancé, tu peux vérifier le statut des services :
+Pour vérifier si ton abonné (IMSI 001010000000000) est bien présent avec son MSISDN :
 
 ```bash
-# Vérifier si l'interface apn0 est active
-ip addr show apn0
-
-# Voir les logs d'un service spécifique
-docker exec -it sdr-egprs journalctl -u osmo-ggsn -f
-
-# Accéder au terminal VTY (ex: BSC)
-telnet localhost 4242
+telnet 0 4258
+# Commande :
+show subscribers all
 
 ```
 
-## ⚠️ Notes importantes
+### 3. Envoi de SMS (MSC)
 
-* **Permissions** : Le conteneur nécessite `--privileged` pour que Systemd puisse gérer les ressources et que le GGSN puisse créer l'interface tunnel.
-* **Réseau** : Le mode `--net host` est utilisé pour faciliter la communication avec le matériel radio externe.
+Une fois le mobile enregistré (Visible dans `show subscribers` du MSC), tu peux envoyer un SMS de test vers le mobile (MSISDN `89862` trouvé dans ton HLR) :
+
+```bash
+telnet 0 4254
+# Commande pour envoyer un SMS :
+subscriber msisdn 89862 sms sender msisdn 111 send How are you
+
+```
+
+---
+
+## 📊 Architecture du Flux
+
+* **MSC (4254)** : Gère le routage du SMS.
+* **HLR (4258)** : Fournit les infos sur l'abonné.
+* **Mobile (4247)** : Reçoit le message sur l'interface virtuelle.
+
+---
+
+**Veux-tu que j'ajoute une section sur la capture des paquets avec Wireshark (via l'interface GSMTAP) pour voir les SMS circuler en temps réel ?**
