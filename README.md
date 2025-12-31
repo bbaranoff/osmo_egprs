@@ -5,8 +5,8 @@ Ce projet déploie une pile GSM complète (2G) virtualisée.
 ## 🚀 Installation & Build
 
 ```bash
-docker build . -t osmocom-nitb
-sudo ./start-gsm.sh
+sudo ./build.sh
+sudo ./start.sh
 
 ```
 
