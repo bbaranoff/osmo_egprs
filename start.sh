@@ -25,21 +25,9 @@ if [ ! -c /dev/net/tun ]; then
 fi
 
 # --- 4. Option Multi-Mobile (Avant de lancer le container) ---
-echo -e "\n${GREEN}--- Configuration des instances Mobile (sdr) ---${NC}"
-read -p "Souhaitez-vous préparer 2 mobiles pour cette session ? (y/n) : " choice
-
-if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-    # On prépare le fichier sur l'hôte pour qu'il soit dispo si monté en volume 
-    # ou on envoie un flag pour que le run.sh interne sache quoi faire.
-    export DUAL_MOBILE=true
-    echo -e "${GREEN}[INFO] Mode Double Mobile sélectionné.${NC}"
-else
-    export DUAL_MOBILE=false
-fi
-
 # --- 5. Lancement du Docker ---
 echo -e "${GREEN}[*] Lancement du conteneur egprs (Image: osmocom-nitb)...${NC}"
-
+docker build -f Dockerfile.run -t osmocom-run .
 # Lancement en mode détaché avec privilèges réseau totaux
 docker run -d \
     --rm \
@@ -52,11 +40,11 @@ docker run -d \
     --device /dev/net/tun:/dev/net/tun \
     -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
     --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-    osmocom-nitb
+    osmocom-run
 
 echo -e "${GREEN}[*] Attente du démarrage des services systemd (SS7/SIGTRAN)...${NC}"
 sleep 3
 
 # --- 6. Exécution de l'orchestration interne (Tmux) ---
 # On passe la variable DUAL_MOBILE au script interne
-docker exec -it egprs /bin/bash -c "export DUAL_MOBILE=$DUAL_MOBILE; /root/run.sh"
+docker exec -it egprs /bin/bash -c "/root/run.sh"

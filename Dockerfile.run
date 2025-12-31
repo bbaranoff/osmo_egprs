@@ -1,0 +1,13 @@
+# Image "run" : ne fait que reposer sur la base et démarrer
+FROM osmocom-nitb:latest
+
+COPY scripts/. /etc/osmocom/
+COPY configs/*cfg /etc/osmocom/
+COPY configs/*conf /etc/asterisk/
+RUN mv /etc/osmocom/run.sh /root/
+RUN chmod +x /root/run.sh
+ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
+RUN mkdir -p /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk /var/spool/asterisk && \
+    chmod 755 /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk /var/spool/asterisk
+
+CMD ["bash"]

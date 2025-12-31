@@ -17,10 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
     # Python & Outils système
     python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv \
-    iptables iproute2 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
+    iptables iproute2 asterisk
 SHELL ["/bin/bash", "-c"]
+COPY configs/*conf /etc/asterisk
 
 WORKDIR ${ROOT}
 
@@ -82,7 +81,7 @@ RUN cd ${ROOT} && \
 # 4. Installation des fichiers du projet
 WORKDIR /etc/osmocom
 COPY scripts/. /etc/osmocom/
-COPY configs/. /etc/osmocom/
+COPY configs/*cfg /etc/osmocom/
 RUN mv /etc/osmocom/run.sh /root/run.sh
 # Copie des binaires vers /usr/bin pour systemd et installation des .service
 RUN cp -f /usr/local/bin/osmo* /usr/bin/ || true && \
@@ -140,6 +139,8 @@ RUN cp /opt/GSM/osmocom-bb/src/host/virt_phy/src/virtphy /usr/local/bin
 RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/misc/ccch_scan /usr/local/bin
 RUN echo "alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc && source ~/.bashrc
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
-COPY configs/mobile2.cfg /root/.osmocom/bb/mobile2.cfg
 RUN chmod +x /root/run.sh
+
+
+
 CMD ["/bin/bash"]
