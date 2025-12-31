@@ -6,8 +6,9 @@ Ce projet déploie une pile GSM complète (2G) virtualisée.
 
 ```
 sed -i -e 's/192.168.1.69/your_ip/g' configs/*c
-#
-```# 🚀 Installation & Build
+
+```
+# 🚀 Installation & Build
 
 ```bash
 sudo ./build.sh
