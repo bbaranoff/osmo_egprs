@@ -3,9 +3,11 @@
 Ce projet déploie une pile GSM complète (2G) virtualisée.
 
 !!! Change the ip 192.168.1.69 in cfg files with yours !!!
-sed -i -e 's/192.168.1.69/your_ip/g' configs/*cfg
 
-## 🚀 Installation & Build
+```
+sed -i -e 's/192.168.1.69/your_ip/g' configs/*c
+#
+```# 🚀 Installation & Build
 
 ```bash
 sudo ./build.sh
