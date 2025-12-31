@@ -45,6 +45,12 @@ docker run -d \
 echo -e "${GREEN}[*] Attente du démarrage des services systemd (SS7/SIGTRAN)...${NC}"
 sleep 3
 
+export XDG_RUNTIME_DIR="/tmp/runtime-root"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 0700 "$XDG_RUNTIME_DIR"
+
+linphone >/dev/null 2>&1 &
+wireshark -k -i any -f "udp port 4729" >/dev/null 2>&1 &
 # --- 6. Exécution de l'orchestration interne (Tmux) ---
 # On passe la variable DUAL_MOBILE au script interne
 docker exec -it egprs /bin/bash -c "/root/run.sh"

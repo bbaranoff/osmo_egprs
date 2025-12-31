@@ -3,6 +3,7 @@ FROM osmocom-nitb:latest
 
 COPY scripts/. /etc/osmocom/
 COPY configs/*cfg /etc/osmocom/
+COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 COPY configs/*conf /etc/asterisk/
 RUN mv /etc/osmocom/run.sh /root/
 RUN chmod +x /root/run.sh
