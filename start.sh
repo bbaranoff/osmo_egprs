@@ -1,5 +1,5 @@
 #!/bin/bash
-
+set -euo pipefail
 # Couleurs
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -49,7 +49,18 @@ export XDG_RUNTIME_DIR="/tmp/runtime-root"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
 
-linphone >/dev/null 2>&1 &
+TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+TARGET_UID="$(id -u "$TARGET_USER")"
+
+# Reprendre une session graphique si besoin
+DISPLAY="${DISPLAY:-:0}"
+XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
+
+sudo -u "$TARGET_USER" \
+  env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+  nohup linphone >/dev/null 2>&1 &
+
 wireshark -k -i any -f "udp port 4729" >/dev/null 2>&1 &
 # --- 6. Exécution de l'orchestration interne (Tmux) ---
 # On passe la variable DUAL_MOBILE au script interne
