@@ -1,16 +1,18 @@
 #!/bin/bash
-set -euo pipefail
+
 # Couleurs
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+killall -9 wireshark linphone
 # --- 1. Vérification des privilèges ROOT ---
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}[ERREUR] Ce script doit être lancé en tant que root (sudo).${NC}" 
    exit 1
 fi
-
+touch /tmp/pcu_bts
+chmod 777 /tmp/pcu_bts
 # --- 2. Nettoyage : Stop si déjà lancé ---
 echo -e "${GREEN}[*] Nettoyage de l'environnement...${NC}"
 [ "$(sudo docker inspect -f '{{.State.Running}}' egprs 2>/dev/null)" = "true" ] && sudo docker stop egprs
@@ -23,6 +25,11 @@ if [ ! -c /dev/net/tun ]; then
     mknod /dev/net/tun c 10 200
     chmod 666 /dev/net/tun
 fi
+ip l del apn0
+echo nameserver 192.168.1.254 > /etc/resolv.conf
+ip tuntap add dev apn0 mode tun
+ip addr add 176.16.32.0/24 dev apn0
+ip link set apn0 up
 
 # --- 4. Option Multi-Mobile (Avant de lancer le container) ---
 # --- 5. Lancement du Docker ---
