@@ -12,7 +12,7 @@ For Linphone : Account assistant -> Use an SIP Account -> set your IP / user : m
 # 🚀 Installation & Build
 
 ```bash
-sudo ./build.sh
+sudo ./build.sh (or sudo docker pull ghcr.io/bbaranoff/osmo_egprs:main && sudo docker tag ghcr.io/bbaranoff/osmo_egprs:main osmocom-nitb)
 sudo ./start.sh
 
 ```
