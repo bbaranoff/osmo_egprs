@@ -13,7 +13,7 @@ For Linphone : Account assistant -> Use an SIP Account -> set your IP / user : m
 
 ```bash
 sudo ./build.sh (or sudo docker pull ghcr.io/bbaranoff/osmo_egprs:main && sudo docker tag ghcr.io/bbaranoff/osmo_egprs:main osmocom-nitb)
-sudo ./start.sh
+sudo ./start.sh (WARNING : I don't why the entrypoint may close your session relaunch it make me rid of the issue for me, todo get out of this behavior)
 
 ```
 
