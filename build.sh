@@ -12,10 +12,6 @@ echo "--- Préparation complète de l'hôte (SDR & Docker) ---"
 if ! command -v docker &> /dev/null; then
     echo "[*] Docker n'est pas installé. Installation en cours..."
     apt-get update
-    apt-get install -y ca-certificates curl gnupg lsb-release
-    mkdir -p /etc/apt/keyrings
-y
-    apt-get update
     apt-get install -y docker.io containerd.io
 fi
 
