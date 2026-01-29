@@ -1,0 +1,29 @@
+services:
+  egprs:
+    image: osmocom-run
+    container_name: egprs
+
+    privileged: true
+    network_mode: host
+
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ./asterisk-lib:/var/lib/asterisk
+
+    tmpfs:
+      - /run
+      - /run/lock
+      - /tmp
+
+    stop_signal: SIGRTMIN+3
+    restart: unless-stopped
+
+    command: ["/sbin/init"]
+

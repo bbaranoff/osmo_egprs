@@ -34,24 +34,39 @@ ip link set apn0 up
 # --- 4. Option Multi-Mobile (Avant de lancer le container) ---
 # --- 5. Lancement du Docker ---
 echo -e "${GREEN}[*] Lancement du conteneur egprs (Image: osmocom-nitb)...${NC}"
+echo -e "${GREEN}[*] Build de l'image osmocom-run...${NC}"
 docker build -f Dockerfile.run -t osmocom-run .
-# Lancement en mode détaché avec privilèges réseau totaux
+
+echo -e "${GREEN}[*] Lancement du conteneur egprs...${NC}"
+
+# ⚠️ --rm retiré pour debug et stabilité
 docker run -d \
-    --rm \
-    --name egprs \
-    --privileged \
-    --cap-add NET_ADMIN \
-    --cap-add SYS_ADMIN \
-    --cgroupns host \
-    --net host \
-    --device /dev/net/tun:/dev/net/tun \
-    -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-    --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-    osmocom-run
+  --name egprs \
+  --cap-add NET_ADMIN \
+  --cap-add SYS_ADMIN \
+  --cgroupns host \
+  --net host \
+  --device /dev/net/tun \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  --tmpfs /run \
+  --tmpfs /run/lock \
+  --tmpfs /tmp \
+  --rm  \
+  osmocom-run
 
-echo -e "${GREEN}[*] Attente du démarrage des services systemd (SS7/SIGTRAN)...${NC}"
-sleep 3
+echo -e "${GREEN}[*] Attente de systemd (PID 1) dans le conteneur...${NC}"
 
+# Attente réelle de systemd, pas un sleep aveugle
+for i in {1..15}; do
+  if docker exec egprs systemctl is-system-running --quiet 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+echo -e "${GREEN}[*] systemd opérationnel.${NC}"
+
+# Préparation environnement graphique hôte (optionnel)
 export XDG_RUNTIME_DIR="/tmp/runtime-root"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
@@ -59,16 +74,35 @@ chmod 0700 "$XDG_RUNTIME_DIR"
 TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
 TARGET_UID="$(id -u "$TARGET_USER")"
 
-# Reprendre une session graphique si besoin
+# --- Environnement graphique ---
 DISPLAY="${DISPLAY:-:0}"
 XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
 
+echo -e "${GREEN}[*] Préparation environnement graphique hôte...${NC}"
+
+export XDG_RUNTIME_DIR="/tmp/runtime-root"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 0700 "$XDG_RUNTIME_DIR"
+
+# --- Lancement Linphone ---
+echo -e "${GREEN}[*] Lancement Linphone (VoIP)...${NC}"
+
 sudo -u "$TARGET_USER" \
-  env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+  env DISPLAY="$DISPLAY" \
+      XAUTHORITY="$XAUTHORITY" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
   nohup linphone >/dev/null 2>&1 &
 
-wireshark -k -i any -f "udp port 4729" >/dev/null 2>&1 &
-# --- 6. Exécution de l'orchestration interne (Tmux) ---
-# On passe la variable DUAL_MOBILE au script interne
-docker exec -it egprs /bin/bash -c "/root/run.sh"
+# --- Lancement Wireshark ---
+echo -e "${GREEN}[*] Lancement Wireshark (capture)...${NC}"
+
+sudo -u "$TARGET_USER" \
+  env DISPLAY="$DISPLAY" \
+      XAUTHORITY="$XAUTHORITY" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+  nohup wireshark -k -i any >/dev/null 2>&1 &
+
+# --- Orchestration Osmocom dans le conteneur ---
+echo -e "${GREEN}[*] Lancement de la stack Osmocom (conteneur egprs)...${NC}"
+
+docker exec -it egprs /root/run.sh

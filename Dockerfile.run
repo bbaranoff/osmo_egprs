@@ -1,6 +1,7 @@
 # Image "run" : ne fait que reposer sur la base et démarrer
 FROM osmocom-nitb:latest
 
+COPY services/osmo-bts.service /lib/systemd/system/
 COPY scripts/. /etc/osmocom/
 COPY configs/*cfg /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg

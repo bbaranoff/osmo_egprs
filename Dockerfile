@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:22.04 AS osmocom-nitb
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ROOT=/opt/GSM
@@ -123,11 +123,9 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# Activation du service et nettoyage
-RUN systemctl enable osmo-bts.service && \
-    passwd -d root && \
-    systemctl mask getty@tty1.service serial-getty@tty1.service
+RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
+    ln -sf /lib/systemd/system/osmo-bts.service \
+           /etc/systemd/system/multi-user.target.wants/osmo-bts.service
 
 # Point d'entrée pour systemd
 STOPSIGNAL SIGRTMIN+3
