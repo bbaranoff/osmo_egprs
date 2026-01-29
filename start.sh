@@ -77,9 +77,9 @@ done
 echo -e "${GREEN}[*] systemd opérationnel.${NC}"
 
 # Autoriser root à afficher sur le X de l'utilisateur courant (une fois)
-wireshark -k -i apn0 >/dev/null 2>&1 &
-
 # --- Environnement graphique ---
+wireshark -k -f udp -Y gsmtap -i lo  >/dev/null 2>&1 &
+
 export XDG_RUNTIME_DIR="/tmp/runtime-root"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
