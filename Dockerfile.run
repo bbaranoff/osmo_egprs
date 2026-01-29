@@ -1,5 +1,9 @@
 # Image "run" : ne fait que reposer sur la base et démarrer
 FROM osmocom-nitb:latest
+RUN rm -f \
+    /var/lib/asterisk/astdb.sqlite3 \
+    /var/lib/asterisk/astdb.sqlite3-wal \
+    /var/lib/asterisk/astdb.sqlite3-shm
 
 COPY services/osmo-bts.service /lib/systemd/system/
 COPY scripts/. /etc/osmocom/

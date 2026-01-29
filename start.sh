@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # Couleurs
@@ -45,7 +46,7 @@ echo "nameserver ${GW_IP}" > /etc/resolv.conf
 
 # --- PATCH CONFIGS ---
 echo -e "${GREEN}[*] Mise à jour automatique des IP dans les configs...${NC}"
-sed -i "s/192\.168\.1\.101/${HOST_IP}/g" configs/*.cfg configs/*.conf 2>/dev/null || true
+sed -i "s/192\.168\.1\.80/${HOST_IP}/g" configs/*.cfg configs/*.conf 2>/dev/null || true
 
 # --- BUILD ---
 echo -e "${GREEN}[*] Build de l'image osmocom-run...${NC}"
