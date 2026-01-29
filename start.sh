@@ -77,6 +77,9 @@ for i in {1..15}; do
 done
 echo -e "${GREEN}[*] systemd opérationnel.${NC}"
 
+# Autoriser root à afficher sur le X de l'utilisateur courant (une fois)
+wireshark -k -i apn0 >/dev/null 2>&1 &
+
 # --- Environnement graphique ---
 export XDG_RUNTIME_DIR="/tmp/runtime-root"
 mkdir -p "$XDG_RUNTIME_DIR"
@@ -101,10 +104,6 @@ echo -e "${GREEN}[*] Lancement Wireshark (capture en root)...${NC}"
 DISPLAY="${DISPLAY:-:0}"
 XAUTHORITY="${XAUTHORITY:-/root/.Xauthority}"
 
-# Autoriser root à afficher sur le X de l'utilisateur courant (une fois)
-xhost +SI:localuser:root >/dev/null 2>&1 || true
-
-nohup wireshark -k -i any >/dev/null 2>&1 &
 
 # --- Osmocom ---
 echo -e "${GREEN}[*] Lancement de la stack Osmocom...${NC}"
@@ -116,4 +115,3 @@ ip tuntap add dev apn0 mode tun
 ip addr add 176.16.32.0/24 dev apn0
 ip link set apn0 up
 echo "nameserver ${GW_IP}" > /etc/resolv.conf
-

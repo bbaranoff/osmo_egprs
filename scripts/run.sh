@@ -45,6 +45,13 @@ sleep 2
 # Fenêtre 2 : Asterisk CLI
 #################################
 tmux new-window -t "$SESSION:2" -n asterisk
+
+tmux send-keys -t "$SESSION:2" rm -f \
+    /var/lib/asterisk/astdb.sqlite3 \
+    /var/lib/asterisk/astdb.sqlite3-wal \
+    /var/lib/asterisk/astdb.sqlite3-shm C-m
+
+
 tmux send-keys -t "$SESSION:2" "asterisk -rvvv" C-m
 
 #################################
