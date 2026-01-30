@@ -33,7 +33,7 @@ fi
 # 5. Lancement du build Docker
 echo "--- Lancement du build de l'image osmocom-nitb ---"
 # On utilise --no-cache si tu veux une installation propre des paquets dans le container
-docker compose build
+docker build .
 
 # 6. Vérification du succès
 if [ $? -eq 0 ]; then
