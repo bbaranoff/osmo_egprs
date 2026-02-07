@@ -1,50 +1,35 @@
 #!/bin/bash
 set -euo pipefail
 
-# =========================
-# Couleurs
-# =========================
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# =========================
-# Root obligatoire
-# =========================
+# ---- Root check ----
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}[ERREUR] Ce script doit être lancé en root (sudo).${NC}"
    exit 1
 fi
 
-# =========================
-# Kill restes éventuels
-# =========================
+# ---- Kill old stuff ----
 killall -9 wireshark linphone 2>/dev/null || true
 
-# =========================
-# Détection réseau
-# =========================
+# ---- Network detection ----
 GW_IP=$(ip route show default | awk '/default/ {print $3}')
 HOST_IP=$(ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 
 echo -e "${GREEN}[*] Gateway : ${GW_IP}${NC}"
 echo -e "${GREEN}[*] IP hôte : ${HOST_IP}${NC}"
 
-# =========================
-# Fichiers temporaires
-# =========================
+# ---- PCU socket ----
 touch /tmp/pcu_bts
 chmod 777 /tmp/pcu_bts
 
-# =========================
-# Nettoyage Docker
-# =========================
+# ---- Docker cleanup ----
 echo -e "${GREEN}[*] Nettoyage Docker...${NC}"
 docker rm -f egprs 2>/dev/null || true
 
-# =========================
-# TUN / réseau hôte
-# =========================
+# ---- TUN setup ----
 echo -e "${GREEN}[*] Configuration TUN...${NC}"
 modprobe tun
 mkdir -p /dev/net
@@ -59,16 +44,12 @@ ip addr add 176.16.32.1/24 dev apn0
 ip link set apn0 up
 
 echo "nameserver ${GW_IP}" > /etc/resolv.conf
-
-# =========================
-# Build image
-# =========================
+service docker restart
+# ---- Build Docker image ----
 echo -e "${GREEN}[*] Build image osmocom-run...${NC}"
 docker build -f Dockerfile.run -t osmocom-run .
 
-# =========================
-# Lancement conteneur
-# =========================
+# ---- Start container ----
 echo -e "${GREEN}[*] Démarrage conteneur egprs...${NC}"
 docker run -d \
   --name egprs \
@@ -83,54 +64,34 @@ docker run -d \
   --tmpfs /tmp \
   osmocom-run
 
-# =========================
-# Attente systemd
-# =========================
+# ---- Wait for systemd ----
 echo -e "${GREEN}[*] Attente systemd...${NC}"
-for i in {1..20}; do
-  docker exec egprs systemctl is-system-running --quiet && break
-  sleep 1
-done
+if [ "$EUID" -ne 0 ]; then
+    exec sudo env HOME="$HOME" USER="$USER" PATH="$PATH" bash "$0" "$@"
+fi
+
 echo -e "${GREEN}[*] systemd OK.${NC}"
 
-# =========================
-# Environnement graphique
-# =========================
-TARGET_USER="${SUDO_USER:-$(logname)}"
-TARGET_UID="$(id -u "$TARGET_USER")"
-DISPLAY="${DISPLAY:-:0}"
-XAUTHORITY="/home/${TARGET_USER}/.Xauthority"
+# ---- Linphone (user) ----
+TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo $USER)}"
+TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || echo 1000)"
 
-export XDG_RUNTIME_DIR="/run/user/${TARGET_UID}"
+if [[ -n "${DISPLAY:-}" ]]; then
+    echo -e "${GREEN}[*] Lancement Linphone (user)...${NC}"
+    sudo -u "$TARGET_USER" \
+      env DISPLAY="${DISPLAY}" \
+          XAUTHORITY="${XAUTHORITY:-/home/${TARGET_USER}/.Xauthority}" \
+          DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+      nohup linphone >/dev/null 2>&1 &
+else
+    echo -e "${GREEN}[*] Pas de DISPLAY, skip Linphone.${NC}"
+fi
 
-# =========================
-# Wireshark (ROOT)
-# =========================
-echo -e "${GREEN}[*] Lancement Wireshark (root, lo, port 4249)...${NC}"
-wireshark \
-  -i lo \
-  -f "udp port 4249" \
-  >/dev/null 2>&1 &
-
-# =========================
-# Linphone (USER)
-# =========================
-echo -e "${GREEN}[*] Lancement Linphone (user)...${NC}"
-sudo -u "$TARGET_USER" \
-  env DISPLAY="$DISPLAY" \
-      XAUTHORITY="$XAUTHORITY" \
-      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
-  nohup linphone >/dev/null 2>&1 &
-
-# =========================
-# Stack Osmocom
-# =========================
+# ---- Launch Osmocom stack inside container ----
 echo -e "${GREEN}[*] Lancement stack Osmocom...${NC}"
 docker exec -it egprs /root/run.sh
 
-# =========================
-# Re-apply TUN (sécurité)
-# =========================
+# ---- Re-apply TUN on exit ----
 echo -e "${GREEN}[*] Re-application réseau TUN...${NC}"
 ip link del apn0 2>/dev/null || true
 ip tuntap add dev apn0 mode tun

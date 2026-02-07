@@ -5,7 +5,6 @@ RUN rm -f \
     /var/lib/asterisk/astdb.sqlite3-wal \
     /var/lib/asterisk/astdb.sqlite3-shm
 
-COPY services/osmo-bts.service /lib/systemd/system/
 COPY scripts/. /etc/osmocom/
 COPY configs/*cfg /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg

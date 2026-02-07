@@ -5,54 +5,64 @@ SESSION="osmocom"
 GREEN='\033[0;32m'
 NC='\033[0m'
 
+# ---- Kill old tmux ----
+tmux has-session -t osmocom 2>/dev/null && tmux kill-session -t osmocom
+sleep 1
+
+# ---- Start Osmocom core ----
 echo -e "${GREEN}=== Démarrage Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 sleep 3
 
+# ---- Start Asterisk ----
 echo -e "${GREEN}=== Démarrage Asterisk ===${NC}"
-# tente systemd, sinon fallback CLI
 if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
-  systemctl restart asterisk || true
+    systemctl restart asterisk || true
 else
-  # kill un ancien asterisk si présent, puis lance en arrière-plan
-  pkill -x asterisk 2>/dev/null || true
-  asterisk -f -U root -G root -vvv >/var/log/asterisk/console.log 2>&1 &
+    pkill -x asterisk 2>/dev/null || true
+    sleep 1
+    asterisk -f -U root -G root -vvv >/var/log/asterisk/console.log 2>&1 &
 fi
 sleep 2
 
-echo -e "${GREEN}=== Reset tmux ===${NC}"
-tmux kill-server 2>/dev/null || true
-tmux start-server
-sleep 1
+SESSION=osmocom
 
-#################################
-# Fenêtre 0 : FakeTRX
-#################################
-tmux new-session -d -s "$SESSION" -n faketrx
-tmux send-keys -t "$SESSION:0" "faketrx" C-m
-sleep 2
+echo "=== Reset tmux ==="
 
-#################################
-# Fenêtre 1 : MS1 (trxcon + mobile)
-#################################
-tmux new-window -t "$SESSION:1" -n ms1
-tmux send-keys -t "$SESSION:1" "trxcon" C-m
-tmux split-window -v -t "$SESSION:1"
-tmux send-keys -t "$SESSION:1.1" "mobile -c /root/.osmocom/bb/mobile.cfg" C-m
-sleep 2
+# Kill session if it exists (silencieux)
+tmux has-session -t "$SESSION" 2>/dev/null && tmux kill-session -t "$SESSION"
 
-#################################
-# Fenêtre 2 : Asterisk CLI
-#################################
-tmux new-window -t "$SESSION:2" -n asterisk
+# Crée une session détachée
+tmux new-session -d -s "$SESSION" -n virtual-bts
 
-tmux send-keys -t "$SESSION:2" "rm -f  /var/lib/asterisk/astdb.sqlite3*" C-m
+# Fenêtre 0: BTS virtuelle
+tmux new-window -t "$SESSION" -n osmo-bts-virtual
+tmux send-keys -t "$SESSION:0" "osmo-bts-virtual -c /usr/local/etc/osmocom/osmo-bts-virtual.cfg" C-m
 
-tmux send-keys -t "$SESSION:2" "asterisk -rvvv" C-m
+# Fenêtre 1: virtphy
+tmux new-window -t "$SESSION" -n virtphy
+tmux send-keys -t "$SESSION:1" "virtphy" C-m
 
-#################################
-# Final
-#################################
-tmux select-window -t "$SESSION:1"
-echo -e "${GREEN}=== Orchestration prête ===${NC}"
-tmux attach-session -t "$SESSION"
+# Fenêtre 2: mobile
+tmux new-window -t "$SESSION" -n mobile
+tmux send-keys -t "$SESSION:2" "mobile -c /root/.osmocom/bb/mobile.cfg" C-m
+
+# Fenêtre 3: asterisk
+tmux new-window -t "$SESSION" -n asterisk
+tmux send-keys -t "$SESSION:3" "rm -f /var/lib/asterisk/astdb.sqlite3*" C-m
+tmux send-keys -t "$SESSION:3" "asterisk -rvvv" C-m
+
+echo "[+] Osmocom stack launched in tmux session '$SESSION'"
+echo "[+] Attach (optionnel): tmux attach -t $SESSION"
+
+
+# ---- Done ----
+echo -e "${GREEN}[+] Stack launched in tmux session '$SESSION'${NC}"
+echo -e "${GREEN}    Windows: bts | virtphy | mobile | asterisk${NC}"
+echo ""
+echo "    tmux attach -t $SESSION          # voir tout"
+echo "    tmux select-window -t $SESSION:mobile  # aller au mobile"
+echo ""
+
+# Stay attached so docker exec -it doesn't exit
+tmux attach -t "$SESSION"
