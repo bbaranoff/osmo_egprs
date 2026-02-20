@@ -61,7 +61,7 @@ ms 1
   rplmn 001 01
  no shutdown
 gsmtap
- remote-host 192.168.1.24
+ remote-host 0.0.0.0
  no local-host
  lchan sacch
  lchan lsacch

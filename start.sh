@@ -14,6 +14,12 @@ fi
 # ---- Kill old stuff ----
 killall -9 wireshark linphone 2>/dev/null || true
 
+IP_HOTE=$(ip route get 1 | awk '{print $7}')
+SIP="$IP_HOTE"
+
+sed -Ei.bak '/127\./! s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/'"$SIP"'/g' configs/*.cfg
+
+
 # ---- Network detection ----
 GW_IP=$(ip route show default | awk '/default/ {print $3}')
 HOST_IP=$(ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')

@@ -114,7 +114,7 @@ hlr
  ipa-name VLR-SDR-MAIN
 sgs
  local-port 29118
- local-ip 192.168.1.24
+ local-ip 0.0.0.0
  vlr-name vlr.example.net
 smsc
  queue max-pending 20

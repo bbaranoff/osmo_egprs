@@ -1,5 +1,5 @@
 # Image "run" : ne fait que reposer sur la base et démarrer
-FROM osmocom-nitb:latest
+FROM osmocom-nitb
 RUN rm -f \
     /var/lib/asterisk/astdb.sqlite3 \
     /var/lib/asterisk/astdb.sqlite3-wal \
