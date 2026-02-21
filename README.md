@@ -9,7 +9,7 @@ For Linphone :
 # 🚀 Installation & Build
 
 ```bash
-git checkout e8806f5cbbd49875e9fa0ff23da5cb2d7be7c769
+git checkout a957d53a56fa747595634bad6007990a67628dfe
 sudo ./build.sh (or sudo docker pull ghcr.io/bbaranoff/osmo_egprs:main && sudo docker tag ghcr.io/bbaranoff/osmo_egprs:main osmocom-nitb)
 sudo ./start.sh (WARNING : I don't why the entrypoint may close your session relaunch it make me rid of the issue for me, todo get out of this behavior)
 
