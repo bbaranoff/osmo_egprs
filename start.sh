@@ -30,9 +30,11 @@ SIP_ESC=$(printf '%s\n' "$SIP"   | sed 's/[\/&]/\\&/g')
 sed -Ei.bak \
 -e '/127\./b' \
 -e '/0\.0\.0\.0/b' \
+-e '/176\.16\./b' \
 -e "/$GW_ESC/b" \
 -e "s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/$SIP_ESC/g" \
 configs/*.cfg configs/*.conf
+
 # --- 3. Préparation du noyau sur l'hôte ---
 echo -e "${GREEN}[*] Configuration du module TUN sur l'hôte...${NC}"
 modprobe tun
