@@ -1,106 +1,88 @@
 #!/bin/bash
-set -euo pipefail
 
+# Couleurs
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# ---- Root check ----
+killall -9 wireshark linphone
+# --- 1. Vérification des privilèges ROOT ---
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}[ERREUR] Ce script doit être lancé en root (sudo).${NC}"
+   echo -e "${RED}[ERREUR] Ce script doit être lancé en tant que root (sudo).${NC}" 
    exit 1
 fi
 
-# ---- Kill old stuff ----
-killall -9 wireshark linphone 2>/dev/null || true
-
-IP_HOTE=$(ip route get 1 | awk '{print $7}')
-SIP="$IP_HOTE"
-
-sed -Ei.bak '/127\./! s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/'"$SIP"'/g' configs/*.cfg
+# --- 2. Nettoyage : Stop si déjà lancé ---
+echo -e "${GREEN}[*] Nettoyage de l'environnement...${NC}"
+[ "$(sudo docker inspect -f '{{.State.Running}}' egprs 2>/dev/null)" = "true" ] && sudo docker stop egprs
 
 
 # ---- Network detection ----
-GW_IP=$(ip route show default | awk '/default/ {print $3}')
-HOST_IP=$(ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
+GW_IP=$(ip route get 1 | awk '{print $3}')
+SIP=$(ip route get 1 | awk '{print $7}')
 
-echo -e "${GREEN}[*] Gateway : ${GW_IP}${NC}"
-echo -e "${GREEN}[*] IP hôte : ${HOST_IP}${NC}"
+[ -z "$SIP" ] && { echo "[!] SIP vide"; exit 0; }
+[ -z "$GW_IP" ] && { echo "[!] GW_IP vide"; exit 0; }
 
-# ---- PCU socket ----
-touch /tmp/pcu_bts
-chmod 777 /tmp/pcu_bts
+GW_ESC=$(printf '%s\n' "$GW_IP" | sed 's/[.[\*^$]/\\&/g')
+SIP_ESC=$(printf '%s\n' "$SIP"   | sed 's/[\/&]/\\&/g')
 
-# ---- Docker cleanup ----
-echo -e "${GREEN}[*] Nettoyage Docker...${NC}"
-docker rm -f egprs 2>/dev/null || true
-
-# ---- TUN setup ----
-echo -e "${GREEN}[*] Configuration TUN...${NC}"
+sed -Ei.bak \
+-e '/127\./b' \
+-e '/0\.0\.0\.0/b' \
+-e "/$GW_ESC/b" \
+-e "s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/$SIP_ESC/g" \
+configs/*.cfg configs/*.conf
+# --- 3. Préparation du noyau sur l'hôte ---
+echo -e "${GREEN}[*] Configuration du module TUN sur l'hôte...${NC}"
 modprobe tun
 mkdir -p /dev/net
-[[ -c /dev/net/tun ]] || {
+if [ ! -c /dev/net/tun ]; then
     mknod /dev/net/tun c 10 200
     chmod 666 /dev/net/tun
-}
-
-ip link del apn0 2>/dev/null || true
+fi
+ip l del apn0
 ip tuntap add dev apn0 mode tun
-ip addr add 176.16.32.1/24 dev apn0
+ip addr add 176.16.32.0/24 dev apn0
 ip link set apn0 up
 
-echo "nameserver ${GW_IP}" > /etc/resolv.conf
-service docker restart
-# ---- Build Docker image ----
-echo -e "${GREEN}[*] Build image osmocom-run...${NC}"
+# --- 4. Option Multi-Mobile (Avant de lancer le container) ---
+# --- 5. Lancement du Docker ---
+echo -e "${GREEN}[*] Lancement du conteneur egprs (Image: osmocom-nitb)...${NC}"
 docker build -f Dockerfile.run -t osmocom-run .
-
-# ---- Start container ----
-echo -e "${GREEN}[*] Démarrage conteneur egprs...${NC}"
+# Lancement en mode détaché avec privilèges réseau totaux
 docker run -d \
-  --name egprs \
-  --cap-add NET_ADMIN \
-  --cap-add SYS_ADMIN \
-  --cgroupns host \
-  --net host \
-  --device /dev/net/tun \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  --tmpfs /run \
-  --tmpfs /run/lock \
-  --tmpfs /tmp \
-  osmocom-run
+    --rm \
+    --name egprs \
+    --cap-add NET_ADMIN \
+    --cap-add SYS_ADMIN \
+    --cgroupns host \
+    --net host \
+    --device /dev/net/tun:/dev/net/tun \
+    -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+    --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+    osmocom-run
 
-# ---- Wait for systemd ----
-echo -e "${GREEN}[*] Attente systemd...${NC}"
-if [ "$EUID" -ne 0 ]; then
-    exec sudo env HOME="$HOME" USER="$USER" PATH="$PATH" bash "$0" "$@"
-fi
+echo -e "${GREEN}[*] Attente du démarrage des services systemd (SS7/SIGTRAN)...${NC}"
+sleep 3
 
-echo -e "${GREEN}[*] systemd OK.${NC}"
+export XDG_RUNTIME_DIR="/tmp/runtime-root"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 0700 "$XDG_RUNTIME_DIR"
 
-# ---- Linphone (user) ----
-TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo $USER)}"
-TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || echo 1000)"
+TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+TARGET_UID="$(id -u "$TARGET_USER")"
 
-if [[ -n "${DISPLAY:-}" ]]; then
-    echo -e "${GREEN}[*] Lancement Linphone (user)...${NC}"
-    sudo -u "$TARGET_USER" \
-      env DISPLAY="${DISPLAY}" \
-          XAUTHORITY="${XAUTHORITY:-/home/${TARGET_USER}/.Xauthority}" \
-          DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
-      nohup linphone >/dev/null 2>&1 &
-else
-    echo -e "${GREEN}[*] Pas de DISPLAY, skip Linphone.${NC}"
-fi
+# Reprendre une session graphique si besoin
+DISPLAY="${DISPLAY:-:0}"
+XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
 
-# ---- Launch Osmocom stack inside container ----
-echo -e "${GREEN}[*] Lancement stack Osmocom...${NC}"
-docker exec -it egprs /root/run.sh
+sudo -u "$TARGET_USER" \
+  env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+  nohup linphone >/dev/null 2>&1 &
 
-# ---- Re-apply TUN on exit ----
-echo -e "${GREEN}[*] Re-application réseau TUN...${NC}"
-ip link del apn0 2>/dev/null || true
-ip tuntap add dev apn0 mode tun
-ip addr add 176.16.32.1/24 dev apn0
-ip link set apn0 up
-echo "nameserver ${GW_IP}" > /etc/resolv.conf
+wireshark -k -i any -f "udp port 4729" >/dev/null 2>&1 &
+# --- 6. Exécution de l'orchestration interne (Tmux) ---
+# On passe la variable DUAL_MOBILE au script interne
+docker exec -it egprs /bin/bash -c "/root/run.sh"

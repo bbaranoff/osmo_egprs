@@ -16,7 +16,7 @@ ms 1
  layer2-socket /tmp/osmocom_l2
  sim test
  network-selection-mode auto
- imei 358925005911158 0
+ imei 358925005911157 0
  imei-fixed
  no emergency-imsi
  no sms-service-center
@@ -61,7 +61,7 @@ ms 1
   rplmn 001 01
  no shutdown
 gsmtap
- remote-host 0.0.0.0
+ remote-host 127.0.0.1
  no local-host
  lchan sacch
  lchan lsacch

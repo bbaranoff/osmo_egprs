@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS osmocom-nitb
+FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ROOT=/opt/GSM
@@ -94,38 +94,10 @@ RUN sed -i 's/^CPUScheduling/#CPUScheduling/g' /lib/systemd/system/osmo-*.servic
     sed -i 's/User=osmocom/User=root/g' /lib/systemd/system/osmo-sgsn.service && \
     chmod +x /etc/osmocom/*.sh
 
-# 6. Configuration de osmo-bts.service
-RUN cat <<EOF > /lib/systemd/system/osmo-bts.service
-[Unit]
-Description=Osmocom GSM Base Transceiver Station (BTS)
-After=network.target network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-# Utilisation de root pour éviter les problèmes de permissions sur les interfaces réseau/SDR
-User=root
-Group=root
-
-# On utilise le binaire compilé avec l'option virtual (osmo-bts-virtual) 
-# ou le binaire standard (osmo-bts-trx) selon ta config.
-# -c pointe vers ton dossier de configuration défini en section 4
-ExecStart=/usr/bin/osmo-bts-trx -c /etc/osmocom/osmo-bts.cfg
-
-Restart=always
-RestartSec=5
-
-# Désactivation des options qui causent des erreurs en Docker (Status 214/217)
-# On commente les politiques de scheduling temps réel non supportées par le kernel Docker par défaut
-# CPUSchedulingPolicy=rr
-# CPUSchedulingPriority=1
-
-[Install]
-WantedBy=multi-user.target
-EOF
-RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
-    ln -sf /lib/systemd/system/osmo-bts.service \
-           /etc/systemd/system/multi-user.target.wants/osmo-bts.service
+# Activation du service et nettoyage
+RUN systemctl enable osmo-bts-trx.service && \
+    passwd -d root && \
+    systemctl mask getty@tty1.service serial-getty@tty1.service
 
 # Point d'entrée pour systemd
 STOPSIGNAL SIGRTMIN+3

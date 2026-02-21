@@ -1,15 +1,12 @@
 # Image "run" : ne fait que reposer sur la base et démarrer
-FROM osmocom-nitb
-RUN rm -f \
-    /var/lib/asterisk/astdb.sqlite3 \
-    /var/lib/asterisk/astdb.sqlite3-wal \
-    /var/lib/asterisk/astdb.sqlite3-shm
+FROM osmocom-nitb:latest
 
 COPY scripts/. /etc/osmocom/
+COPY scripts/osmo-start.sh /root/
+COPY scripts/run.sh /root/
 COPY configs/*cfg /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 COPY configs/*conf /etc/asterisk/
-RUN mv /etc/osmocom/run.sh /root/
 RUN chmod +x /root/run.sh
 ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
 RUN mkdir -p /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk /var/spool/asterisk && \

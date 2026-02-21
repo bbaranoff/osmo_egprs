@@ -60,7 +60,7 @@ log stderr
  logging level lcsn1 notice
  logging level lio notice
  logging level ltcap notice
-log gsmtap 0.0.0.0
+log gsmtap 127.0.0.1
  logging filter all 0
  logging color 1
  logging print category-hex 1
@@ -220,7 +220,7 @@ network
   gprs ns timer tns-alive-retries 10
   gprs nsvc 0 nsvci 0
   gprs nsvc 0 local udp port 23001
-  gprs nsvc 0 remote ip 192.168.1.91
+  gprs nsvc 0 remote ip 192.168.1.43
   gprs nsvc 0 remote udp port 23000
   gprs nsvc 1 nsvci 0
   gprs nsvc 1 local udp port 0

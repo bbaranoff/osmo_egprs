@@ -39,12 +39,16 @@ systemctl start osmo-ggsn
 systemctl start osmo-sgsn
 sleep 1
 systemctl start osmo-pcu
+sleep 2
+systemctl start osmo-bts-trx
+sleep 1
+chmod 777 /tmp/pcu_bts
 
 echo "[5/5] Lancement des services Voix..."
 systemctl start osmo-sip-connector
 
 echo -e "\n${GREEN}--- Vérification du statut final ---${NC}"
-SERVICES="osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc osmo-ggsn osmo-sgsn osmo-pcu osmo-sip-connector"
+SERVICES="osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc osmo-ggsn osmo-sgsn osmo-pcu osmo-bts-trx osmo-sip-connector"
 
 for svc in $SERVICES; do
     check_service $svc
