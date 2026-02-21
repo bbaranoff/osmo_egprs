@@ -2,7 +2,9 @@
 
 Ce projet déploie une pile GSM complète (2G) virtualisée.
 
-For Linphone : Account assistant -> Use an SIP Account -> set your IP / user : linphone_A / pass : tester
+For Linphone : 
+- Dans Paramètres -> Protocoles réseau et port désactiver Port d'écoute SIP/UDP et SIP/TCP
+- Account assistant -> Use an SIP Account -> set your IP / user : linphone_A / pass : tester
 
 # 🚀 Installation & Build
 
