@@ -1,15 +1,35 @@
-# Image "run" : ne fait que reposer sur la base et démarrer
+# Image "run" : repose sur la base et démarre la stack Osmocom
 FROM osmocom-nitb:latest
 
-COPY scripts/. /etc/osmocom/
-COPY scripts/osmo-start.sh /root/
-COPY scripts/run.sh /root/
-COPY configs/*cfg /etc/osmocom/
-COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
-COPY configs/*conf /etc/asterisk/
-RUN chmod +x /root/run.sh
-ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
-RUN mkdir -p /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk /var/spool/asterisk && \
-    chmod 755 /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk /var/spool/asterisk
+# ── Répertoires nécessaires ────────────────────────────────────────────────────
+RUN mkdir -p \
+    /etc/osmocom \
+    /etc/asterisk \
+    /var/lib/asterisk \
+    /var/log/asterisk \
+    /var/run/asterisk \
+    /root/.osmocom/bb \
+    /scripts && \
+    chmod 755 \
+    /etc/asterisk \
+    /var/lib/asterisk \
+    /var/log/asterisk \
+    /var/run/asterisk
+RUN apt install telnet
+# ── Scripts ────────────────────────────────────────────────────────────────────
+COPY scripts/ /scripts/
+RUN chmod +x /scripts/*.sh
 
+# ── Configs Osmocom (templates avec placeholders) ──────────────────────────────
+COPY configs/*.cfg /etc/osmocom/
+COPY configs/*.conf /etc/asterisk/
+COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
+
+# ── Scripts de démarrage legacy ────────────────────────────────────────────────
+COPY scripts/osmo-start.sh /root/osmo-start.sh
+COPY scripts/run.sh /root/run.sh
+RUN chmod +x /root/osmo-start.sh /root/run.sh
+
+# ── Entrypoint : résout les placeholders puis lance la stack ──────────────────
+ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]
