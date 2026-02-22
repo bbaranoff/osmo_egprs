@@ -1,7 +1,7 @@
 ; =========================================================
 ; Asterisk PJSIP configuration
 ; MACHINE A
-; IP locale : 192.168.1.43
+; IP locale : 10.2.0.2
 ; =========================================================
 
 [global]
@@ -16,9 +16,9 @@ user_agent=TP-Asterisk-PJSIP
 [transport-udp]
 type=transport
 protocol=udp
-bind=192.168.1.43:5060
-external_signaling_address=192.168.1.43
-external_media_address=192.168.1.43
+bind=10.2.0.2:5060
+external_signaling_address=10.2.0.2
+external_media_address=10.2.0.2
 
 
 ; =========================================================

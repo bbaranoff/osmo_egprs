@@ -131,10 +131,36 @@ e1_input
 cs7 instance 0
  network-indicator international
  point-code 0.23.3
- sccp-address addr-dyn-msc-default
+
+ ! ── Connexion BSC → STP ─────────────────────────────────────────────────────
+ asp asp-to-stp 2905 2907 m3ua
+  local-ip 127.0.0.1
+  remote-ip 127.0.0.1
+  role asp
+  sctp-role client
+  no shutdown
+ as as-bsc m3ua
+  asp asp-to-stp
+  routing-key 3 0.23.3
+
+ ! ── Global Title du BSC (GTI=4, E.164, international) ───────────────────────
+ ! Identifie le BSC sur le réseau SS7
+ sccp-address addr-bsc-gt
+  routing-indicator GT
+  point-code 0.23.3
+  global-title
+   global-title-indicator 4
+   translation-type 0
+   numbering-plan-indicator 1
+   nature-of-address-indicator 4
+   digits +33102030403
+
+ ! ── Adresse SCCP du MSC (routing par PC pour le BSSAP) ──────────────────────
+ sccp-address addr-msc
   routing-indicator PC
   point-code 0.23.1
   subsystem-number 254
+
 network
  network country code 001
  mobile network code 01
@@ -220,7 +246,7 @@ network
   gprs ns timer tns-alive-retries 10
   gprs nsvc 0 nsvci 0
   gprs nsvc 0 local udp port 23001
-  gprs nsvc 0 remote ip 192.168.1.43
+  gprs nsvc 0 remote ip 10.2.0.2
   gprs nsvc 0 remote udp port 23000
   gprs nsvc 1 nsvci 0
   gprs nsvc 1 local udp port 0
@@ -296,7 +322,7 @@ msc 0
  amr-config 5_15k allowed
  amr-config 4_75k allowed
  amr-payload octet-aligned
- msc-addr addr-dyn-msc-default
+ msc-addr addr-msc
  asp-protocol m3ua
  lcls-mode bts-loop
  lcls-codec-mismatch allowed
