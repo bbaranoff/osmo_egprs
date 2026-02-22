@@ -1,5 +1,0 @@
-pfcp
- local-addr __CONTAINER_IP__
-nft
- # netfilter requires no specific configuration
-gtp

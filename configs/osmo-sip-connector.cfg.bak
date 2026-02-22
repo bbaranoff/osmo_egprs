@@ -1,6 +1,0 @@
-!
-mncc
-  socket-path /tmp/msc_mncc
-sip
-  local 127.0.0.1 5061
-  remote __CONTAINER_IP__ 5060
