@@ -10,10 +10,10 @@
 #   │  BSC (PC N.23.3) ──client──►                                │   172.20.0.10 : 2905
 #   └─────────────────────────────────────────────────────────────┘
 #
-# L'inter-STP est un processus osmo-stp autonome, entièrement séparé :
-#   - --entrypoint osmo-stp  (pas d'entrypoint.sh ni run.sh)
-#   - config statique configs/osmo-stp-interop.cfg (0 placeholder)
-#   - rattaché uniquement au réseau inter (gsm-inter)
+# Inter-STP : container autonome, --entrypoint osmo-stp, config statique
+#             (configs/osmo-stp-interop.cfg, aucun placeholder).
+# Opérateurs : démarrent sur gsm-inter en premier (interface inter dispo dès le boot)
+#              puis rattachés à leur réseau opérateur via docker network connect.
 
 set -e
 
@@ -39,7 +39,22 @@ banner() {
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
+#!/bin/bash
 
+read -rp "Redémarrer Docker maintenant ? (y/N) " ans
+
+case "$ans" in
+  y|Y|yes|YES)
+    echo "[*] Restarting Docker..."
+    sudo systemctl restart docker
+    sudo systemctl is-active docker && echo "[+] Docker is up."
+    ;;
+  *)
+    echo "[!] Annulé."
+    exit 0
+    ;;
+esac
+# ── Build ──────────────────────────────────────────────────────────────────────
 build_run_image() {
     if ! docker image inspect "$IMAGE_BASE" &>/dev/null; then
         echo -e "${YELLOW}Image '$IMAGE_BASE' introuvable, build complet...${NC}"
@@ -57,6 +72,7 @@ check_image() {
     fi
 }
 
+# ── Mode réseau ────────────────────────────────────────────────────────────────
 choose_network_mode() {
     echo -e "${BOLD}Mode réseau :${NC}"
     echo "  1) net-host  — SDR physique, 1 opérateur, accès direct"
@@ -70,6 +86,7 @@ choose_network_mode() {
     esac
 }
 
+# ── TUN hôte ───────────────────────────────────────────────────────────────────
 prepare_host_tun() {
     echo -e "${GREEN}[*] Configuration TUN sur l'hôte...${NC}"
     modprobe tun 2>/dev/null || true
@@ -84,8 +101,16 @@ prepare_host_tun() {
     ip link set apn0 up
 }
 
-# Substitution des placeholders dans les configs opérateur uniquement.
-# N'est PAS appelée pour l'inter-STP (config statique sans placeholder).
+# ── Substitution des placeholders (configs opérateur uniquement) ───────────────
+# Placeholders :
+#   __CONTAINER_IP__       IP du container sur son réseau opérateur
+#   __GATEWAY_IP__         Passerelle réseau opérateur
+#   __HLR_IP__             IP OsmoHLR (toujours 127.0.0.2)
+#   __INTER_STP_IP__       IP inter-STP (bridge: 172.20.0.10 | host: 127.0.0.1)
+#   __INTER_STP_SHUTDOWN__ "no shutdown" (bridge) | "shutdown" (host)
+#   __OPERATOR_ID__        Numéro opérateur
+#   __PC_MSC__ / __PC_STP__ / __PC_BSC__
+#   __MCC__ / __MNC__ / __OP_NAME__
 apply_config_templates() {
     local dest=$1 container_ip=$2 gateway_ip=$3
     local op_id="${4:-1}"
@@ -96,6 +121,7 @@ apply_config_templates() {
 
     mkdir -p "$dest/osmocom" "$dest/asterisk"
 
+    # Copie de toutes les configs SAUF osmo-stp-interop.cfg (inter-STP only)
     for f in configs/*.cfg; do
         [ "$(basename "$f")" = "osmo-stp-interop.cfg" ] && continue
         cp "$f" "$dest/osmocom/"
@@ -108,6 +134,11 @@ apply_config_templates() {
 
     for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf; do
         [ -f "$f" ] || continue
+        # RCTX globalement uniques : op_id * 100 + offset
+        # Op1 → 110/120/130  |  Op2 → 210/220/230  |  OpN → N10/N20/N30
+        local rctx_msc=$(( op_id * 100 + 10 ))
+        local rctx_stp=$(( op_id * 100 + 20 ))
+        local rctx_bsc=$(( op_id * 100 + 30 ))
         sed -i \
             -e "s|__CONTAINER_IP__|${container_ip}|g" \
             -e "s|__GATEWAY_IP__|${gateway_ip}|g" \
@@ -118,6 +149,9 @@ apply_config_templates() {
             -e "s|__PC_MSC__|${pc_msc}|g" \
             -e "s|__PC_STP__|${pc_stp}|g" \
             -e "s|__PC_BSC__|${pc_bsc}|g" \
+            -e "s|__RCTX_MSC__|${rctx_msc}|g" \
+            -e "s|__RCTX_STP__|${rctx_stp}|g" \
+            -e "s|__RCTX_BSC__|${rctx_bsc}|g" \
             -e "s|__MCC__|${mcc}|g" \
             -e "s|__MNC__|${mnc}|g" \
             -e "s|__OP_NAME__|${op_name}|g" \
@@ -140,10 +174,11 @@ build_vol_args() {
 }
 
 # ── Inter-STP : cas entièrement séparé ───────────────────────────────────────
-# - Pas d'apply_config_templates (config statique)
-# - --entrypoint osmo-stp  → bypass entrypoint.sh et run.sh de l'image
-# - -c explicite           → ne jamais tomber sur osmo-stp.cfg (qui a des placeholders)
-# - Pas de systemd, pas de cgroup, pas de TUN
+# - Config statique (configs/osmo-stp-interop.cfg), aucun placeholder
+# - --entrypoint osmo-stp : bypass entrypoint.sh et run.sh
+# - -c explicite : ne jamais tomber sur osmo-stp.cfg (qui a des placeholders)
+# - Pas de systemd / cgroup / TUN
+# - Readiness : grep sur les logs (M3UA est SCTP, nc/nmap TCP ne fonctionnent pas)
 start_inter_stp() {
     echo -e "${GREEN}Lancement inter-STP (${INTER_STP_IP})...${NC}"
 
@@ -164,8 +199,6 @@ start_inter_stp() {
         "$IMAGE_RUN" \
         -c /etc/osmocom/osmo-stp-interop.cfg
 
-    # M3UA tourne sur SCTP — nc -z (TCP) ne fonctionne pas.
-    # On surveille les logs : osmo-stp logue "binding m3ua Server" quand il est prêt.
     echo -ne "${GREEN}[*] Attente démarrage inter-STP"
     local retries=20
     while [ $retries -gt 0 ]; do
@@ -184,11 +217,11 @@ start_inter_stp() {
     done
 
     echo -e " ${RED}TIMEOUT${NC}"
-    echo -e "${RED}Logs inter-STP :${NC}"
     docker logs "$INTER_STP_CONTAINER"
     exit 1
 }
 
+# ── Mode host ─────────────────────────────────────────────────────────────────
 start_host_mode() {
     echo -e "${GREEN}Démarrage en mode net-host...${NC}"
 
@@ -229,11 +262,11 @@ start_host_mode() {
 
     echo -e "${GREEN}[*] Attente démarrage (5 s)...${NC}"
     sleep 5
-
     _launch_gui_tools
     docker exec -it egprs /bin/bash -c "/root/run.sh"
 }
 
+# ── Mode bridge ───────────────────────────────────────────────────────────────
 start_bridge_mode() {
     read -rp "Nombre d'opérateurs [2] : " N_OPERATORS
     N_OPERATORS=${N_OPERATORS:-2}
@@ -256,7 +289,7 @@ start_bridge_mode() {
             --gateway="$INTER_NET_GATEWAY" \
             "$INTER_NET"
 
-    # Inter-STP en premier — les opérateurs s'y connectent au démarrage
+    # Inter-STP en premier — doit écouter avant que les opérateurs démarrent
     start_inter_stp
 
     for i in $(seq 1 "$N_OPERATORS"); do
@@ -270,7 +303,7 @@ start_bridge_mode() {
     echo ""
     echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2905${NC} (PC 0.23.0)"
     for i in $(seq 1 "$N_OPERATORS"); do
-        echo -e "  Op${i} STP (PC ${i}.23.2) ──client──► inter-STP"
+        echo -e "  Op${i} STP (PC ${i}.23.2 @ 172.20.0.$((10+i))) ──client──► inter-STP"
     done
 
     TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
@@ -290,6 +323,10 @@ start_bridge_mode() {
     done
 }
 
+# ── Démarrage d'un opérateur ──────────────────────────────────────────────────
+# Le container démarre sur gsm-inter en premier (interface inter dispo dès le boot),
+# puis rattaché au réseau opérateur. Ainsi asp-to-inter peut atteindre 172.20.0.10
+# dès le démarrage d'osmo-stp, sans attendre le timer de reconnexion.
 start_operator() {
     local op_id=$1 mcc=$2 mnc=$3 op_name=$4
     local net_name="gsm-net-op${op_id}"
@@ -319,9 +356,6 @@ start_operator() {
 
     vol_args=$(build_vol_args "$tmpdir")
 
-    # Démarre sur gsm-inter en premier : l'interface inter existe dès le boot
-    # du container → asp-to-inter peut se connecter à l'inter-STP immédiatement.
-    # Le réseau opérateur est ajouté ensuite via docker network connect.
     # shellcheck disable=SC2086
     docker run -d \
         --name "$container_name" \
@@ -341,12 +375,13 @@ start_operator() {
         "$IMAGE_RUN" \
         /etc/osmocom/run.sh
 
-    # Ajout du réseau opérateur (loopback 127.x déjà dispo, services MSC/BSC unaffected)
+    # Réseau opérateur ajouté après — loopback et services MSC/BSC non affectés
     docker network connect --ip "$container_ip" "$net_name" "$container_name"
 
     echo -e "  ${GREEN}✓ ${container_name} démarré${NC}"
 }
 
+# ── GUI ───────────────────────────────────────────────────────────────────────
 _launch_gui_tools() {
     TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
     TARGET_UID=$(id -u "$TARGET_USER")
@@ -361,6 +396,7 @@ _launch_gui_tools() {
     wireshark -k -i any -f "udp port 4729" >/dev/null 2>&1 & true
 }
 
+# ── Arrêt ──────────────────────────────────────────────────────────────────────
 stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f
