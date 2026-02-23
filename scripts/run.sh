@@ -4,12 +4,10 @@ set -euo pipefail
 SESSION="osmocom"
 GREEN='\033[0;32m'
 NC='\033[0m'
-usermod -u 0 -o osmocom
-echo -e "${GREEN}=== Démarrage Core Osmocom ===${NC}"
-/etc/osmocom/osmo-start.sh
-sleep 3
 
 echo -e "${GREEN}=== Arrêt complet d'Asterisk ===${NC}"
+
+usermod -u 0 -o osmocom
 
 # Tentative propre via systemd
 if command -v systemctl >/dev/null 2>&1; then
@@ -40,6 +38,10 @@ sleep 1
 tmux new-session -d -s "$SESSION" -n faketrx
 tmux send-keys -t "$SESSION:0" "faketrx" C-m
 sleep 2
+
+echo -e "${GREEN}=== Démarrage Core Osmocom ===${NC}"
+/etc/osmocom/osmo-start.sh
+sleep 3
 
 #################################
 # Fenêtre 1 : MS1 (trxcon + mobile)

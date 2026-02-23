@@ -32,7 +32,7 @@ echo "[3/5] Lancement du Core Network (MSC, BSC)..."
 systemctl start osmo-msc
 sleep 2 # Laisse le temps au MSC de se lier au STP via SIGTRAN
 systemctl start osmo-bsc
-
+sleep 3
 # 4. GPRS / EDGE (SGSN, GGSN, PCU) et Radio (BTS)
 echo "[4/5] Lancement des services DATA et Radio..."
 systemctl start osmo-ggsn

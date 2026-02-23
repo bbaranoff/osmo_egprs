@@ -39,21 +39,9 @@ banner() {
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
-#!/bin/bash
 
-read -rp "Redémarrer Docker maintenant ? (y/N) " ans
+./prepare_host.sh
 
-case "$ans" in
-  y|Y|yes|YES)
-    echo "[*] Restarting Docker..."
-    sudo systemctl restart docker
-    sudo systemctl is-active docker && echo "[+] Docker is up."
-    ;;
-  *)
-    echo "[!] Annulé."
-    exit 0
-    ;;
-esac
 # ── Build ──────────────────────────────────────────────────────────────────────
 build_run_image() {
     if ! docker image inspect "$IMAGE_BASE" &>/dev/null; then
@@ -61,7 +49,7 @@ build_run_image() {
         docker build -t "$IMAGE_BASE" -f Dockerfile .
     fi
     echo -e "${GREEN}Build de l'image run (Dockerfile.run)...${NC}"
-    docker build -f Dockerfile.run -t "$IMAGE_RUN" .
+    docker build -f Dockerfile.run -t "$IMAGE_RUN" . &> /dev/null
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
 }
 
@@ -132,19 +120,62 @@ apply_config_templates() {
         [ -f "scripts/$s" ] && cp "scripts/$s" "$dest/osmocom/$s" && chmod +x "$dest/osmocom/$s"
     done
 
-    for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf; do
+
+    # mobile.cfg va dans /root/.osmocom/bb/ (path spécifique OsmocomBB)
+    mkdir -p "$dest/bb"
+    # Utilisez TOUJOURS mobile.cfg.template et copiez-le vers mobile.cfg
+    if [ -f "configs/mobile.cfg.template" ]; then
+        cp "configs/mobile.cfg.template" "$dest/bb/mobile.cfg"
+        echo -e "${GREEN}Template mobile.cfg copié depuis mobile.cfg.template${NC}"
+    elif [ -f "configs/mobile.cfg" ]; then
+        # Fallback sur l'ancien nom
+        cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
+        echo -e "${YELLOW}Attention: utilisation de mobile.cfg (pas de template)${NC}"
+    fi
+    for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
         [ -f "$f" ] || continue
-        # RCTX globalement uniques : op_id * 100 + offset
-        # Op1 → 110/120/130  |  Op2 → 210/220/230  |  OpN → N10/N20/N30
+        # ── Valeurs dérivées de op_id ──────────────────────────────────────────
+        # RCTX globalement uniques sur l'inter-STP
         local rctx_msc=$(( op_id * 100 + 10 ))
         local rctx_stp=$(( op_id * 100 + 20 ))
         local rctx_bsc=$(( op_id * 100 + 30 ))
+        # ARFCN unique par opérateur (DCS1800 : 514, 516, 518 …)
+        local arfcn=$(( 512 + op_id * 2 ))
+        # IPA unit-id unique (BTS identity sur le réseau A-bis)
+        local ipa_unit_id=$(( 6000 + op_id ))
+        # Cell identity, BSIC, BVCI, NSEI, NSVCI uniques par opérateur
+        local cell_id=$(( 6000 + op_id ))
+        local bsic=$(( 60 + op_id ))
+        local bvci=$(( op_id * 10 + 2 ))
+        local nsei=$(( op_id * 10 ))
+        local nsvci=$(( op_id * 10 ))
+        # IMSI : MCC(3) + MNC(2) + MSIN(10) — unique par opérateur
+        local imsi="${mcc}${mnc}$(printf '%010d' ${op_id})"
+        # IMEI : 15 chiffres, unique par opérateur
+        local imei="35892500591$(printf '%04d' ${op_id})"
+        # KI d'authentification : varie par opérateur (16 octets)
+        local ki="00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' ${op_id}) ff"
+        # SMS service center
+        local sms_sc="+336661234$(printf '%04d' ${op_id})"
+        # PC MSC de l'opérateur distant (pour sccp-address interop)
+        # Simplifié : op_id=1 → interop=2.23.1, op_id=2 → interop=1.23.1
+        # Pour N>2 : premier opérateur différent de soi
+        local interop_op_id=$(( op_id == 1 ? 2 : 1 ))
+        local interop_pc_msc="${interop_op_id}.23.1"
+        # IP inter-net de l'opérateur distant (pour trunk SIP)
+        local interop_trunk_ip="172.20.0.$((10 + interop_op_id))"
+        # IP inter-net locale (eth0 du container sur gsm-inter)
+        local inter_local_ip="172.20.0.$((10 + op_id))"
+
         sed -i \
             -e "s|__CONTAINER_IP__|${container_ip}|g" \
             -e "s|__GATEWAY_IP__|${gateway_ip}|g" \
             -e "s|__HLR_IP__|127.0.0.2|g" \
             -e "s|__INTER_STP_IP__|${inter_stp}|g" \
             -e "s|__INTER_STP_SHUTDOWN__|${inter_stp_shutdown}|g" \
+            -e "s|__INTER_LOCAL_IP__|${inter_local_ip}|g" \
+            -e "s|__INTEROP_TRUNK_IP__|${interop_trunk_ip}|g" \
+            -e "s|__INTEROP_PC_MSC__|${interop_pc_msc}|g" \
             -e "s|__OPERATOR_ID__|${op_id}|g" \
             -e "s|__PC_MSC__|${pc_msc}|g" \
             -e "s|__PC_STP__|${pc_stp}|g" \
@@ -155,6 +186,17 @@ apply_config_templates() {
             -e "s|__MCC__|${mcc}|g" \
             -e "s|__MNC__|${mnc}|g" \
             -e "s|__OP_NAME__|${op_name}|g" \
+            -e "s|__ARFCN__|${arfcn}|g" \
+            -e "s|__IPA_UNIT_ID__|${ipa_unit_id}|g" \
+            -e "s|__CELL_ID__|${cell_id}|g" \
+            -e "s|__BSIC__|${bsic}|g" \
+            -e "s|__BVCI__|${bvci}|g" \
+            -e "s|__NSEI__|${nsei}|g" \
+            -e "s|__NSVCI__|${nsvci}|g" \
+            -e "s|__IMSI__|${imsi}|g" \
+            -e "s|__IMEI__|${imei}|g" \
+            -e "s|__KI__|${ki}|g" \
+            -e "s|__SMS_SC__|${sms_sc}|g" \
             "$f"
     done
 }
@@ -170,6 +212,10 @@ build_vol_args() {
         [ -f "$f" ] || continue
         vol_args="$vol_args -v $f:/etc/asterisk/$(basename "$f")"
     done
+    # mobile.cfg dans son répertoire dédié OsmocomBB
+    if [ -f "$tmpdir/bb/mobile.cfg" ]; then
+        vol_args="$vol_args -v $tmpdir/bb/mobile.cfg:/root/.osmocom/bb/mobile.cfg"
+    fi
     echo "$vol_args"
 }
 
