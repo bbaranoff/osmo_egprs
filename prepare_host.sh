@@ -51,12 +51,16 @@ sleep 0.2
 step_ok "Linphone: kill (user=${TARGET_USER})"
 
 step "Linphone: relance (user=${TARGET_USER})"
-sudo -u "${TARGET_USER}" -H bash -lc '
-  set -e
-  command -v linphone >/dev/null 2>&1
-  nohup linphone >/tmp/linphone.log 2>&1 &
-  echo $! > /tmp/linphone.pid
-' >/dev/null 2>&1 || fail "Linphone: relance (user=${TARGET_USER})"
+    TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+    TARGET_UID=$(id -u "$TARGET_USER")
+    DISPLAY="${DISPLAY:-:0}"
+    XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
+
+    sudo -u "$TARGET_USER" \
+        env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+        nohup linphone >/dev/null 2>&1 & true
+        
 step_ok "Linphone: relance (user=${TARGET_USER})"
 
 # ---------- 2) Wireshark : kill + relance en root sur GSMTAP/4729 ----------

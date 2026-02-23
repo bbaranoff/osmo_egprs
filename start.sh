@@ -308,7 +308,6 @@ start_host_mode() {
 
     echo -e "${GREEN}[*] Attente démarrage (5 s)...${NC}"
     sleep 5
-    _launch_gui_tools
     docker exec -it egprs /bin/bash -c "/root/run.sh"
 }
 
@@ -427,21 +426,6 @@ start_operator() {
     echo -e "  ${GREEN}✓ ${container_name} démarré${NC}"
 }
 
-# ── GUI ───────────────────────────────────────────────────────────────────────
-_launch_gui_tools() {
-    TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
-    TARGET_UID=$(id -u "$TARGET_USER")
-    DISPLAY="${DISPLAY:-:0}"
-    XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
-
-    sudo -u "$TARGET_USER" \
-        env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
-        nohup linphone >/dev/null 2>&1 & true
-
-    wireshark -k -i any -f "udp port 4729" >/dev/null 2>&1 & true
-}
-
 # ── Arrêt ──────────────────────────────────────────────────────────────────────
 stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
@@ -459,8 +443,6 @@ banner
 if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}Doit être lancé en root (sudo).${NC}"; exit 1
 fi
-
-killall -9 wireshark linphone 2>/dev/null || true
 
 build_run_image
 check_image
