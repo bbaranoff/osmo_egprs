@@ -351,21 +351,44 @@ start_bridge_mode() {
         echo -e "  Op${i} STP (PC ${i}.23.2 @ 172.20.0.$((10+i))) ──client──► inter-STP"
     done
 
+    # ── Gnome Terminal ───────────────────────────────────────────────────────────
+    # gnome-terminal nécessite le D-Bus de la session graphique → lancer en tant
+    # qu'utilisateur réel (pas root) via su -c, avec DISPLAY/XAUTHORITY transmis.
     TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
-    TARGET_UID=$(id -u "$TARGET_USER")
     DISPLAY="${DISPLAY:-:0}"
     XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
 
+    _open_term() {
+        local title="$1"
+        local cmd="$2"
+        # xterm : aucune dépendance D-Bus/dbus-launch, fonctionne directement en root
+        DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+        xterm -title "$title" \
+              -fa 'Monospace' -fs 10 \
+              -bg '#1e1e1e' -fg '#d4d4d4' \
+              -e bash -c "$cmd; exec bash" \
+        2>/dev/null &
+    }
+
     for i in $(seq 1 "$N_OPERATORS"); do
-        sudo -u "$TARGET_USER" \
-            env DISPLAY="$DISPLAY" \
-                XAUTHORITY="$XAUTHORITY" \
-                DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
-            gnome-terminal \
-                --title="Op${i} — ${OP_NAME[$i]:-OsmoOP$i}" \
-                -- bash -c "sudo docker exec -ti osmo-operator-${i} /etc/osmocom/run.sh; exec bash" \
-            2>/dev/null & true
+        _open_term \
+            "Op${i} — ${OP_NAME[$i]:-OsmoOP$i}" \
+            "echo '=== Op${i} — ${OP_NAME[$i]:-OsmoOP$i} ==='; \
+             echo 'VTY STP : docker exec -it osmo-operator-${i} telnet 127.0.0.1 4239'; \
+             echo 'VTY MSC : docker exec -it osmo-operator-${i} telnet 127.0.0.1 4254'; \
+             echo 'VTY BSC : docker exec -it osmo-operator-${i} telnet 127.0.0.1 4242'; \
+             echo 'SCCP    : show cs7 instance 0 sccp users'; \
+             echo '          show cs7 instance 0 sccp connections'; \
+             echo ''; \
+             sudo docker exec -ti osmo-operator-${i} /etc/osmocom/run.sh"
     done
+
+    _open_term \
+        "Inter-STP (PC 0.23.0)" \
+        "echo '=== Inter-STP ==='; \
+         echo 'VTY : sudo docker exec -it osmo-inter-stp telnet 127.0.0.1 4239'; \
+         echo ''; \
+         sudo docker logs -f osmo-inter-stp" 
 }
 
 # ── Démarrage d'un opérateur ──────────────────────────────────────────────────
