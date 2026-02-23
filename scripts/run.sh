@@ -4,7 +4,7 @@ set -euo pipefail
 SESSION="osmocom"
 GREEN='\033[0;32m'
 NC='\033[0m'
-
+usermod -u 0 -o osmocom
 echo -e "${GREEN}=== Démarrage Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 sleep 3

@@ -1,4 +1,4 @@
-# Image "run" : repose sur la base et démarre la stack Osmocom
+# Dockerfile.run — Image d'exécution ; repose sur l'image de base osmocom-nitb.
 FROM osmocom-nitb:latest
 
 # ── Répertoires nécessaires ────────────────────────────────────────────────────
@@ -15,21 +15,26 @@ RUN mkdir -p \
     /var/lib/asterisk \
     /var/log/asterisk \
     /var/run/asterisk
-RUN apt install telnet
+
+RUN apt-get install -y --no-install-recommends telnet iproute2 && \
+    rm -rf /var/lib/apt/lists/*
+
 # ── Scripts ────────────────────────────────────────────────────────────────────
 COPY scripts/ /scripts/
 RUN chmod +x /scripts/*.sh
 
-# ── Configs Osmocom (templates avec placeholders) ──────────────────────────────
+# ── Configs Osmocom (templates avec placeholders __XXX__) ─────────────────────
+# Toutes les configs sont copiées ; les valeurs réelles sont injectées
+# au démarrage via start.sh (apply_config_templates) et montées en volume.
 COPY configs/*.cfg /etc/osmocom/
 COPY configs/*.conf /etc/asterisk/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 
-# ── Scripts de démarrage legacy ────────────────────────────────────────────────
+# ── Scripts de démarrage ───────────────────────────────────────────────────────
 COPY scripts/osmo-start.sh /root/osmo-start.sh
-COPY scripts/run.sh /root/run.sh
+COPY scripts/run.sh        /root/run.sh
 RUN chmod +x /root/osmo-start.sh /root/run.sh
 
-# ── Entrypoint : résout les placeholders puis lance la stack ──────────────────
+# ── Entrypoint ────────────────────────────────────────────────────────────────
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]
