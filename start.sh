@@ -40,7 +40,6 @@ banner() {
     echo -e "${NC}"
 }
 
-./prepare_host.sh
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 build_run_image() {
@@ -470,6 +469,7 @@ fi
 build_run_image
 check_image
 choose_network_mode
+./prepare_host.sh
 
 case "$NETWORK_MODE" in
     host)   start_host_mode ;;

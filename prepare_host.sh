@@ -71,7 +71,7 @@ step_ok "Wireshark: kill (root)"
 
 step "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
 command -v wireshark >/dev/null 2>&1 || fail "Wireshark introuvable (installe wireshark)"
-nohup wireshark -k -i any -f "udp port ${GSMTAP_PORT}" -Y "udp.port==${GSMTAP_PORT}" \
+nohup wireshark -i any -f "udp port ${GSMTAP_PORT}" -Y "udp.port==${GSMTAP_PORT}" \
   >/tmp/wireshark.log 2>&1 &
 echo $! > /tmp/wireshark.pid
 step_ok "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
