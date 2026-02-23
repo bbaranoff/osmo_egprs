@@ -1,5 +1,5 @@
 # Dockerfile.run — Image d'exécution ; repose sur l'image de base osmocom-nitb.
-FROM osmocom-nitb:latest
+FROM osmocom-nitb:latest as osmocom-run
 
 # ── Répertoires nécessaires ────────────────────────────────────────────────────
 RUN mkdir -p \
@@ -16,7 +16,7 @@ RUN mkdir -p \
     /var/log/asterisk \
     /var/run/asterisk
 
-RUN apt-get install -y --no-install-recommends telnet iproute2 && \
+RUN apt-get install -y --no-install-recommends telnet iproute2 tmux && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Scripts ────────────────────────────────────────────────────────────────────
@@ -26,13 +26,15 @@ RUN chmod +x /scripts/*.sh
 # ── Configs Osmocom (templates avec placeholders __XXX__) ─────────────────────
 # Toutes les configs sont copiées ; les valeurs réelles sont injectées
 # au démarrage via start.sh (apply_config_templates) et montées en volume.
-COPY configs/*.cfg /etc/osmocom/
 COPY configs/*.conf /etc/asterisk/
+COPY configs/*.cfg /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
+RUN mv /etc/osmocom/osmo-stp-interop.cfg /etc/osmocom/osmo-stp.cfg
 
 # ── Scripts de démarrage ───────────────────────────────────────────────────────
 COPY scripts/osmo-start.sh /root/osmo-start.sh
 COPY scripts/run.sh        /root/run.sh
+COPY var/*        /var/lib/osmocom/
 RUN chmod +x /root/osmo-start.sh /root/run.sh
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────

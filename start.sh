@@ -151,7 +151,7 @@ apply_config_templates() {
         # IMSI : MCC(3) + MNC(2) + MSIN(10) — unique par opérateur
         local imsi="${mcc}${mnc}$(printf '%010d' ${op_id})"
         # IMEI : 15 chiffres, unique par opérateur
-        local imei="35892500591$(printf '%04d' ${op_id})"
+        local imei="3589250059$(printf '%04d' ${op_id})"0
         # KI d'authentification : varie par opérateur (16 octets)
         local ki="00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' ${op_id}) ff"
         # SMS service center
@@ -218,12 +218,11 @@ build_vol_args() {
     echo "$vol_args"
 }
 
-# ── Inter-STP : cas entièrement séparé ───────────────────────────────────────
-# - Config statique (configs/osmo-stp-interop.cfg), aucun placeholder
-# - --entrypoint osmo-stp : bypass entrypoint.sh et run.sh
-# - -c explicite : ne jamais tomber sur osmo-stp.cfg (qui a des placeholders)
-# - Pas de systemd / cgroup / TUN
-# - Readiness : grep sur les logs (M3UA est SCTP, nc/nmap TCP ne fonctionnent pas)
+# ── Inter-STP : container Docker, osmo-stp lancé dans tmux à l'intérieur ──────
+# - Config statique montée en volume (configs/osmo-stp-interop.cfg)
+# - Container démarré avec bash (pas --entrypoint osmo-stp)
+# - osmo-stp lancé via docker exec tmux dans le container
+# - Readiness : grep sur docker logs
 start_inter_stp() {
     echo -e "${GREEN}Lancement inter-STP (${INTER_STP_IP})...${NC}"
 
@@ -234,21 +233,28 @@ start_inter_stp() {
 
     docker rm -f "$INTER_STP_CONTAINER" 2>/dev/null || true
 
+    # Container démarré avec bash — tmux sera lancé dedans ensuite
     docker run -d \
         --name "$INTER_STP_CONTAINER" \
         --network "$INTER_NET" \
         --ip "$INTER_STP_IP" \
         --cap-add NET_ADMIN \
         -v "${INTER_STP_CFG}:/etc/osmocom/osmo-stp-interop.cfg:ro" \
-        --entrypoint osmo-stp \
+        --entrypoint bash \
         "$IMAGE_RUN" \
-        -c /etc/osmocom/osmo-stp-interop.cfg
+        -c "sleep infinity" > /dev/null
+
+    # Lance osmo-stp dans une session tmux à l'intérieur du container
+    docker exec "$INTER_STP_CONTAINER" \
+        tmux new-session -d -s stp \
+        "osmo-stp -c /etc/osmocom/osmo-stp-interop.cfg 2>&1 | tee /tmp/osmo-stp.log"
 
     echo -ne "${GREEN}[*] Attente démarrage inter-STP"
     local retries=20
     while [ $retries -gt 0 ]; do
-        if docker logs "$INTER_STP_CONTAINER" 2>&1 | grep -q "binding m3ua Server"; then
+        if docker exec "$INTER_STP_CONTAINER" grep -q "binding m3ua Server" /tmp/osmo-stp.log 2>/dev/null; then
             echo -e " ${GREEN}✓${NC}"
+            echo -e "  Logs : ${CYAN}docker exec -ti ${INTER_STP_CONTAINER} tmux attach -t stp${NC}"
             return 0
         fi
         if [ "$(docker inspect -f '{{.State.Running}}' "$INTER_STP_CONTAINER" 2>/dev/null)" != "true" ]; then
@@ -262,7 +268,7 @@ start_inter_stp() {
     done
 
     echo -e " ${RED}TIMEOUT${NC}"
-    docker logs "$INTER_STP_CONTAINER"
+    docker exec "$INTER_STP_CONTAINER" cat /tmp/osmo-stp.log 2>/dev/null
     exit 1
 }
 
@@ -303,7 +309,7 @@ start_host_mode() {
         -e INTER_STP_IP="127.0.0.1" \
         $vol_args \
         "$IMAGE_RUN" \
-        /etc/osmocom/run.sh
+        /etc/osmocom/run.sh &> /dev/null
 
     echo -e "${GREEN}[*] Attente démarrage (5 s)...${NC}"
     sleep 5
@@ -386,8 +392,9 @@ start_bridge_mode() {
         "Inter-STP (PC 0.23.0)" \
         "echo '=== Inter-STP ==='; \
          echo 'VTY : sudo docker exec -it osmo-inter-stp telnet 127.0.0.1 4239'; \
+         echo 'Logs tmux : sudo docker exec -ti osmo-inter-stp tmux attach -t stp'; \
          echo ''; \
-         sudo docker logs -f osmo-inter-stp" 
+         sudo docker exec -ti osmo-inter-stp tmux attach -t stp"
 }
 
 # ── Démarrage d'un opérateur ──────────────────────────────────────────────────

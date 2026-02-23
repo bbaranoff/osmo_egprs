@@ -42,7 +42,7 @@ sleep 2
 echo -e "${GREEN}=== Démarrage Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 chmod 666 /tmp/pcu_bts
-sleep 1
+sleep 5
 
 #################################
 # Fenêtre 1 : MS1 (trxcon + mobile)
@@ -50,8 +50,7 @@ sleep 1
 tmux new-window -t "$SESSION:1" -n ms1
 tmux send-keys -t "$SESSION:1" "trxcon" C-m
 tmux split-window -v -t "$SESSION:1"
-tmux send-keys -t "$SESSION:1.1" "mobile -c /root/.osmocom/bb/mobile.cfg" C-m
-sleep 1
+tmux send-keys -t "$SESSION:1.1" "sleep 3 && mobile -c /root/.osmocom/bb/mobile.cfg" C-m
 
 #################################
 # Fenêtre 2 : Asterisk CLI
