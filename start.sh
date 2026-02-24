@@ -2,18 +2,23 @@
 # start.sh — Lance la stack Osmocom GSM
 # Modes : net-host (1 opérateur, SDR physique) | bridge (N opérateurs SS7 inter-op)
 #
-# Topologie SS7 en mode bridge :
+# Topologie SS7 en mode bridge (réseau unique 172.20.0.0/24) :
 #
-#   ┌─────────────── container osmo-operator-N ───────────────────┐
-#   │  MSC (PC N.23.1) ──client──►                                │
-#   │                              STP intra (PC N.23.2) ──client──►  Inter-STP (PC 0.23.0)
-#   │  BSC (PC N.23.3) ──client──►                                │   172.20.0.10 : 2905
-#   └─────────────────────────────────────────────────────────────┘
+#   ┌─────────── Inter-STP (PC 0.23.2) ──────────┐
+#   │  172.20.0.10:2905                           │
+#   └──────────────────────────────────────────────┘
+#            ▲                    ▲
+#            │                    │
+#   ┌────────┴─────────┐  ┌──────┴──────────┐
+#   │  Op1: 172.20.0.11│  │  Op2: 172.20.0.12│
+#   │  STP (PC 1.23.2) │  │  STP (PC 2.23.2) │
+#   │  MSC (PC 1.23.1) │  │  MSC (PC 2.23.1) │
+#   │  BSC (PC 1.23.3) │  │  BSC (PC 2.23.3) │
+#   └──────────────────┘  └──────────────────┘
 #
-# Inter-STP : container autonome, --entrypoint osmo-stp, config statique
-#             (configs/osmo-stp-interop.cfg, aucun placeholder).
-# Opérateurs : démarrent sur gsm-inter en premier (interface inter dispo dès le boot)
-#              puis rattachés à leur réseau opérateur via docker network connect.
+# Tous les containers sur le même réseau : gsm-inter (172.20.0.0/24)
+# MSC/STP/BSC communiquent en localhost (127.0.0.1) au sein de chaque container
+#
 
 set -e
 
@@ -163,7 +168,7 @@ apply_config_templates() {
         local interop_pc_msc="${interop_op_id}.23.1"
         # IP inter-net de l'opérateur distant (pour trunk SIP)
         local interop_trunk_ip="172.20.0.$((10 + interop_op_id))"
-        # IP inter-net locale (eth0 du container sur gsm-inter)
+        # IP locale du container (sur le réseau unique 172.20.0.0/24)
         local inter_local_ip="172.20.0.$((10 + op_id))"
 
         sed -i \
@@ -224,12 +229,19 @@ build_vol_args() {
 # - osmo-stp lancé via docker exec tmux dans le container
 # - Readiness : grep sur docker logs
 start_inter_stp() {
-    echo -e "${GREEN}Lancement inter-STP (${INTER_STP_IP})...${NC}"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local inter_cfg="${tmpdir}/osmo-stp-interop.cfg"
 
-    if [ ! -f "$INTER_STP_CFG" ]; then
-        echo -e "${RED}Config introuvable : ${INTER_STP_CFG}${NC}"
+    echo -e "${GREEN}Génération config inter-STP (${N_OPERATORS} opérateurs)...${NC}"
+    bash ./create_interop.sh "$N_OPERATORS" "$inter_cfg"
+
+    if [ ! -f "$inter_cfg" ]; then
+        echo -e "${RED}Échec génération config inter-STP${NC}"
         exit 1
     fi
+    
+    echo -e "${GREEN}Lancement inter-STP (${INTER_STP_IP})...${NC}"
 
     docker rm -f "$INTER_STP_CONTAINER" 2>/dev/null || true
 
@@ -239,7 +251,7 @@ start_inter_stp() {
         --network "$INTER_NET" \
         --ip "$INTER_STP_IP" \
         --cap-add NET_ADMIN \
-        -v "${INTER_STP_CFG}:/etc/osmocom/osmo-stp-interop.cfg:ro" \
+        -v "${inter_cfg}:/etc/osmocom/osmo-stp-interop.cfg:ro" \
         --entrypoint bash \
         "$IMAGE_RUN" \
         -c "sleep infinity" > /dev/null
@@ -351,7 +363,7 @@ start_bridge_mode() {
     echo ""
     docker ps --filter "name=osmo-" --format "  {{.Names}}\t{{.Status}}"
     echo ""
-    echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2905${NC} (PC 0.23.0)"
+    echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2905${NC} (PC 0.23.2)"
     for i in $(seq 1 "$N_OPERATORS"); do
         echo -e "  Op${i} STP (PC ${i}.23.2 @ 172.20.0.$((10+i))) ──client──► inter-STP"
     done
@@ -389,7 +401,7 @@ start_bridge_mode() {
     done
 
     _open_term \
-        "Inter-STP (PC 0.23.0)" \
+        "Inter-STP (PC 0.23.2)" \
         "echo '=== Inter-STP ==='; \
          echo 'VTY : sudo docker exec -it osmo-inter-stp telnet 127.0.0.1 4239'; \
          echo 'Logs tmux : sudo docker exec -ti osmo-inter-stp tmux attach -t stp'; \
@@ -398,32 +410,24 @@ start_bridge_mode() {
 }
 
 # ── Démarrage d'un opérateur ──────────────────────────────────────────────────
-# Le container démarre sur gsm-inter en premier (interface inter dispo dès le boot),
-# puis rattaché au réseau opérateur. Ainsi asp-to-inter peut atteindre 172.20.0.10
-# dès le démarrage d'osmo-stp, sans attendre le timer de reconnexion.
+# Architecture simplifiée : un seul réseau 172.20.0.0/24 pour tous.
+# Les composants MSC/STP/BSC communiquent en localhost (127.0.0.1).
+# Chaque opérateur a une IP fixe : 172.20.0.11 (op1), 172.20.0.12 (op2), etc.
 start_operator() {
     local op_id=$1 mcc=$2 mnc=$3 op_name=$4
-    local net_name="gsm-net-op${op_id}"
-    local subnet="172.20.${op_id}.0/24"
-    local gateway="172.20.${op_id}.1"
-    local container_ip="172.20.${op_id}.10"
     local container_name="osmo-operator-${op_id}"
-    local inter_local_ip="172.20.0.$((10 + op_id))"
-
-    docker network inspect "$net_name" &>/dev/null || \
-        docker network create --subnet="$subnet" --gateway="$gateway" "$net_name"
+    local container_ip="172.20.0.$((10 + op_id))"  # 172.20.0.11, .12, .13...
 
     local tmpdir
     tmpdir=$(mktemp -d)
     apply_config_templates "$tmpdir" \
-        "$container_ip" "$gateway" \
+        "$container_ip" "$INTER_NET_GATEWAY" \
         "$op_id" "${op_id}.23.1" "${op_id}.23.2" "${op_id}.23.3" \
         "$mcc" "$mnc" "$op_name" \
         "$INTER_STP_IP" "no shutdown"
 
     echo -e "${GREEN}Démarrage '${container_name}'${NC}"
-    echo -e "  réseau op    : ${CYAN}${container_ip}${NC} (${subnet})"
-    echo -e "  réseau inter : ${CYAN}${inter_local_ip}${NC} → ${INTER_STP_IP}"
+    echo -e "  IP : ${CYAN}${container_ip}${NC} (${INTER_NET_SUBNET})"
     echo -e "  PC : MSC=${op_id}.23.1  STP=${op_id}.23.2  BSC=${op_id}.23.3"
 
     docker rm -f "$container_name" 2>/dev/null || true
@@ -434,7 +438,7 @@ start_operator() {
     docker run -d \
         --name "$container_name" \
         --network "$INTER_NET" \
-        --ip "$inter_local_ip" \
+        --ip "$container_ip" \
         --cap-add NET_ADMIN \
         --cap-add SYS_ADMIN \
         --cgroupns host \
@@ -443,14 +447,11 @@ start_operator() {
         --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
         -e OPERATOR_ID="$op_id" \
         -e CONTAINER_IP="$container_ip" \
-        -e GATEWAY_IP="$gateway" \
+        -e GATEWAY_IP="$INTER_NET_GATEWAY" \
         -e INTER_STP_IP="$INTER_STP_IP" \
         $vol_args \
         "$IMAGE_RUN" \
         /etc/osmocom/run.sh
-
-    # Réseau opérateur ajouté après — loopback et services MSC/BSC non affectés
-    docker network connect --ip "$container_ip" "$net_name" "$container_name"
 
     echo -e "  ${GREEN}✓ ${container_name} démarré${NC}"
 }
@@ -460,7 +461,6 @@ stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f
     docker ps -a --filter "name=egprs"  --format "{{.Names}}" | xargs -r docker rm -f
-    docker network ls --filter "name=gsm-net-op" --format "{{.Name}}" | xargs -r docker network rm 2>/dev/null || true
     echo -e "${GREEN}Arrêté.${NC}"
 }
 

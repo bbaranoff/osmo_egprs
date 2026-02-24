@@ -29,7 +29,6 @@ RUN chmod +x /scripts/*.sh
 COPY configs/*.conf /etc/asterisk/
 COPY configs/*.cfg /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
-RUN mv /etc/osmocom/osmo-stp-interop.cfg /etc/osmocom/osmo-stp.cfg
 
 # ── Scripts de démarrage ───────────────────────────────────────────────────────
 COPY scripts/osmo-start.sh /root/osmo-start.sh

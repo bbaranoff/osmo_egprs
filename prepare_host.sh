@@ -76,12 +76,18 @@ nohup wireshark -i any -f "udp port ${GSMTAP_PORT}" -Y "udp.port==${GSMTAP_PORT}
 echo $! > /tmp/wireshark.pid
 step_ok "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
 
-# ---------- 3) Docker: restart service ----------
+# ---------- 3) Xterm : kill----------
+step "Xterm kill"
+kill_name_root "xterm"
+sleep 0.2
+step_ok "Xterm: kill (root)"
+
+# ---------- 4) Docker: restart service ----------
 step "Restart docker service"
 systemctl restart docker >/dev/null 2>&1 || fail "Restart docker service"
 step_ok "Restart docker service"
 
-# ---------- 4) Mini-check (optionnel) ----------
+# ---------- 5) Mini-check (optionnel) ----------
 step "Check: listeners UDP/${GSMTAP_PORT}"
 ss -lunp | awk -v p=":${GSMTAP_PORT}" '$0 ~ p {print}' >/dev/null 2>&1 || true
 step_ok "Check: listeners UDP/${GSMTAP_PORT}"
