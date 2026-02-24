@@ -187,11 +187,15 @@ sudo ufw allow 4729/udp
 ### 1. Cloner le repository
 
 ```bash
-git clone https://github.com/votre-username/osmo_egprs.git
+git clone https://github.com/bbaranoff/osmo_egprs
 cd osmo_egprs
 ```
 
 ### 2. Build de l'image Docker
+
+```bash
+chmod+x && sudo ./build.sh
+```
 
 ```bash
 # Build de l'image de base (Osmocom + dépendances)
