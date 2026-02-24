@@ -194,7 +194,7 @@ cd osmo_egprs
 ### 2. Build de l'image Docker
 
 ```bash
-chmod+x && sudo ./build.sh
+chmod +x build.sh && sudo ./build.sh
 ```
 
 ```bash
@@ -208,7 +208,7 @@ sudo docker build -f Dockerfile.run -t osmocom-run .
 ### 3. Lancer le réseau
 
 ```bash
-sudo ./start.sh
+chmod +x ./start.sh && sudo ./start.sh
 ```
 
 #### Choix du mode réseau
