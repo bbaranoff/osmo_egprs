@@ -63,19 +63,6 @@ step "Linphone: relance (user=${TARGET_USER})"
         
 step_ok "Linphone: relance (user=${TARGET_USER})"
 
-# ---------- 2) Wireshark : kill + relance en root sur GSMTAP/4729 ----------
-step "Wireshark: kill (root)"
-kill_name_root "wireshark"
-sleep 0.2
-step_ok "Wireshark: kill (root)"
-
-step "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
-command -v wireshark >/dev/null 2>&1 || fail "Wireshark introuvable (installe wireshark)"
-nohup wireshark -i any -f "udp port ${GSMTAP_PORT}" -Y "udp.port==${GSMTAP_PORT}" \
-  >/tmp/wireshark.log 2>&1 &
-echo $! > /tmp/wireshark.pid
-step_ok "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
-
 # ---------- 3) Xterm : kill----------
 step "Xterm kill"
 kill_name_root "xterm"
@@ -86,6 +73,22 @@ step_ok "Xterm: kill (root)"
 step "Restart docker service"
 systemctl restart docker >/dev/null 2>&1 || fail "Restart docker service"
 step_ok "Restart docker service"
+
+# ---------- 2) Wireshark : kill + relance en root sur GSMTAP/4729 ----------
+step "Wireshark: kill (root)"
+kill_name_root "wireshark"
+sleep 0.2
+step_ok "Wireshark: kill (root)"
+
+step "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
+# 3. Trouver l'interface bridge Docker
+BRIDGE_IF=$(docker network inspect gsm-inter -f '{{.Id}}' | cut -c1-12)
+
+# 4. Lancer Wireshark sur le bridge
+sudo wireshark -k -i br-${BRIDGE_IF} -f "udp port 4729" >/dev/null 2>&1 & true
+
+step_ok "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
+
 
 # ---------- 5) Mini-check (optionnel) ----------
 step "Check: listeners UDP/${GSMTAP_PORT}"
