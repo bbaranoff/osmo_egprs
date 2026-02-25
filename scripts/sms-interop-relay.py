@@ -325,63 +325,67 @@ class RoutingTable:
 # HLR VTY — résolution MSISDN → IMSI
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def hlr_msisdn_to_imsi(msisdn: str, hlr_host: str = HLR_VTY_HOST,
-                        hlr_port: int = HLR_VTY_PORT) -> Optional[str]:
-    """
-    Interroge le VTY d'OsmoHLR pour résoudre MSISDN → IMSI.
-    Commande VTY : subscriber show msisdn <number>
-    """
+def hlr_msisdn_to_imsi(msisdn: str,
+                       hlr_host: str = HLR_VTY_HOST,
+                       hlr_port: int = HLR_VTY_PORT) -> Optional[str]:
+
     clean = msisdn.lstrip('+')
-    
+
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(5)
         s.connect((hlr_host, hlr_port))
-        
-        # Lire le banner
-        data = b""
-        while True:
-            chunk = s.recv(4096)
-            data += chunk
-            if b"\r\n" in data and (b">" in data or b"#" in data):
-                break
-        
-        # Envoyer la commande
-        cmd = f"subscriber show msisdn {clean}\r\n"
+
+        def recv_until_prompt(timeout=3):
+            data = b""
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                try:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                    decoded = data.decode("ascii", errors="replace")
+                    lines = decoded.strip().splitlines()
+                    if lines:
+                        last = lines[-1].strip()
+                        if last.endswith(">") or last.endswith("#"):
+                            break
+                except socket.timeout:
+                    break
+            return data.decode("ascii", errors="replace")
+
+        # Banner
+        recv_until_prompt()
+
+        # Enable
+        s.sendall(b"enable\r\n")
+        recv_until_prompt()
+
+        # Commande exacte supportée par ta version
+        cmd = f"show subscriber msisdn {clean}\r\n"
         s.sendall(cmd.encode())
-        
-        # Lire la réponse
-        data = b""
-        deadline = time.time() + 3
-        while time.time() < deadline:
-            try:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-                decoded = data.decode('ascii', errors='replace')
-                if decoded.count('\n') > 3 and ('>' in decoded.split('\n')[-1] 
-                                                  or '#' in decoded.split('\n')[-1]):
-                    break
-            except socket.timeout:
-                break
-        
+
+        response = recv_until_prompt()
+
         s.close()
-        
-        # Parser la réponse pour trouver l'IMSI
-        response = data.decode('ascii', errors='replace')
-        for line in response.split('\n'):
-            line = line.strip()
-            if line.startswith('IMSI:'):
-                imsi = line.split(':', 1)[1].strip()
-                if imsi and all(c.isdigit() for c in imsi):
+
+        logging.info(f"HLR lookup MSISDN={clean}")
+
+        # Parse uniquement IMSI
+        for line in response.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("IMSI:"):
+                imsi = stripped.split(":", 1)[1].strip()
+                if imsi.isdigit():
+                    logging.info(f"HLR match: MSISDN {clean} → IMSI {imsi}")
                     return imsi
-        
+
         logging.warning(f"MSISDN {clean} not found in HLR")
         return None
-        
+
     except Exception as e:
-        logging.error(f"HLR VTY error: {e}")
+        logging.error(f"HLR VTY error for MSISDN {clean}: {e}")
         return None
 
 
