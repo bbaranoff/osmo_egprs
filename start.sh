@@ -232,14 +232,14 @@ start_inter_stp() {
     local inter_cfg="${tmpdir}/osmo-stp-interop.cfg"
 
     echo -e "${GREEN}Génération config inter-STP (${N_OPERATORS} opérateurs)...${NC}"
-    bash ./create_interop.sh "$N_OPERATORS" "$inter_cfg"
+    bash ./create_interop.sh "$N_OPERATORS" "$inter_cfg" > /dev/null
 
     if [ ! -f "$inter_cfg" ]; then
         echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
     fi
 
     echo -e "${GREEN}Lancement inter-STP (${INTER_STP_IP}:2908)...${NC}"
-    docker rm -f "$INTER_STP_CONTAINER" 2>/dev/null || true
+    docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
 
     docker run -d \
         --name "$INTER_STP_CONTAINER" \
@@ -309,7 +309,7 @@ start_operator() {
     local rctx_inter=$(( op_id * 100 + 50 ))
     echo -e "  [STP] Op${op_id} PC=${op_id}.23.2 → inter-STP ${INTER_STP_IP}:2908 (RCTX ${rctx_inter})"
 
-    docker rm -f "$container_name" 2>/dev/null || true
+    docker rm -f "$container_name" &>/dev/null || true
 
     vol_args=$(build_vol_args "$tmpdir")
 
@@ -329,7 +329,7 @@ start_operator() {
         -e INTER_STP_IP="$INTER_STP_IP" \
         $vol_args \
         "$IMAGE_RUN" \
-        /etc/osmocom/run.sh
+        /etc/osmocom/run.sh > /dev/null
 
     docker network connect --ip "$container_ip" "$net_name" "$container_name"
     echo -e "  ${GREEN}✓${NC} ${container_name} démarré"
@@ -345,7 +345,7 @@ start_host_mode() {
     echo -e "  IP hôte : ${CYAN}${SRC_IP}${NC}  GW : ${CYAN}${GW_IP}${NC}"
 
     prepare_host_tun
-    docker rm -f egprs 2>/dev/null || true
+    docker rm -f egprs &>/dev/null || true
 
     local tmpdir
     tmpdir=$(mktemp -d)
@@ -400,7 +400,7 @@ start_bridge_mode() {
         docker network create \
             --subnet="$INTER_NET_SUBNET" \
             --gateway="$INTER_NET_GATEWAY" \
-            "$INTER_NET"
+            "$INTER_NET" &>/dev/null
 
     # Inter-STP en premier
     start_inter_stp
@@ -412,7 +412,7 @@ start_bridge_mode() {
     echo ""
     echo -e "${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
     echo ""
-    docker ps --filter "name=osmo-" --format "  {{.Names}}\t{{.Status}}"
+    docker ps --filter "name=osmo-" --format "  {{.Names}}\t{{.Status}}" &>/dev/null
     echo ""
     echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC} (PC 0.23.0)"
     for i in $(seq 1 "$N_OPERATORS"); do
@@ -469,8 +469,8 @@ start_bridge_mode() {
 # ── Arrêt ──────────────────────────────────────────────────────────────────────
 stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
-    docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f
-    docker ps -a --filter "name=egprs"  --format "{{.Names}}" | xargs -r docker rm -f
+    docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f &>/dev/null
+    docker ps -a --filter "name=egprs"  --format "{{.Names}}" | xargs -r docker rm -f &>/dev/null
     echo -e "${GREEN}Arrêté.${NC}"
 }
 
