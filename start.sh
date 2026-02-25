@@ -455,6 +455,12 @@ start_operator() {
 
     echo -e "  ${GREEN}✓ ${container_name} démarré${NC}"
 }
+# ── Wireshark ──────────────────────────────────────────────────────────────────────
+# 1. Trouver l'interface bridge Docker
+BRIDGE_IF=$(docker network inspect gsm-inter -f '{{.Id}}' | cut -c1-12)
+
+# 2. Lancer Wireshark sur le bridge
+sudo wireshark -k -i br-${BRIDGE_IF} -f "udp port 4729" >/dev/null 2>&1 & true
 
 # ── Arrêt ──────────────────────────────────────────────────────────────────────
 stop_all() {

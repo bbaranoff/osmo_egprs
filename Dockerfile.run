@@ -8,13 +8,16 @@ RUN mkdir -p \
     /var/lib/asterisk \
     /var/log/asterisk \
     /var/run/asterisk \
+    /var/log/osmocom \
+    /var/run/smsc \
     /root/.osmocom/bb \
     /scripts && \
     chmod 755 \
     /etc/asterisk \
     /var/lib/asterisk \
     /var/log/asterisk \
-    /var/run/asterisk
+    /var/run/asterisk \
+    /var/log/osmocom
 
 RUN apt-get install -y --no-install-recommends telnet iproute2 tmux && \
     rm -rf /var/lib/apt/lists/*
@@ -33,8 +36,16 @@ COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 # ── Scripts de démarrage ───────────────────────────────────────────────────────
 COPY scripts/osmo-start.sh /root/osmo-start.sh
 COPY scripts/run.sh        /root/run.sh
+COPY scripts/smsc-start.sh /etc/osmocom/smsc-start.sh
+COPY scripts/send-mt-sms.sh /etc/osmocom/send-mt-sms.sh
 COPY var/*        /var/lib/osmocom/
-RUN chmod +x /root/osmo-start.sh /root/run.sh
+RUN chmod +x /root/osmo-start.sh /root/run.sh \
+    /etc/osmocom/smsc-start.sh /etc/osmocom/send-mt-sms.sh
+
+# ── Vérification binaires proto-SMSC ──────────────────────────────────────────
+RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
+    echo "proto-smsc binaries OK" || \
+    echo "WARNING: proto-smsc binaries not found in PATH"
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 ENTRYPOINT ["/scripts/entrypoint.sh"]

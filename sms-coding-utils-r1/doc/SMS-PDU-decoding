@@ -1,0 +1,108 @@
+The decoding part of the present sms-coding-utils suite consists of two
+programs: sms-pdu-decode and pcm-sms-decode.  Their functions are as follows:
+
+* The input to sms-pdu-decode is an ASCII text stream (stdin or read from a
+  file) in which every SMS PDU to be decoded appears as a long hex string.
+  This input can originate from the GSM 07.05 interface on a FreeCalypso GSM MS
+  (fcup-smdump utility in FC host tools), in which case every GSM 03.40 TPDU
+  will be preceded by an SC address field - the original use case for
+  sms-pdu-decode, run it without special options.  In the other alternative,
+  the input to sms-pdu-decode can originate from test scenarios on the network
+  side of GSM (SMSC development and testing), in which case input SMS PDUs will
+  be pure GSM 03.40 TPDUs, without SC address prefix - use sms-pdu-decode -n
+  option in this case.
+
+* The input to pcm-sms-decode is a binary file with 176 bytes per record,
+  corresponding to the format of EF_SMS elementary file on SIM cards.  This
+  program can be used to decode readouts of this EF_SMS file made with
+  fc-simtool, or readouts of /pcm/SMS file in the flash file system of Pirelli
+  DP-L10 phone, which uses the same format - the latter use case arose first in
+  chronological order of FreeCalypso development, hence the name of the utility.
+
+Common options: character set and dump format control
+=====================================================
+
+By default, sms-pdu-decode and pcm-sms-decode only emit 7-bit ASCII characters
+in their output; any GSM7 or UCS-2 characters which fall outside of this plain
+ASCII repertoire are converted into backslash escapes.  This conservative
+default behaviour can be modified as follows:
+
+-e option extends the potential output character repertoire from 7-bit ASCII to
+8-bit ISO 8859-1.  Any 8859-1 high characters are emitted as single bytes,
+i.e., are NOT encoded in UTF-8 - this option is intended for non-UTF-8
+environments.
+
+-u option extends the potential output character repertoire to all of Unicode,
+and changes the output encoding to UTF-8.
+
+Regardless of whether the source message character set is GSM7 or UCS-2 and
+irrespective of -e or -u options, any backslash characters are always escaped
+as \\, and any CR characters are represented as \r.  Additional backslash
+escape encodings depend on the source message character set:
+
+* If the source message character set is GSM7, the following additional
+  backslash escapes can be emitted:
+
+  - In the absence of -u option, the Euro currency symbol is converted to \E;
+
+  - Any GSM7 escape characters (0x1B) that aren't part of a valid escape
+    sequence for [\]^ or {|}~ or \E are represented as \e;
+
+  - Any GSM7 characters that either can't be represented in the output character
+    set (ASCII or ISO 8859-1) or are outright invalid per GSM 03.38 are
+    represented as \xX, where xX is the original GSM7 code point in 2-digit
+    hexadecimal form between 00 and 7F;
+
+  - Invalid GSM7 escape sequences are emitted as \e\xX.
+
+* If the source message character set is UCS-2, the following additional
+  backslash escapes can be emitted:
+
+  - Invalid UCS-2 characters falling onto control character code points are
+    emitted as \u00XX;
+
+  - UCS-2 characters that can't be represented in ASCII or ISO 8859-1 (when
+    running without -u option) are emitted as \uXXXX;
+
+  - If UTF-16 surrogate pairs are detected in the input, the encoded high-plane
+    Unicode character is reconstructed and emitted as \UXXXXXX in the absence
+    of -u option, or as the appropriate UTF-8 byte sequence with -u.
+
+-h option causes the user data portion of every message to be displayed as a
+raw hex dump; in the case of GSM7-encoded messages, this hex dump shows the
+unpacked septets.
+
+sms-pdu-decode specifics
+========================
+
+The input to the program may contain additional text besides SMS PDUs in the
+form of long hex strings; all lines that are not hex strings are passed through
+to the output.  Every input line that is purely a string of directly abutted hex
+bytes is taken to be an SMS PDU in need of decoding, and the full decoding
+operation is attempted.  The following additional options are available besides
+the common -e, -u and -h options documented above:
+
+-n	By default, sms-pdu-decode expects every hex-encoded SMS PDU to begin
+	with an SC address field, followed by a GSM 03.40 TPDU - the format used
+	on GSM 07.05 interface in PDU mode and in SIM SMS storage.  With -n
+	option, sms-pdu-decode expects pure GSM 03.40 TPDUs instead, without
+	SC address prefix.
+
+-p	Keep all hex-encoded PDU lines in the output: for each encountered hex
+	PDU, first the original hex line is output, then the decoding result.
+
+pcm-sms-decode specifics
+========================
+
+This program reads a binary file; the file to be read must be named on the
+command line.  The output is ASCII (or an extended character set with -e or -u
+options as described in the common section above), naming each dumped record as
+"Record #%u" and showing its content.  For a binary file of N records, the
+default record numbering is from 0 to N-1: this numbering order is natural to
+this Mother's native world of CompSci, and I implemented it when I originally
+wrote pcm-sms-decode for the purpose of decoding /pcm/SMS readouts from Pirelli
+DP-L10 FFS.  However, when I later wrote fc-simtool and pcm-sms-decode acquired
+a second use case of decoding SIM EF_SMS readouts, a mismatch became apparent:
+the record numbering used in READ RECORD and UPDATE RECORD commands on the
+SIM-ME interface is 1..N instead of 0..N-1.  pcm-sms-decode -s option switches
+the record numbering scheme to 1..N to match the SIM application.

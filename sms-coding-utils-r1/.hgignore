@@ -1,0 +1,9 @@
+syntax: regexp
+
+\.[oa]$
+^config\.defs$
+
+^decode/pcm-sms-decode$
+^decode/sms-pdu-decode$
+^enc-text/sms-encode-text$
+^gen-pdu/sms-gen-tpdu$

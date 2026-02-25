@@ -1,0 +1,16 @@
+This code repository contains some utilities for encoding SMS in low-level test
+workflows:
+
+* sms-encode-text performs the same encoding from user text input (ASCII, ISO
+  Latin-1 or UTF-8) into SMS as performed by fcup-smsend, including support for
+  concatenated SMS and the choice between GSM7 and UCS-2.  However, the process
+  stops after GSM7 or UCS-2 encoding and (in the case of concatenated SMS) UDH
+  generation - the subsequent steps of SMS-SUBMIT PDU encoding and transmission
+  via GSM 07.05 are eliminated in this version.  The output is expected to be
+  fed to either sms-gen-tpdu or more specialized network-side test programs,
+  including those written for SMPP.
+
+* sms-gen-tpdu takes the output of sms-encode-test, along with some additional
+  inputs, and generates either a pure GSM 03.40 SMS-DELIVER or SMS-SUBMIT TPDU
+  (for network-side testing) or the same TPDU preceded by an SC address, as used
+  on the mobile side in GSM 07.05 PDU mode and in EF_SMS SIM storage.

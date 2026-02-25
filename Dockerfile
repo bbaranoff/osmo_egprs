@@ -79,6 +79,29 @@ RUN cd ${ROOT} && \
     cd osmocom-bb/src && \
     # nofirmware désactive la compilation des firmwares .bin pour les téléphones
     make nofirmware -j$(nproc)
+
+# ── gsup-smsc-proto : SMSC externe connecté à OsmoHLR via GSUP ────────────────
+# Programmes : proto-smsc-daemon (réception MO SMS + relai MT via GSUP)
+#              proto-smsc-sendmt (injection MT SMS via socket UNIX local)
+# Dépendances build : libosmocore, libosmogsm, libosmo-gsup-client
+RUN cd ${ROOT} && \
+    git clone https://gitea.osmocom.org/themwi/gsup-smsc-proto && \
+    cd gsup-smsc-proto && \
+    ./configure --with-osmo=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig
+
+# ── sms-coding-utils : encodage/décodage SMS PDU (GSM 03.40) ──────────────────
+# sms-encode-text, gen-sms-deliver-pdu, sms-pdu-decode, etc.
+RUN cd ${ROOT} && \
+    wget -q https://www.freecalypso.org/pub/GSM/FreeCalypso/sms-coding-utils-latest.tar.bz2 && \
+    tar xf sms-coding-utils-latest.tar.bz2 && \
+    cd sms-coding-utils-r1 && \
+    ./configure && \
+    make -j$(nproc) && \
+    make install INSTDIR=/usr/local/bin
+
 # 4. Installation des fichiers du projet
 WORKDIR /etc/osmocom
 COPY scripts/. /etc/osmocom/
@@ -86,6 +109,9 @@ COPY configs/*cfg /etc/osmocom/
 RUN mv /etc/osmocom/run.sh /root/run.sh
 # Copie des binaires vers /usr/bin pour systemd et installation des .service
 RUN cp -f /usr/local/bin/osmo* /usr/bin/ || true && \
+    cp -f /usr/local/bin/proto-smsc-* /usr/bin/ || true && \
+    cp -f /usr/local/bin/sms-* /usr/bin/ || true && \
+    cp -f /usr/local/bin/gen-sms-* /usr/bin/ || true && \
     # Si tu as des fichiers .service dans configs/
     cp /etc/osmocom/configs/*.service /lib/systemd/system/ 2>/dev/null || true
 
@@ -112,6 +138,7 @@ RUN echo "alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 RUN chmod +x /root/run.sh
 
-
+# Répertoires pour le proto-SMSC
+RUN mkdir -p /var/log/osmocom /var/run/smsc
 
 CMD ["/bin/bash"]

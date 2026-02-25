@@ -59,8 +59,20 @@ tmux new-window -t "$SESSION:2" -n asterisk
 tmux send-keys -t "$SESSION:2" "rm /var/lib/asterisk/astdb.sqlite3 && asterisk -cvvv" C-m
 
 #################################
+# Fenêtre 3 : Proto-SMSC daemon
+# Se connecte au HLR local via GSUP
+# MO SMS → /var/log/osmocom/mo-sms-op<N>.log
+# MT SMS → via /tmp/sendmt_socket
+#################################
+tmux new-window -t "$SESSION:3" -n smsc
+tmux send-keys -t "$SESSION:3" "/etc/osmocom/smsc-start.sh" C-m
+
+#################################
 # Final
 #################################
 tmux select-window -t "$SESSION:1"
 echo -e "${GREEN}=== Orchestration prête ===${NC}"
+echo -e "${GREEN}  [0] faketrx   [1] ms1   [2] asterisk   [3] smsc${NC}"
+echo -e "${GREEN}  MT SMS: /etc/osmocom/send-mt-sms.sh <imsi> 'message'${NC}"
+echo -e "${GREEN}  MO log: tail -f /var/log/osmocom/mo-sms-op\${OPERATOR_ID}.log${NC}"
 tmux attach-session -t "$SESSION"

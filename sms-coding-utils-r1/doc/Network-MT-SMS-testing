@@ -1,0 +1,30 @@
+Testing MT direction of SMS-PP from the network side
+====================================================
+
+The envisioned way to generate SMS-DELIVER TPDUs for MT SMS testing from the
+network side is to run a shell pipeline of this form:
+
+sms-encode-text [opt] [msg-text] | gen-sms-deliver-pdu from-number [opt]
+
+Breaking it down:
+
+* The message text to be turned into an SMS-DELIVER TPDU (or multiple such TPDUs
+  with concatenated SMS) can be given on the command line as an argument to the
+  sms-encode-text step in the pipeline, or can be fed as stdin to the pipeline.
+
+* Options for concatenated SMS or UCS-2 encoding need to be given at the
+  sms-encode-text pipeline stage.
+
+* The "From" number to be encoded into the SMS-DELIVER TPDU is given as a
+  mandatory argument at the gen-sms-deliver-pdu pipeline stage.
+
+* Additional options may be given at the gen-sms-deliver-pdu pipeline stage.
+  Possible options are lp, mms, rp, sr, pid and sc-ts, described in the
+  Generator-tool-workflow article under sms-gen-tpdu description.
+
+The output from this pipeline will be a single hex-encoded SMS-DELIVER TPDU,
+emitted as one long hex line, or multiple such hex lines (each carrying a TPDU)
+in the case of concatenated SMS.  Test programs written in the course of SMSC
+development will be designed to take this hex TPDU format as their input, on
+stdin, so that the final SMSC-specific step will be simply added to the
+just-described pipeline.

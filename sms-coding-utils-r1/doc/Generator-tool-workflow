@@ -1,0 +1,180 @@
+The encoder/generator part of the present sms-coding-utils suite consists of
+two principal programs: sms-encode-text and sms-gen-tpdu.  There is also a
+shell script named gen-sms-deliver-pdu that serves as a wrapper around
+sms-gen-tpdu for one important use case of network-side testing of MT SMS.
+
+sms-encode-text encodes only the user text body of SMS (either single or
+concatenated) and does not deal with any of the headers.  The output from
+sms-encode-text is designed to be fed into sms-gen-tpdu with some additional
+prepended lines, either by way of a wrapper shell script like
+gen-sms-deliver-pdu or by way of an intermediate file: redirect the output of
+sms-encode-text into a file, manually edit that file to add user-addr and
+possibly other header lines, and then feed it to sms-gen-tpdu.
+
+The intermediate format in which SMS user data payload is passed from
+sms-encode-text to sms-gen-tpdu is long hex strings, with the following
+peculiarities:
+
+* In the most common case of GSM7 encoding, the conversion from ASCII to
+  GSM 03.38 has already been done (for example, character '@' will be encoded
+  as 00 rather than 40 in these hex strings, and '[' will be escape-encoded as
+  1B3C), but the packing of septets into octets has NOT been done yet - instead
+  a string of binary septets is emitted, with the high bit clear in each hex
+  byte.
+
+* In the case of GSM7-encoded message segments that begin with UDH (used for
+  concatenated SMS), the UDH part is encoded as octets, followed by septets for
+  the text part.  The recipient of this intermediate format will need to extract
+  UDHL from the first octet of the hex string and use this length to locate the
+  boundary between octet-encoded UDH and septet-encoded text.
+
+This peculiar format was chosen because it is the representation format used in
+SMPP transport, and in any case it is a necessary intermediate step between
+ASCII input and the final GSM 03.40 TPDU form.  The Mother had to write another
+test program for SMPP (smpp-send in themwi-system-sw repository), and that
+program is front-fed with the same sms-encode-text preliminary.
+
+sms-encode-text usage
+=====================
+
+The basic usage synopsis is:
+
+sms-encode-text [options] [message-text]
+
+If the message text to be encoded is given on the command line, it must be a
+single argument, i.e., quotes will need to be used at the shell level.  If no
+message text is given on the command line, it will be read from stdin instead.
+The operation of this program generally mirrors fcup-smsend from FreeCalypso
+host tools - please read User-phone-tools document in freecalypso-tools
+repository.  Allowed options are -c, -C, -e, -u and -U, and they work exactly
+the same as in fcup-smsend.
+
+Just like fcup-smsend, sms-encode-text can generate either single SMS (if the
+message text fits within 160 characters for GSM7 or 70 characters for UCS-2) or
+concatenated SMS.  To enable the possibility of concatenated SMS, you have to
+invoke the program with either -c or -C option; the difference between these
+two options is in how the reference number for concatenated SMS is obtained.
+With -C you specify this reference number explicitly; with -c the program
+implements the same $HOME/.concat_sms_refno logic as fcup-smsend.
+
+In the case of single SMS, the output from sms-encode-text consists of two
+lines: a mode-setting line that reads either 'dcs 0 septet' or 'dcs 8 octet',
+followed by a message line.  The single message line consists of 'msg' keyword
+followed by a long hex string as explained in the previous section.
+
+In the case of concatenated SMS, the output from sms-encode-text consists of 3
+or more lines: a dcs line that is the same as for single SMS, followed by 2 or
+more msg-udh lines.  Each msg-udh line carries a TP-UD field that consists of
+UDH followed by text, and the msg-udh keyword (as distinct from plain 'msg')
+conveys the UDHI bit.
+
+sms-gen-tpdu usage
+==================
+
+sms-gen-tpdu takes only one command argument: a mode keyword selecting which
+type of PDU needs to be generated.  The 4 choices are:
+
+mo	Generate a pure GSM 03.40 SMS-SUBMIT TPDU
+mt	Generate a pure GSM 03.40 SMS-DELIVER TPDU
+sc-mo	Generate SMS-SUBMIT with a prepended SC-address
+sc-mt	Generate SMS-DELIVER with a prepended SC-address
+
+sc-mo and sc-mt forms are intended for the mobile side of GSM, as this format
+is written into EF_SMS on SIMs and exchanged in GSM 07.05 PDU mode.  Plain mt
+format is intended for generating SMS-DELIVER TPDUs for MT SMS testing from the
+network side (SMSC development), and plain mo format exists for completeness.
+
+All other bits beyond the above mode selection are read from stdin.  The input
+is line-based and is expected to consist of setting lines followed by message
+lines.  Each msg or msg-udh line in the input results in a TPDU being generated,
+but in order to produce valid message PDUs for anything other than an MO draft
+that hasn't had its To address set yet, these message lines need to be preceded
+by some setting lines.  Usually only user-addr setting needs to be given before
+sms-encode-text output; other settings may be given as part of more advanced
+experiments.
+
+The following settings are supported:
+
+dcs INTEGER (septet|octet)
+
+Set TP-DCS.  The first argument is the value to be put into the TP-DCS octet in
+the TPDU; the second argument is a mode keyword that tells sms-gen-tpdu whether
+it should operate in septet or octet mode when encoding TP-UDL and TP-UD.
+
+lp
+
+Set TP-LP; valid only in MT mode.
+
+mms
+
+Set TP-MMS; valid only in MT mode.  Note that the bit encoding this Boolean flag
+is inverted: when no TP-MMS is set, the bit is 1, and when 'mms' setting is
+given, the bit becomes 0.
+
+mr INTEGER
+
+Set TP-MR; valid only in MO mode.  The default in the absence of this setting
+is 0xFF.
+
+pid INTEGER
+
+Set TP-PID.  The default in the absence of this setting is 0.
+
+rd
+
+Set TP-RD; valid only in MO mode.
+
+rp
+
+Set TP-RP.
+
+sc-addr NUMBER[,INTEGER]
+
+Valid only in sc-mo and sc-mt modes: set the SC-address to be prepended before
+the GSM 03.40 TPDU.  If this setting is omitted, a null SC-address (a single
+length octet of 0) is emitted.  The latter approach works with GSM 07.05 at
+least with FreeCalypso firmware - the MS firmware replaces this null SC-address
+with the one programmed on the SIM.
+
+sc-ts YY/MM/DD,HH:MM:SS[+-]TZ
+
+Set TP-SCTS; valid only in MT mode.  If this setting is not given, the current
+local time is used to generate TP-SCTS.
+
+sr
+
+Set TP-SRI or TP-SRR (different names for the same bit).
+
+user-addr NUMBER[,INTEGER]
+
+Set TP-DA in SMS-SUBMIT or TP-OA in SMS-DELIVER.
+
+user-addr alpha:STRING
+
+This special form of user-addr sets TP-OA (or TP-DA - we provide mechanism, not
+policy) in the special alphanumeric address format (TON=5, NPI=0).  The alpha
+address can be up to 11 GSM7 characters; the GSM7 string is given in standard
+FreeCalypso representation defined in the SIM-data-formats specification in
+freecalypso-docs.
+
+vp-abs YY/MM/DD,HH:MM:SS[+-]TZ
+
+Set TP-VP in absolute format; valid only in MO mode.
+
+vp-rel INTEGER
+
+Set TP-VP in relative format; valid only in MO mode.
+
+INTEGER format: decimal by default, hexadecimal if prefixed with 0x.
+
+NUMBER[,INTEGER] phone number entry format for user-addr and sc-addr
+--------------------------------------------------------------------
+
+The same convention is used as elsewhere in FreeCalypso queendom, e.g., in
+fcup-smsend and fc-simtool:
+
+* If no comma-separated TON/NPI byte is given, it defaults to 0x91 if the number
+  begins with '+' or 0x81 otherwise.
+
+* If the number is suffixed with a comma and a byte-sized integer (decimal by
+  default or 0x prefix for hex), the TON/NPI byte is set explicitly.

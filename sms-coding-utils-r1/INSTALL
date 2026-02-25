@@ -1,0 +1,23 @@
+New Themyscira Wireless software components, as well as sw components that sit
+between FreeCalypso and ThemWi realms like the present package, use configure
+scripts - you need to run ./configure before running 'make'.  However, our
+configure script is hand-coded, not Autotools/autohell, hence there is no
+autoreconf nonsense involved.
+
+Standard --prefix, --exec-prefix and --bindir options are supported for
+changing the installation directory for the compiled binaries; the default
+prefix is /usr/local, following general FOSS community conventions.
+
+Choice of install location
+==========================
+
+If you are a FreeCalypso user, if you are installing the present package for
+the purpose of using it together with FC host tools and/or FC SIM tools, and
+you like the approach of having all FC components neatly compartmented under
+/opt/freecalypso (with /opt/freecalypso/bin added to your PATH), you can put
+these SMS utitilies in the same place by running configure like this:
+
+./configure --prefix=/opt/freecalypso
+
+OTOH, if you are someone who does not like and has never liked the scheme of
+FC binaries residing in /opt/freecalypso/bin, you can install wherever you like.

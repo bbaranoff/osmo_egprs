@@ -80,16 +80,6 @@ kill_name_root "wireshark"
 sleep 0.2
 step_ok "Wireshark: kill (root)"
 
-step "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
-# 3. Trouver l'interface bridge Docker
-BRIDGE_IF=$(docker network inspect gsm-inter -f '{{.Id}}' | cut -c1-12)
-
-# 4. Lancer Wireshark sur le bridge
-sudo wireshark -k -i br-${BRIDGE_IF} -f "udp port 4729" >/dev/null 2>&1 & true
-
-step_ok "Wireshark: relance capture GSMTAP UDP/${GSMTAP_PORT} (root)"
-
-
 # ---------- 5) Mini-check (optionnel) ----------
 step "Check: listeners UDP/${GSMTAP_PORT}"
 ss -lunp | awk -v p=":${GSMTAP_PORT}" '$0 ~ p {print}' >/dev/null 2>&1 || true
