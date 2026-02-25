@@ -2,77 +2,55 @@
 set -euo pipefail
 
 SESSION="osmocom"
-GREEN='\033[0;32m'
-NC='\033[0m'
+GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
 
-echo -e "${GREEN}=== Arrêt complet d'Asterisk ===${NC}"
-
+echo -e "${GREEN}=== Arrêt Asterisk ===${NC}"
 usermod -u 0 -o osmocom
-
-# Tentative propre via systemd
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl stop asterisk 2>/dev/null || true
-fi
-
-# Fallback CLI Asterisk (si encore vivant)
+systemctl stop asterisk 2>/dev/null || true
 asterisk -rx "core stop now" 2>/dev/null || true
-
-# Fallback brutal (au cas où)
 pkill -9 -x asterisk 2>/dev/null || true
-
-# Vérification
-if pgrep -x asterisk >/dev/null; then
-  echo "[!] Asterisk résiste encore"
-else
-  echo "[+] Asterisk est complètement mort"
-fi
 
 echo -e "${GREEN}=== Reset tmux ===${NC}"
 tmux kill-server 2>/dev/null || true
 tmux start-server
 sleep 1
 
-#################################
-# Fenêtre 0 : FakeTRX
-#################################
+# ── Fenêtre 0 : FakeTRX ──
 tmux new-session -d -s "$SESSION" -n faketrx
 tmux send-keys -t "$SESSION:0" "faketrx" C-m
 sleep 2
 
-echo -e "${GREEN}=== Démarrage Core Osmocom ===${NC}"
+echo -e "${GREEN}=== Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
-chmod 666 /tmp/pcu_bts
+chmod 666 /tmp/pcu_bts 2>/dev/null || true
 sleep 5
 
-#################################
-# Fenêtre 1 : MS1 (trxcon + mobile)
-#################################
+# ── Fenêtre 1 : MS1 (trxcon + mobile) ──
 tmux new-window -t "$SESSION:1" -n ms1
 tmux send-keys -t "$SESSION:1" "trxcon" C-m
 tmux split-window -v -t "$SESSION:1"
 tmux send-keys -t "$SESSION:1.1" "sleep 3 && mobile -c /root/.osmocom/bb/mobile.cfg" C-m
 
-#################################
-# Fenêtre 2 : Asterisk CLI
-#################################
+# ── Fenêtre 2 : Asterisk ──
 tmux new-window -t "$SESSION:2" -n asterisk
-tmux send-keys -t "$SESSION:2" "rm /var/lib/asterisk/astdb.sqlite3 && asterisk -cvvv" C-m
+tmux send-keys -t "$SESSION:2" "rm -f /var/lib/asterisk/astdb.sqlite3 && asterisk -cvvv" C-m
 
-#################################
-# Fenêtre 3 : Proto-SMSC daemon
-# Se connecte au HLR local via GSUP
-# MO SMS → /var/log/osmocom/mo-sms-op<N>.log
-# MT SMS → via /tmp/sendmt_socket
-#################################
+# ── Fenêtre 3 : proto-smsc-daemon (GSUP → HLR) ──
 tmux new-window -t "$SESSION:3" -n smsc
 tmux send-keys -t "$SESSION:3" "/etc/osmocom/smsc-start.sh" C-m
 
-#################################
-# Final
-#################################
+# ── Final ──
 tmux select-window -t "$SESSION:1"
 echo -e "${GREEN}=== Orchestration prête ===${NC}"
-echo -e "${GREEN}  [0] faketrx   [1] ms1   [2] asterisk   [3] smsc${NC}"
-echo -e "${GREEN}  MT SMS: /etc/osmocom/send-mt-sms.sh <imsi> 'message'${NC}"
-echo -e "${GREEN}  MO log: tail -f /var/log/osmocom/mo-sms-op\${OPERATOR_ID}.log${NC}"
+echo -e "${CYAN}  [0] faketrx  [1] ms1     [2] asterisk${NC}"
+echo -e "${CYAN}  [3] smsc     [4] relay   [5] router${NC}"
+echo -e ""
+echo -e "${GREEN}SMS inter-op:${NC}"
+echo -e "${CYAN}  python3 /etc/osmocom/send-interop-sms.sh <target_op> <imsi> <from> 'msg'${NC}"
+echo -e "${GREEN}SMS local:${NC}"
+echo -e "${CYAN}  /etc/osmocom/send-mt-sms.sh <imsi> 'message'${NC}"
+echo -e "${GREEN}Logs:${NC}"
+echo -e "${CYAN}  MO     : tail -f /var/log/osmocom/mo-sms-op\${OPERATOR_ID}.log${NC}"
+echo -e "${CYAN}  Relay  : tail -f /var/log/osmocom/smsc-relay-op\${OPERATOR_ID}.log${NC}"
+echo -e "${CYAN}  Router : tail -f /var/log/osmocom/sms-router-op\${OPERATOR_ID}.log${NC}"
 tmux attach-session -t "$SESSION"

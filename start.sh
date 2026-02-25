@@ -2,22 +2,23 @@
 # start.sh — Lance la stack Osmocom GSM
 # Modes : net-host (1 opérateur, SDR physique) | bridge (N opérateurs SS7 inter-op)
 #
-# Topologie SS7 en mode bridge (réseau unique 172.20.0.0/24) :
+# Topologie SS7 en mode bridge :
 #
-#   ┌─────────── Inter-STP (PC 0.23.2) ──────────┐
-#   │  172.20.0.10:2905                           │
-#   └──────────────────────────────────────────────┘
-#            ▲                    ▲
-#            │                    │
-#   ┌────────┴─────────┐  ┌──────┴──────────┐
-#   │  Op1: 172.20.0.11│  │  Op2: 172.20.0.12│
-#   │  STP (PC 1.23.2) │  │  STP (PC 2.23.2) │
-#   │  MSC (PC 1.23.1) │  │  MSC (PC 2.23.1) │
-#   │  BSC (PC 1.23.3) │  │  BSC (PC 2.23.3) │
-#   └──────────────────┘  └──────────────────┘
+#   ┌──────────── Inter-STP (PC 0.23.0) ─────────────┐
+#   │  172.20.0.10:2908                                │
+#   └──────────────────────────────────────────────────┘
+#            ▲                         ▲
+#            │ RCTX 150                │ RCTX 250
+#   ┌────────┴──────────┐   ┌─────────┴──────────┐
+#   │  Op1: 172.20.0.11 │   │  Op2: 172.20.0.12  │
+#   │  STP (PC 1.23.2)  │   │  STP (PC 2.23.2)   │
+#   │  MSC (PC 1.23.1)  │   │  MSC (PC 2.23.1)   │
+#   │  BSC (PC 1.23.3)  │   │  BSC (PC 2.23.3)   │
+#   └───────────────────┘   └────────────────────┘
 #
-# Tous les containers sur le même réseau : gsm-inter (172.20.0.0/24)
-# MSC/STP/BSC communiquent en localhost (127.0.0.1) au sein de chaque container
+# Réseau : gsm-inter (172.20.0.0/24) partagé par tous
+# Réseau privé : gsm-net-opN (172.20.N.0/24) par opérateur
+# MSC/STP/BSC dans le même container → communiquent via __CONTAINER_IP__
 #
 
 set -e
@@ -31,7 +32,6 @@ INTER_NET_GATEWAY="172.20.0.1"
 
 INTER_STP_CONTAINER="osmo-inter-stp"
 INTER_STP_IP="172.20.0.10"
-INTER_STP_CFG="$(pwd)/configs/osmo-stp-interop.cfg"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
@@ -44,7 +44,6 @@ banner() {
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
-
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 build_run_image() {
@@ -93,16 +92,34 @@ prepare_host_tun() {
     ip link set apn0 up
 }
 
-# ── Substitution des placeholders (configs opérateur uniquement) ───────────────
-# Placeholders :
-#   __CONTAINER_IP__       IP du container sur son réseau opérateur
-#   __GATEWAY_IP__         Passerelle réseau opérateur
-#   __HLR_IP__             IP OsmoHLR (toujours 127.0.0.2)
-#   __INTER_STP_IP__       IP inter-STP (bridge: 172.20.0.10 | host: 127.0.0.1)
-#   __INTER_STP_SHUTDOWN__ "no shutdown" (bridge) | "shutdown" (host)
-#   __OPERATOR_ID__        Numéro opérateur
-#   __PC_MSC__ / __PC_STP__ / __PC_BSC__
+# ══════════════════════════════════════════════════════════════════════════════
+# Substitution des placeholders
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Un seul passage de sed pour TOUS les placeholders.
+# Pas de double-sed, pas de bloc spécial STP.
+#
+# Placeholders utilisés dans les configs :
+#   __CONTAINER_IP__         IP privée du container (172.20.N.10)
+#   __GATEWAY_IP__           Passerelle réseau privé
+#   __HLR_IP__               IP OsmoHLR (127.0.0.2)
+#   __INTER_STP_IP__         IP inter-STP (bridge: 172.20.0.10 | host: 127.0.0.1)
+#   __INTER_LOCAL_IP__       IP du container sur le réseau inter (172.20.0.X)
+#   __INTER_STP_SHUTDOWN__   "no shutdown" (bridge) | "shutdown" (host)
+#   __INTEROP_TRUNK_IP__     IP du trunk SIP inter-op
+#   __OPERATOR_ID__          Numéro opérateur (1, 2, ...)
+#   __PC_MSC__               Point code MSC (N.23.1)
+#   __PC_STP__               Point code STP (N.23.2)
+#   __PC_BSC__               Point code BSC (N.23.3)
+#   __RCTX_MSC__             Routing context MSC (N*100+10)
+#   __RCTX_STP__             Routing context STP (N*100+20)
+#   __RCTX_BSC__             Routing context BSC (N*100+30)
+#   __RCTX_INTER__           Routing context inter-STP (N*100+50)
 #   __MCC__ / __MNC__ / __OP_NAME__
+#   __ARFCN__ / __IPA_UNIT_ID__ / __CELL_ID__ / __BSIC__
+#   __BVCI__ / __NSEI__ / __NSVCI__
+#   __IMSI__ / __IMEI__ / __KI__ / __SMS_SC__
+#
 apply_config_templates() {
     local dest=$1 container_ip=$2 gateway_ip=$3
     local op_id="${4:-1}"
@@ -113,7 +130,7 @@ apply_config_templates() {
 
     mkdir -p "$dest/osmocom" "$dest/asterisk"
 
-    # Copie de toutes les configs SAUF osmo-stp-interop.cfg (inter-STP only)
+    # Copie configs (sauf inter-STP qui a son propre pipeline)
     for f in configs/*.cfg; do
         [ "$(basename "$f")" = "osmo-stp-interop.cfg" ] && continue
         cp "$f" "$dest/osmocom/"
@@ -124,53 +141,37 @@ apply_config_templates() {
         [ -f "scripts/$s" ] && cp "scripts/$s" "$dest/osmocom/$s" && chmod +x "$dest/osmocom/$s"
     done
 
-
-    # mobile.cfg va dans /root/.osmocom/bb/ (path spécifique OsmocomBB)
+    # mobile.cfg
     mkdir -p "$dest/bb"
-    # Utilisez TOUJOURS mobile.cfg.template et copiez-le vers mobile.cfg
     if [ -f "configs/mobile.cfg.template" ]; then
         cp "configs/mobile.cfg.template" "$dest/bb/mobile.cfg"
-        echo -e "${GREEN}Template mobile.cfg copié depuis mobile.cfg.template${NC}"
     elif [ -f "configs/mobile.cfg" ]; then
-        # Fallback sur l'ancien nom
         cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
-        echo -e "${YELLOW}Attention: utilisation de mobile.cfg (pas de template)${NC}"
     fi
+
+    # ── Valeurs dérivées de op_id ──────────────────────────────────────────
+    local rctx_msc=$(( op_id * 100 + 10 ))
+    local rctx_stp=$(( op_id * 100 + 20 ))
+    local rctx_bsc=$(( op_id * 100 + 30 ))
+    local rctx_inter=$(( op_id * 100 + 50 ))
+    local arfcn=$(( 512 + op_id * 2 ))
+    local ipa_unit_id=$(( 6000 + op_id ))
+    local cell_id=$(( 6000 + op_id ))
+    local bsic=$(( 60 + op_id ))
+    local bvci=$(( op_id * 10 + 2 ))
+    local nsei=$(( op_id * 10 ))
+    local nsvci=$(( op_id * 10 ))
+    local imsi="${mcc}${mnc}$(printf '%010d' "${op_id}")"
+    local imei="3589250059$(printf '%04d' "${op_id}")"0
+    local ki="00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' "${op_id}") ff"
+    local sms_sc="+336661234$(printf '%04d' "${op_id}")"
+    local interop_op_id=$(( op_id == 1 ? 2 : 1 ))
+    local interop_trunk_ip="172.20.0.$((10 + interop_op_id))"
+    local inter_local_ip="172.20.0.$((10 + op_id))"
+
+    # ── Substitution unique ────────────────────────────────────────────────
     for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
         [ -f "$f" ] || continue
-        # ── Valeurs dérivées de op_id ──────────────────────────────────────────
-        # RCTX globalement uniques sur l'inter-STP
-        local rctx_msc=$(( op_id * 100 + 10 ))
-        local rctx_stp=$(( op_id * 100 + 20 ))
-        local rctx_bsc=$(( op_id * 100 + 30 ))
-        # ARFCN unique par opérateur (DCS1800 : 514, 516, 518 …)
-        local arfcn=$(( 512 + op_id * 2 ))
-        # IPA unit-id unique (BTS identity sur le réseau A-bis)
-        local ipa_unit_id=$(( 6000 + op_id ))
-        # Cell identity, BSIC, BVCI, NSEI, NSVCI uniques par opérateur
-        local cell_id=$(( 6000 + op_id ))
-        local bsic=$(( 60 + op_id ))
-        local bvci=$(( op_id * 10 + 2 ))
-        local nsei=$(( op_id * 10 ))
-        local nsvci=$(( op_id * 10 ))
-        # IMSI : MCC(3) + MNC(2) + MSIN(10) — unique par opérateur
-        local imsi="${mcc}${mnc}$(printf '%010d' ${op_id})"
-        # IMEI : 15 chiffres, unique par opérateur
-        local imei="3589250059$(printf '%04d' ${op_id})"0
-        # KI d'authentification : varie par opérateur (16 octets)
-        local ki="00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' ${op_id}) ff"
-        # SMS service center
-        local sms_sc="+336661234$(printf '%04d' ${op_id})"
-        # PC MSC de l'opérateur distant (pour sccp-address interop)
-        # Simplifié : op_id=1 → interop=2.23.1, op_id=2 → interop=1.23.1
-        # Pour N>2 : premier opérateur différent de soi
-        local interop_op_id=$(( op_id == 1 ? 2 : 1 ))
-        local interop_pc_msc="${interop_op_id}.23.1"
-        # IP inter-net de l'opérateur distant (pour trunk SIP)
-        local interop_trunk_ip="172.20.0.$((10 + interop_op_id))"
-        # IP locale du container (sur le réseau unique 172.20.0.0/24)
-        local inter_local_ip="172.20.0.$((10 + op_id))"
-
         sed -i \
             -e "s|__CONTAINER_IP__|${container_ip}|g" \
             -e "s|__GATEWAY_IP__|${gateway_ip}|g" \
@@ -179,7 +180,6 @@ apply_config_templates() {
             -e "s|__INTER_STP_SHUTDOWN__|${inter_stp_shutdown}|g" \
             -e "s|__INTER_LOCAL_IP__|${inter_local_ip}|g" \
             -e "s|__INTEROP_TRUNK_IP__|${interop_trunk_ip}|g" \
-            -e "s|__INTEROP_PC_MSC__|${interop_pc_msc}|g" \
             -e "s|__OPERATOR_ID__|${op_id}|g" \
             -e "s|__PC_MSC__|${pc_msc}|g" \
             -e "s|__PC_STP__|${pc_stp}|g" \
@@ -187,6 +187,7 @@ apply_config_templates() {
             -e "s|__RCTX_MSC__|${rctx_msc}|g" \
             -e "s|__RCTX_STP__|${rctx_stp}|g" \
             -e "s|__RCTX_BSC__|${rctx_bsc}|g" \
+            -e "s|__RCTX_INTER__|${rctx_inter}|g" \
             -e "s|__MCC__|${mcc}|g" \
             -e "s|__MNC__|${mnc}|g" \
             -e "s|__OP_NAME__|${op_name}|g" \
@@ -216,18 +217,15 @@ build_vol_args() {
         [ -f "$f" ] || continue
         vol_args="$vol_args -v $f:/etc/asterisk/$(basename "$f")"
     done
-    # mobile.cfg dans son répertoire dédié OsmocomBB
     if [ -f "$tmpdir/bb/mobile.cfg" ]; then
         vol_args="$vol_args -v $tmpdir/bb/mobile.cfg:/root/.osmocom/bb/mobile.cfg"
     fi
     echo "$vol_args"
 }
 
-# ── Inter-STP : container Docker, osmo-stp lancé dans tmux à l'intérieur ──────
-# - Config statique montée en volume (configs/osmo-stp-interop.cfg)
-# - Container démarré avec bash (pas --entrypoint osmo-stp)
-# - osmo-stp lancé via docker exec tmux dans le container
-# - Readiness : grep sur docker logs
+# ══════════════════════════════════════════════════════════════════════════════
+# Inter-STP : hub SS7 central
+# ══════════════════════════════════════════════════════════════════════════════
 start_inter_stp() {
     local tmpdir
     tmpdir=$(mktemp -d)
@@ -237,15 +235,12 @@ start_inter_stp() {
     bash ./create_interop.sh "$N_OPERATORS" "$inter_cfg"
 
     if [ ! -f "$inter_cfg" ]; then
-        echo -e "${RED}Échec génération config inter-STP${NC}"
-        exit 1
+        echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
     fi
-    
-    echo -e "${GREEN}Lancement inter-STP (${INTER_STP_IP})...${NC}"
 
+    echo -e "${GREEN}Lancement inter-STP (${INTER_STP_IP}:2908)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" 2>/dev/null || true
 
-    # Container démarré avec bash — tmux sera lancé dedans ensuite
     docker run -d \
         --name "$INTER_STP_CONTAINER" \
         --network "$INTER_NET" \
@@ -256,7 +251,6 @@ start_inter_stp() {
         "$IMAGE_RUN" \
         -c "sleep infinity" > /dev/null
 
-    # Lance osmo-stp dans une session tmux à l'intérieur du container
     docker exec "$INTER_STP_CONTAINER" \
         tmux new-session -d -s stp \
         "osmo-stp -c /etc/osmocom/osmo-stp-interop.cfg 2>&1 | tee /tmp/osmo-stp.log"
@@ -264,9 +258,9 @@ start_inter_stp() {
     echo -ne "${GREEN}[*] Attente démarrage inter-STP"
     local retries=20
     while [ $retries -gt 0 ]; do
-        if docker exec "$INTER_STP_CONTAINER" grep -q "binding m3ua Server" /tmp/osmo-stp.log 2>/dev/null; then
+        if docker exec "$INTER_STP_CONTAINER" grep -q "listening for m3ua" /tmp/osmo-stp.log 2>/dev/null || \
+           docker exec "$INTER_STP_CONTAINER" grep -q "m3ua Server" /tmp/osmo-stp.log 2>/dev/null; then
             echo -e " ${GREEN}✓${NC}"
-            echo -e "  Logs : ${CYAN}docker exec -ti ${INTER_STP_CONTAINER} tmux attach -t stp${NC}"
             return 0
         fi
         if [ "$(docker inspect -f '{{.State.Running}}' "$INTER_STP_CONTAINER" 2>/dev/null)" != "true" ]; then
@@ -278,10 +272,67 @@ start_inter_stp() {
         sleep 1
         ((retries--))
     done
-
     echo -e " ${RED}TIMEOUT${NC}"
     docker exec "$INTER_STP_CONTAINER" cat /tmp/osmo-stp.log 2>/dev/null
     exit 1
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Démarrage d'un opérateur
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Un seul appel à apply_config_templates suffit.
+# Plus de double-sed, plus de bloc miroir Op1/Op2.
+#
+start_operator() {
+    local op_id=$1 mcc=$2 mnc=$3 op_name=$4
+    local net_name="gsm-net-op${op_id}"
+    local subnet="172.20.${op_id}.0/24"
+    local gateway="172.20.${op_id}.1"
+    local container_ip="172.20.${op_id}.10"
+    local container_name="osmo-operator-${op_id}"
+    local inter_local_ip="172.20.0.$((10 + op_id))"
+
+    docker network inspect "$net_name" &>/dev/null || \
+        docker network create --subnet="$subnet" --gateway="$gateway" "$net_name"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Un seul appel — tous les placeholders résolus en une passe
+    apply_config_templates "$tmpdir" \
+        "$container_ip" "$gateway" \
+        "$op_id" "${op_id}.23.1" "${op_id}.23.2" "${op_id}.23.3" \
+        "$mcc" "$mnc" "$op_name" \
+        "$INTER_STP_IP" "no shutdown"
+
+    local rctx_inter=$(( op_id * 100 + 50 ))
+    echo -e "  [STP] Op${op_id} PC=${op_id}.23.2 → inter-STP ${INTER_STP_IP}:2908 (RCTX ${rctx_inter})"
+
+    docker rm -f "$container_name" 2>/dev/null || true
+
+    vol_args=$(build_vol_args "$tmpdir")
+
+    docker run -d \
+        --name "$container_name" \
+        --network "$INTER_NET" \
+        --ip "$inter_local_ip" \
+        --cap-add NET_ADMIN \
+        --cap-add SYS_ADMIN \
+        --cgroupns host \
+        --device /dev/net/tun:/dev/net/tun \
+        -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+        -e OPERATOR_ID="$op_id" \
+        -e CONTAINER_IP="$container_ip" \
+        -e GATEWAY_IP="$gateway" \
+        -e INTER_STP_IP="$INTER_STP_IP" \
+        $vol_args \
+        "$IMAGE_RUN" \
+        /etc/osmocom/run.sh
+
+    docker network connect --ip "$container_ip" "$net_name" "$container_name"
+    echo -e "  ${GREEN}✓${NC} ${container_name} démarré"
 }
 
 # ── Mode host ─────────────────────────────────────────────────────────────────
@@ -351,7 +402,7 @@ start_bridge_mode() {
             --gateway="$INTER_NET_GATEWAY" \
             "$INTER_NET"
 
-    # Inter-STP en premier — doit écouter avant que les opérateurs démarrent
+    # Inter-STP en premier
     start_inter_stp
 
     for i in $(seq 1 "$N_OPERATORS"); do
@@ -363,22 +414,31 @@ start_bridge_mode() {
     echo ""
     docker ps --filter "name=osmo-" --format "  {{.Names}}\t{{.Status}}"
     echo ""
-    echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2905${NC} (PC 0.23.2)"
+    echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC} (PC 0.23.0)"
     for i in $(seq 1 "$N_OPERATORS"); do
-        echo -e "  Op${i} STP (PC ${i}.23.2 @ 172.20.0.$((10+i))) ──client──► inter-STP"
+        local rctx=$(( i * 100 + 50 ))
+        echo -e "  Op${i} STP ${i}.23.2 @ 172.20.0.$((10+i)) ──RCTX ${rctx}──► inter-STP"
     done
 
-    # ── Gnome Terminal ───────────────────────────────────────────────────────────
-    # gnome-terminal nécessite le D-Bus de la session graphique → lancer en tant
-    # qu'utilisateur réel (pas root) via su -c, avec DISPLAY/XAUTHORITY transmis.
+    # ── Wireshark ─────────────────────────────────────────────────────────
+    local bridge_if
+    bridge_if=$(docker network inspect "$INTER_NET" -f '{{.Id}}' 2>/dev/null | cut -c1-12)
+    if [ -n "$bridge_if" ] && command -v wireshark &>/dev/null; then
+        TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+        DISPLAY="${DISPLAY:-:0}"
+        XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
+        DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+            wireshark -k -i "br-${bridge_if}" -f "sctp or udp port 4729" \
+            >/dev/null 2>&1 & true
+    fi
+
+    # ── Terminaux ─────────────────────────────────────────────────────────
     TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
     DISPLAY="${DISPLAY:-:0}"
     XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
 
     _open_term() {
-        local title="$1"
-        local cmd="$2"
-        # xterm : aucune dépendance D-Bus/dbus-launch, fonctionne directement en root
+        local title="$1" cmd="$2"
         DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
         xterm -title "$title" \
               -fa 'Monospace' -fs 10 \
@@ -394,73 +454,17 @@ start_bridge_mode() {
              echo 'VTY STP : docker exec -it osmo-operator-${i} telnet 127.0.0.1 4239'; \
              echo 'VTY MSC : docker exec -it osmo-operator-${i} telnet 127.0.0.1 4254'; \
              echo 'VTY BSC : docker exec -it osmo-operator-${i} telnet 127.0.0.1 4242'; \
-             echo 'SCCP    : show cs7 instance 0 sccp users'; \
-             echo '          show cs7 instance 0 sccp connections'; \
              echo ''; \
              sudo docker exec -ti osmo-operator-${i} /etc/osmocom/run.sh"
     done
 
     _open_term \
-        "Inter-STP (PC 0.23.2)" \
-        "echo '=== Inter-STP ==='; \
-         echo 'VTY : sudo docker exec -it osmo-inter-stp telnet 127.0.0.1 4239'; \
-         echo 'Logs tmux : sudo docker exec -ti osmo-inter-stp tmux attach -t stp'; \
+        "Inter-STP (PC 0.23.0)" \
+        "echo '=== Inter-STP (0.23.0 @ ${INTER_STP_IP}:2908) ==='; \
+         echo 'VTY : sudo docker exec -it ${INTER_STP_CONTAINER} telnet 127.0.0.1 4239'; \
          echo ''; \
-         sudo docker exec -ti osmo-inter-stp tmux attach -t stp"
+         sudo docker exec -ti ${INTER_STP_CONTAINER} tmux attach -t stp"
 }
-
-# ── Démarrage d'un opérateur ──────────────────────────────────────────────────
-# Architecture simplifiée : un seul réseau 172.20.0.0/24 pour tous.
-# Les composants MSC/STP/BSC communiquent en localhost (127.0.0.1).
-# Chaque opérateur a une IP fixe : 172.20.0.11 (op1), 172.20.0.12 (op2), etc.
-start_operator() {
-    local op_id=$1 mcc=$2 mnc=$3 op_name=$4
-    local container_name="osmo-operator-${op_id}"
-    local container_ip="172.20.0.$((10 + op_id))"  # 172.20.0.11, .12, .13...
-
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    apply_config_templates "$tmpdir" \
-        "$container_ip" "$INTER_NET_GATEWAY" \
-        "$op_id" "${op_id}.23.1" "${op_id}.23.2" "${op_id}.23.3" \
-        "$mcc" "$mnc" "$op_name" \
-        "$INTER_STP_IP" "no shutdown"
-
-    echo -e "${GREEN}Démarrage '${container_name}'${NC}"
-    echo -e "  IP : ${CYAN}${container_ip}${NC} (${INTER_NET_SUBNET})"
-    echo -e "  PC : MSC=${op_id}.23.1  STP=${op_id}.23.2  BSC=${op_id}.23.3"
-
-    docker rm -f "$container_name" 2>/dev/null || true
-
-    vol_args=$(build_vol_args "$tmpdir")
-
-    # shellcheck disable=SC2086
-    docker run -d \
-        --name "$container_name" \
-        --network "$INTER_NET" \
-        --ip "$container_ip" \
-        --cap-add NET_ADMIN \
-        --cap-add SYS_ADMIN \
-        --cgroupns host \
-        --device /dev/net/tun:/dev/net/tun \
-        -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-        -e OPERATOR_ID="$op_id" \
-        -e CONTAINER_IP="$container_ip" \
-        -e GATEWAY_IP="$INTER_NET_GATEWAY" \
-        -e INTER_STP_IP="$INTER_STP_IP" \
-        $vol_args \
-        "$IMAGE_RUN" \
-        /etc/osmocom/run.sh
-
-    echo -e "  ${GREEN}✓ ${container_name} démarré${NC}"
-}
-# ── Wireshark ──────────────────────────────────────────────────────────────────────
-# 1. Trouver l'interface bridge Docker
-BRIDGE_IF=$(docker network inspect gsm-inter -f '{{.Id}}' | cut -c1-12)
-
-# 2. Lancer Wireshark sur le bridge
-sudo wireshark -k -i br-${BRIDGE_IF} -f "udp port 4729" >/dev/null 2>&1 & true
 
 # ── Arrêt ──────────────────────────────────────────────────────────────────────
 stop_all() {
