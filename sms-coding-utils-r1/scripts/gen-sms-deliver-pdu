@@ -1,9 +1,0 @@
-#!/bin/sh
-
-if [ $# -lt 1 ]
-then
-	echo "usage: $0 from-number [options]" 1>&2
-	exit 1
-fi
-
-(sms-deliver-pdu-hdr "$@"; cat) | sms-gen-tpdu mt
