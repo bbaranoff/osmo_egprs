@@ -47,10 +47,6 @@ banner() {
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 build_run_image() {
-    if ! docker image inspect "$IMAGE_BASE" &>/dev/null; then
-        echo -e "${YELLOW}Image '$IMAGE_BASE' introuvable, build complet...${NC}"
-        docker build --no-cache -t "$IMAGE_BASE" -f Dockerfile .
-    fi
     echo -e "${GREEN}Build de l'image run (Dockerfile.run)...${NC}"
     docker build -f Dockerfile.run -t "$IMAGE_RUN" . &> /dev/null
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
