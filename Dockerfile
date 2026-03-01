@@ -17,7 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
     # Python & Outils système
     python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv \
+    # ALSA — requis par osmo-gapk pour l'I/O audio matériel
+    libasound2-dev libasound2 alsa-utils \
+    # libgsm — codec GSM-FR natif (accélère gapk en mode gsmfr)
+    libgsm1-dev libgsm1 \
     iptables iproute2 asterisk
+
 SHELL ["/bin/bash", "-c"]
 COPY configs/*conf /etc/asterisk/
 
@@ -65,6 +70,7 @@ RUN for repo in \
     EXTRA_FLAGS="" && \
     if [ "$name" = "libosmo-abis" ]; then EXTRA_FLAGS="--disable-dahdi"; fi && \
     if [ "$name" = "osmo-msc" ]; then EXTRA_FLAGS="--enable-smpp"; fi && \
+    if [ "$name" = "osmo-mgw" ]; then EXTRA_FLAGS="--enable-alsa"; fi && \
     if [ "$name" = "osmo-bts" ]; then EXTRA_FLAGS="--enable-virtual --enable-trx"; fi && \
     if [ "$name" = "osmo-ggsn" ]; then EXTRA_FLAGS="--enable-gtp-linux"; fi && \
     \
@@ -73,6 +79,16 @@ RUN for repo in \
     make install && \
     ldconfig; \
     done
+
+RUN cd ${ROOT} && \
+    git clone https://gitea.osmocom.org/osmocom/gapk osmo-gapk && \
+    cd osmo-gapk && \
+    autoreconf -fi && \
+    ./configure --enable-alsa && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig
+
     
 RUN cd ${ROOT} && \
     git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
@@ -108,6 +124,11 @@ COPY scripts/. /etc/osmocom/
 COPY configs/*cfg /etc/osmocom/
 RUN mv /etc/osmocom/run.sh /root/run.sh
 # Copie des binaires vers /usr/bin pour systemd et installation des .service
+COPY scripts/gapk-start.sh /etc/osmocom/gapk-start.sh
+RUN chmod +x /etc/osmocom/gapk-start.sh && \
+    ln -sf /etc/osmocom/gapk-start.sh /usr/local/bin/gapk-start.sh && \
+    mkdir -p /var/lib/gapk
+
 RUN cp -f /usr/local/bin/osmo* /usr/bin/ || true && \
     cp -f /usr/local/bin/proto-smsc-* /usr/bin/ || true && \
     cp -f /usr/local/bin/sms-* /usr/bin/ || true && \

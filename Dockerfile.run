@@ -1,4 +1,5 @@
-# Dockerfile.run — Image d'exécution ; repose sur l'image de base osmocom-nitb.
+# Dockerfile.run — Image d'exécution ; repose sur l'image de base 
+osmocom-nitb.
 FROM osmocom-nitb:latest as osmocom-run
 
 # ── Répertoires nécessaires ────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 # ── Scripts de démarrage ──────────────────────────────────────────────────────
 
 COPY scripts/sms-interop-relay.py /etc/osmocom/sms-interop-relay.py
+COPY scripts/osmo-gapk.sh /etc/osmocom/osmo-gapk.sh
 COPY scripts/osmo-start.sh /root/osmo-start.sh
 COPY scripts/run.sh        /root/run.sh
 COPY scripts/smsc-start.sh /etc/osmocom/smsc-start.sh
