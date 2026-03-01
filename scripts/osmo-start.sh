@@ -11,7 +11,7 @@ if ip link show apn0 > /dev/null 2>&1; then
     ip link del dev apn0
 fi
 ip tuntap add dev apn0 mode tun
-ip addr add 176.16.32.0/20 dev apn0
+ip addr add 176.16.32.0/24 dev apn0
 ip link set dev apn0 up
 
 echo -e "${GREEN}--- Démarrage de la pile Osmocom EGPRS ---${NC}"

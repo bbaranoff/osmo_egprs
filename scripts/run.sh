@@ -4,6 +4,9 @@ set -euo pipefail
 SESSION="osmocom"
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
 
+# Chemin absolu — l'alias ~/.bashrc n'est pas résolu dans les shells tmux non-interactifs
+FAKETRX_PY="/opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py"
+
 echo -e "${GREEN}=== Arrêt Asterisk ===${NC}"
 usermod -u 0 -o osmocom
 systemctl stop asterisk 2>/dev/null || true
@@ -17,7 +20,7 @@ sleep 1
 
 # ── Fenêtre 0 : FakeTRX ──
 tmux new-session -d -s "$SESSION" -n faketrx
-tmux send-keys -t "$SESSION:0" "faketrx" C-m
+tmux send-keys -t "$SESSION:0" "python3 ${FAKETRX_PY}" C-m
 sleep 2
 
 echo -e "${GREEN}=== Core Osmocom ===${NC}"
@@ -39,11 +42,15 @@ tmux send-keys -t "$SESSION:2" "rm -f /var/lib/asterisk/astdb.sqlite3 && asteris
 tmux new-window -t "$SESSION:3" -n smsc
 tmux send-keys -t "$SESSION:3" "/etc/osmocom/smsc-start.sh" C-m
 
+# ── Fenêtre 4 : gapk audio (intégration native) ──
+tmux new-window -t "$SESSION:4" -n gapk
+tmux send-keys -t "$SESSION:4" "gapk-start.sh auto" C-m
+
 # ── Final ──
 tmux select-window -t "$SESSION:1"
 echo -e "${GREEN}=== Orchestration prête ===${NC}"
 echo -e "${CYAN}  [0] faketrx  [1] ms1     [2] asterisk${NC}"
-echo -e "${CYAN}  [3] smsc     [4] relay   [5] router${NC}"
+echo -e "${CYAN}  [3] smsc     [4] gapk${NC}"
 echo -e ""
 echo -e "${GREEN}SMS inter-op:${NC}"
 echo -e "${CYAN}  python3 /etc/osmocom/send-interop-sms.sh <target_op> <imsi> <from> 'msg'${NC}"
