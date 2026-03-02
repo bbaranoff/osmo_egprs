@@ -36,6 +36,19 @@ INTER_STP_IP="172.20.0.10"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
 
+# ── SMS Routing — chargement du module dédié ───────────────────────────────────
+SMS_ROUTING_SCRIPT="$(dirname "$0")/scripts/sms-routing-setup.sh"
+if [ -f "$SMS_ROUTING_SCRIPT" ]; then
+    # shellcheck source=scripts/sms-routing-setup.sh
+    source "$SMS_ROUTING_SCRIPT"
+else
+    echo -e "${YELLOW}[WARN] sms-routing-setup.sh introuvable — routing SMS basique${NC}" >&2
+fi
+
+# Répertoire global pour les configs SMS (initialisé dans start_bridge_mode /
+# start_host_mode, utilisé par build_vol_args)
+SMS_ROUTING_DIR=""
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 op_private_ip()   { echo "172.20.$1.10"; }
@@ -186,41 +199,25 @@ EOF
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Génération dynamique — sms-routing.conf
+#
+# Délégué à scripts/sms-routing-setup.sh (sms_routing_generate_all).
+# Cette fonction de secours est utilisée uniquement si le module est absent.
 # ══════════════════════════════════════════════════════════════════════════════
-generate_sms_routing_conf() {
-    local op_id=$1
-    local n_operators=$2
-
-    cat <<EOF
-# sms-routing.conf — Généré par start.sh ($(date '+%Y-%m-%d %H:%M:%S'))
-# Opérateur local : ${op_id}  |  N opérateurs : ${n_operators}
-
-[local]
-operator_id = ${op_id}
-
-[operators]
-# operator_id = container_ip (réseau gsm-inter 172.20.0.0/24)
-EOF
-
+_generate_sms_routing_conf_fallback() {
+    local op_id=$1 n_operators=$2
+    echo -e "  ${YELLOW}[SMS] Fallback basique op${op_id} (sms-routing-setup.sh absent)${NC}" >&2
+    printf '# sms-routing.conf — Fallback (routes courtes)\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' \
+        "$op_id" "$op_id"
     for i in $(seq 1 "$n_operators"); do
-        echo "${i} = $(op_backbone_ip "$i")"
+        printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"
     done
-
-    cat <<'EOF'
-
-[routes]
-# prefix = operator_id  (longest-prefix match)
-EOF
-
+    printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        echo "# Opérateur ${i}"
         printf '%s0000 = %s\n' "$i" "$i"
-        for j in 001 002 003 004 005; do
-            printf '%s%s = %s\n' "$i" "$j" "$i"
-        done
-        printf '336%s0 = %s\n' "$i" "$i"
-        echo ""
+        for j in 001 002 003 004 005; do printf '%s%s = %s\n' "$i" "$j" "$i"; done
+        printf '336%s0 = %s\n\n' "$i" "$i"
     done
+    printf '[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -336,8 +333,20 @@ apply_config_templates() {
     generate_extensions_interop_out "$op_id" "$n_operators" \
         >> "$dest/asterisk/extensions.conf"
 
-    generate_sms_routing_conf "$op_id" "$n_operators" \
-        > "$dest/osmocom/sms-routing.conf"
+    # ── SMS Routing ─────────────────────────────────────────────────────────
+    # Si sms_routing_generate (module externe) est disponible ET que
+    # SMS_ROUTING_DIR est défini, la config a déjà été générée globalement :
+    # on la copie simplement dans le tmpdir de cet opérateur.
+    # Sinon : fallback inline basique.
+    if declare -f sms_routing_generate > /dev/null 2>&1 && \
+       [ -n "${SMS_ROUTING_DIR:-}" ] && \
+       [ -f "${SMS_ROUTING_DIR}/sms-routing-op${op_id}.conf" ]; then
+        cp "${SMS_ROUTING_DIR}/sms-routing-op${op_id}.conf" \
+           "$dest/osmocom/sms-routing.conf"
+    else
+        _generate_sms_routing_conf_fallback "$op_id" "$n_operators" \
+            > "$dest/osmocom/sms-routing.conf"
+    fi
 }
 
 build_vol_args() {
@@ -540,6 +549,14 @@ start_host_mode() {
     prepare_host_tun
     docker rm -f egprs &>/dev/null || true
 
+    # ── Génération config SMS routing (mode host, 1 opérateur) ────────────
+    SMS_ROUTING_DIR=$(mktemp -d)
+    if declare -f sms_routing_generate > /dev/null 2>&1; then
+        echo -e "${GREEN}Génération table SMS routing (1 op, ${n_ms} MS)...${NC}"
+        sms_routing_generate 1 1 "$SMS_ROUTING_DIR" "$n_ms"
+        sms_routing_summary  1 "$n_ms"
+    fi
+
     local tmpdir
     tmpdir=$(mktemp -d)
     apply_config_templates "$tmpdir" \
@@ -616,6 +633,24 @@ start_bridge_mode() {
             --gateway="$INTER_NET_GATEWAY" \
             "$INTER_NET" &>/dev/null
 
+    # ── Génération des configs SMS routing (avant le démarrage des containers)
+    # Construit un sms-routing-op<N>.conf par opérateur avec les routes exactes
+    # par MSISDN (pas seulement des préfixes courts) et les méta-données relay.
+    SMS_ROUTING_DIR=$(mktemp -d)
+    if declare -f sms_routing_generate_all > /dev/null 2>&1; then
+        echo -e "${GREEN}Génération tables SMS routing (${n_operators} ops)...${NC}"
+        # Construire le tableau des MS counts dans l'ordre op1..opN
+        local _ms_counts=()
+        for i in $(seq 1 "$n_operators"); do
+            _ms_counts+=("${OP_MS[$i]}")
+        done
+        sms_routing_generate_all "$n_operators" "$SMS_ROUTING_DIR" "${_ms_counts[@]}"
+        sms_routing_validate "${SMS_ROUTING_DIR}/sms-routing-op1.conf" || true
+        sms_routing_summary  "$n_operators" "${_ms_counts[@]}"
+    else
+        echo -e "  ${YELLOW}[SMS] sms-routing-setup.sh non chargé — fallback basique${NC}"
+    fi
+
     # ── Inter-STP — doit être UP avant les opérateurs ─────────────────────
     start_inter_stp "$n_operators"
 
@@ -625,6 +660,14 @@ start_bridge_mode() {
             "${OP_MCC[$i]}" "${OP_MNC[$i]}" "${OP_NAME[$i]}" \
             "$n_operators" "${OP_MS[$i]}"
     done
+
+    # ── Attente relays SMS ─────────────────────────────────────────────────
+    if declare -f sms_routing_wait_ready > /dev/null 2>&1; then
+        echo -e "${GREEN}Vérification relays SMS (port 7890)...${NC}"
+        for i in $(seq 1 "$n_operators"); do
+            sms_routing_wait_ready "$(op_container "$i")" 90 || true
+        done
+    fi
 
     # ── Résumé ────────────────────────────────────────────────────────────
     echo ""
