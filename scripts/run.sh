@@ -59,7 +59,7 @@ generate_ms_configs() {
 
     # Extraire les valeurs de référence depuis mobile.cfg (déjà résolu par start.sh)
     local ref_imsi ref_imei ref_ki ref_l2
-    ref_imsi=$(grep -oP '^\s+imsi \K[0-9]{15}' "$base_cfg" | head -1)
+    ref_imsi=$(grep -oP '^\s*imsi\s+\K[0-9]+' "$base_cfg" | head -1)
     ref_imei=$(grep -oP '^\s+imei \K[0-9]+' "$base_cfg" | head -1)
     # KI avec espaces — trim indispensable pour que le sed de remplacement matche
     ref_ki=$(grep -oP '^\s+ki comp128 \K[0-9a-f ]+' "$base_cfg" | head -1 \
@@ -83,26 +83,17 @@ generate_ms_configs() {
     for ms_idx in $(seq 1 "${N_MS}"); do
         local cfg="/root/.osmocom/bb/mobile_ms${ms_idx}.cfg"
         local l2_sock="\/tmp\/osmocom_l2_${ms_idx}"
-        local vty_ip="127.0.${OPERATOR_ID}.${ms_idx}"
-
-        if [ "$ms_idx" -eq 1 ]; then
-            # MS1 : IMSI/IMEI/KI identiques à mobile.cfg (déjà corrects via start.sh)
-            # Modifier SEULEMENT le socket L2 et le VTY bind.
-            sed \
-                -e "s|layer2-socket ${ref_l2}|layer2-socket ${l2_sock}|" \
-                -e "/^line vty/,/^[^ ]/{s|bind [0-9.]*|bind ${vty_ip}|}" \
-                "$base_cfg" > "$cfg"
-            echo -e "  ${CYAN}[MS1]${NC} IMSI=${ref_imsi}  (=mobile.cfg)  VTY=${vty_ip}:4247  L1CTL=${l2_sock}"
-        else
+        local vty_ip="127.0.0.${ms_idx}"
             # MS N>1 : dériver depuis mobile.cfg
-            local msin; msin=$(printf '%04d%06d' "${OPERATOR_ID}" "${ms_idx}")
-            local new_imsi="${mcc}${mnc}${msin}"
-            local new_imei="3589250059$(printf '%02d%02d' "${OPERATOR_ID}" "${ms_idx}")0"
-            # KI mobile.cfg : octets séparés par espaces
-            # Octet 15 = ms_idx,  octet 16 = op_id
-            local new_ki; new_ki=$(printf '00 11 22 33 44 55 66 77 88 99 aa bb cc dd %02x ff' \
+        local msin=$(printf '%04d%06d' "${OPERATOR_ID}" "${ms_idx}")
+        local new_imsi="${mcc}${mnc}${msin}"
+        local new_imei="3589250059$(printf '%02d%02d' "${OPERATOR_ID}" "${ms_idx}")0"
+        # KI mobile.cfg : octets séparés par espaces
+        # Octet 15 = ms_idx,  octet 16 = op_id
+        local new_ki; new_ki=$(printf '00 11 22 33 44 55 66 77 88 99 aa bb cc dd %02x ff' \
                                           "${ms_idx}")
-            sed \
+        sed \
+                -e "s|127.0.0.1|127.0.0.$ms_idx|" \
                 -e "s|layer2-socket ${ref_l2}|layer2-socket ${l2_sock}|" \
                 -e "/^line vty/,/^[^ ]/{s|bind [0-9.]*|bind ${vty_ip}|}" \
                 -e "s|imsi ${ref_imsi}|imsi ${new_imsi}|" \
@@ -110,8 +101,6 @@ generate_ms_configs() {
                 -e "s|ki comp128 ${ref_ki}|ki comp128 ${new_ki}|" \
                 "$base_cfg" > "$cfg"
             echo -e "  ${CYAN}[MS${ms_idx}]${NC} IMSI=${new_imsi}  KI=…$(printf '%02x %02x' "${ms_idx}" "${OPERATOR_ID}")  VTY=${vty_ip}:4247  L1CTL=${l2_sock}"
-        fi
-
         if ! grep -q "${l2_sock}" "$cfg"; then
             echo -e "${YELLOW}  [WARN] layer2-socket non patché dans ${cfg}, forçage${NC}"
             sed -i "s|layer2-socket .*|layer2-socket ${l2_sock}|" "$cfg"

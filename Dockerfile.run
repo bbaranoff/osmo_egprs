@@ -42,7 +42,6 @@ COPY scripts/osmo-start.sh /root/osmo-start.sh
 COPY scripts/run.sh        /root/run.sh
 COPY scripts/smsc-start.sh /etc/osmocom/smsc-start.sh
 COPY scripts/send-mt-sms.sh /etc/osmocom/send-mt-sms.sh
-COPY var/*        /var/lib/osmocom/
 RUN chmod +x /root/osmo-start.sh /root/run.sh \
     /etc/osmocom/smsc-start.sh /etc/osmocom/send-mt-sms.sh
 

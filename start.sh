@@ -526,6 +526,7 @@ start_operator() {
     ) &
 }
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Mode net-host (1 opérateur, SDR physique)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -645,7 +646,7 @@ start_bridge_mode() {
             _ms_counts+=("${OP_MS[$i]}")
         done
         sms_routing_generate_all "$n_operators" "$SMS_ROUTING_DIR" "${_ms_counts[@]}"
-        sms_routing_validate "${SMS_ROUTING_DIR}/sms-routing-op1.conf" || true
+        #sms_routing_validate "${SMS_ROUTING_DIR}/sms-routing-op1.conf"
         sms_routing_summary  "$n_operators" "${_ms_counts[@]}"
     else
         echo -e "  ${YELLOW}[SMS] sms-routing-setup.sh non chargé — fallback basique${NC}"
@@ -660,6 +661,7 @@ start_bridge_mode() {
             "${OP_MCC[$i]}" "${OP_MNC[$i]}" "${OP_NAME[$i]}" \
             "$n_operators" "${OP_MS[$i]}"
     done
+    sudo bash hlr-feed-subscribers.sh
 
     # ── Attente relays SMS ─────────────────────────────────────────────────
     if declare -f sms_routing_wait_ready > /dev/null 2>&1; then
@@ -746,6 +748,7 @@ until sudo docker exec ${cname} tmux has-session 2>/dev/null; do
     echo "  ... \${WAIT}s"
 done
 exec sudo docker exec -ti ${cname} tmux attach
+
 XTERM_SCRIPT
 
         _open_term_script "Op${i} — ${OP_NAME[$i]}  [${OP_MS[$i]} MS]" "$tmpscript"
@@ -812,4 +815,3 @@ case "$NETWORK_MODE" in
     bridge) start_bridge_mode ;;
 esac
 
-sudo bash hlr-feed-subscribers.sh
