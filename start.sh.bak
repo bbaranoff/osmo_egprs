@@ -640,6 +640,38 @@ start_bridge_mode() {
     done
     echo ""
 
+    # ── HLR Feed : injecter tous les abonnés dans tous les HLR ──────────────
+    # Lancer en background : attendre que TOUS les containers aient leur
+    # session tmux (= run.sh complètement initialisé, HLR VTY prêt).
+    local hlr_script
+    hlr_script="$(dirname "$(realpath "$0")")/hlr-feed-subscribers.sh"
+    if [ -f "$hlr_script" ]; then
+        (
+            echo -e "${GREEN}=== HLR Feed : attente des sessions tmux ===${NC}"
+            local max_wait=180 waited=0
+            for i in $(seq 1 "$n_operators"); do
+                local cname; cname=$(op_container "$i")
+                echo -e "  Attente tmux sur ${cname}..."
+                while ! docker exec "$cname" tmux has-session 2>/dev/null; do
+                    sleep 3; waited=$((waited+3))
+                    if [ "$waited" -ge "$max_wait" ]; then
+                        echo -e "${YELLOW}  [WARN] ${cname} tmux timeout${NC}"
+                        break
+                    fi
+                done
+                echo -e "  ${GREEN}✓${NC} ${cname} prêt"
+            done
+            # HLR VTY met ~5s de plus après la session tmux
+            sleep 5
+            echo -e "${GREEN}=== HLR Feed : injection ===${NC}"
+            bash "$hlr_script" || true
+        ) &
+    else
+        echo -e "${YELLOW}[WARN] hlr-feed-subscribers.sh introuvable (${hlr_script})${NC}"
+        echo -e "  Copier hlr-feed-subscribers.sh à côté de start.sh et relancer."
+    fi
+    echo ""
+
     # ── Wireshark ─────────────────────────────────────────────────────────
     local bridge_if
     bridge_if=$(docker network inspect "$INTER_NET" -f '{{.Id}}' 2>/dev/null | cut -c1-12)
@@ -681,7 +713,6 @@ start_bridge_mode() {
         # (cname, OP_NAME, etc.) sont interpolées maintenant (sans $).
         # Les variables exécutées DANS xterm (WAIT) sont échappées avec \$.
         cat > "$tmpscript" << XTERM_SCRIPT
-
 #!/bin/bash
 echo "=== Op${i} — ${OP_NAME[$i]} (${OP_MS[$i]} MS) ==="
 echo ""
@@ -721,8 +752,6 @@ XTERM_STP
 
     _open_term_script "Inter-STP (PC 0.23.0)" "$tmpscript_stp"
 }
-
-
 # Arrêt
 # ══════════════════════════════════════════════════════════════════════════════
 stop_all() {
@@ -768,5 +797,3 @@ case "$NETWORK_MODE" in
     host)   start_host_mode ;;
     bridge) start_bridge_mode ;;
 esac
-
-sudo bash hlr-feed-subscribers.sh

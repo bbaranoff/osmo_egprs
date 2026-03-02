@@ -61,6 +61,7 @@ cs7 instance 0
 !
  ! Écoute sur 172.20.0.10:2908 — les STPs opérateurs se connectent ici.
  ! dynamic-permitted : pas besoin de pré-déclarer les ASP entrants.
+ xua rkm routing-key-allocation dynamic-permitted
  listen m3ua 2908
   local-ip 172.20.0.10
   accept-asp-connections dynamic-permitted

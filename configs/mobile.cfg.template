@@ -1,4 +1,7 @@
 # mobile.cfg.template - avec placeholders
+# KI format : "ki comp128 XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX"
+#              16 octets séparés par espaces
+#              Octet 15 = ms_idx,  Octet 16 = op_id
 !
 line vty
  no login
