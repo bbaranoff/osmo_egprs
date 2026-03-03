@@ -1,15 +1,17 @@
-x#!/bin/bash
+#!/bin/bash
 # run.sh — Orchestrateur intra-container Osmocom
 #
-# Lancé UNE SEULE FOIS par /etc/osmocom/run.sh (via systemd ou CMD docker).
-# NE PAS appeler via docker exec -d depuis start.sh → double exécution = chaos.
-#
-# Fenêtres tmux (adressées par NOM, jamais par index) :
-#   faketrx     → UN SEUL processus fake_trx gérant tous les MS via --trx
-#   ms1 … msN   → trxcon | mobile     (2 panneaux — fake_trx est centralisé)
-#   asterisk    → Asterisk PBX
-#   smsc        → proto-smsc-daemon + relay
-#   gapk        → osmo-gapk audio
+# Séquence garantie :
+#   1. Reset
+#   2. generate_ms_configs
+#   3. osmo-start.sh       → STP HLR MGW MSC BSC GGSN SGSN PCU
+#                            (PAS bts-trx ni sip-connector)
+#   4. fake_trx démarre    → bind UDP 5700
+#   5. osmo-bts-trx start  → se connecte à fake_trx déjà prêt ✓
+#   6. MS windows (trxcon + mobile)
+#   7. Asterisk
+#   8. sip-connector       → après Asterisk UP + MNCC socket
+#   9. SMSC + gapk
 
 set -euo pipefail
 
@@ -26,30 +28,7 @@ if ! [[ "$N_MS" =~ ^[0-9]+$ ]] || [ "$N_MS" -lt 1 ] || [ "$N_MS" -gt 9 ]; then
     N_MS=1
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Formules COMMUNES (identiques à start.sh et hlr-feed-subscribers.sh) :
-#
-#   MSIN        = printf('%04d%06d', op_id, ms_idx)        → 10 chiffres
-#   IMSI        = MCC(3) + MNC(2) + MSIN(10)               → 15 chiffres
-#   IMEI        = 3589250059 + printf('%02d%02d', op, ms) + 0
-#   KI mobile   = "00 11 22 33 44 55 66 77 88 99 aa bb cc dd <ms_hex> <op_hex>"
-#                 (format mobile.cfg : octets séparés par espaces)
-#   KI HLR VTY  = 00112233445566778899aabbccdd<ms_hex><op_hex>  (sans espaces)
-#   MSISDN      = op_id * 10000 + ms_idx
-#
-# Octet 15 (avant-dernier) = ms_idx  |  Octet 16 (dernier) = op_id
-#
-# Ressources par MS :
-#   MS i  →  TRX port      : 5700 + (i-1)*20   (sur 127.0.0.1)
-#             L1CTL socket  : /tmp/osmocom_l2_{i}
-#             VTY bind      : 127.0.{op}.{ms}:4247
-#             mobile.cfg    : /root/.osmocom/bb/mobile_ms{i}.cfg
-#
-# FakeTRX UNIQUE pour tous les MS :
-#   MS1 → port 5700 (défaut, pas de --trx)
-#   MSi → --trx 127.0.0.1:(5700 + (i-1)*20)
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ── Génération des configs MS ─────────────────────────────────────────────────
 generate_ms_configs() {
     local base_cfg="/root/.osmocom/bb/mobile.cfg"
 
@@ -57,11 +36,9 @@ generate_ms_configs() {
         echo -e "${RED}[ERR] mobile.cfg introuvable : ${base_cfg}${NC}"; return 1
     fi
 
-    # Extraire les valeurs de référence depuis mobile.cfg (déjà résolu par start.sh)
     local ref_imsi ref_imei ref_ki ref_l2
     ref_imsi=$(grep -oP '^\s*imsi\s+\K[0-9]+' "$base_cfg" | head -1)
     ref_imei=$(grep -oP '^\s+imei \K[0-9]+' "$base_cfg" | head -1)
-    # KI avec espaces — trim indispensable pour que le sed de remplacement matche
     ref_ki=$(grep -oP '^\s+ki comp128 \K[0-9a-f ]+' "$base_cfg" | head -1 \
              | sed 's/[[:space:]]*$//')
     ref_l2=$(grep -oP 'layer2-socket \K\S+' "$base_cfg" | head -1)
@@ -69,7 +46,6 @@ generate_ms_configs() {
 
     if [ -z "$ref_imsi" ] || [ -z "$ref_imei" ] || [ -z "$ref_ki" ]; then
         echo -e "${RED}[ERR] Impossible d'extraire IMSI/IMEI/KI de ${base_cfg}${NC}"
-        echo -e "  ref_imsi='${ref_imsi}'  ref_imei='${ref_imei}'  ref_ki='${ref_ki}'"
         return 1
     fi
 
@@ -84,97 +60,106 @@ generate_ms_configs() {
         local cfg="/root/.osmocom/bb/mobile_ms${ms_idx}.cfg"
         local l2_sock="\/tmp\/osmocom_l2_${ms_idx}"
         local vty_ip="127.0.0.${ms_idx}"
-            # MS N>1 : dériver depuis mobile.cfg
-        local msin=$(printf '%04d%06d' "${OPERATOR_ID}" "${ms_idx}")
+        local msin; msin=$(printf '%04d%06d' "${OPERATOR_ID}" "${ms_idx}")
         local new_imsi="${mcc}${mnc}${msin}"
-        local new_imei="3589250059$(printf '%02d%02d' "${OPERATOR_ID}" "${ms_idx}")0"
-        # KI mobile.cfg : octets séparés par espaces
-        # Octet 15 = ms_idx,  octet 16 = op_id
+        local new_imei; new_imei="3589250059$(printf '%02d%02d' "${OPERATOR_ID}" "${ms_idx}")0"
         local new_ki; new_ki=$(printf '00 11 22 33 44 55 66 77 88 99 aa bb cc dd %02x ff' \
-                                          "${ms_idx}")
+                                      "${ms_idx}")
         sed \
-                -e "s|127.0.0.1|127.0.0.$ms_idx|" \
-                -e "s|layer2-socket ${ref_l2}|layer2-socket ${l2_sock}|" \
-                -e "/^line vty/,/^[^ ]/{s|bind [0-9.]*|bind ${vty_ip}|}" \
-                -e "s|imsi ${ref_imsi}|imsi ${new_imsi}|" \
-                -e "s|imei ${ref_imei}|imei ${new_imei}|" \
-                -e "s|ki comp128 ${ref_ki}|ki comp128 ${new_ki}|" \
-                "$base_cfg" > "$cfg"
-            echo -e "  ${CYAN}[MS${ms_idx}]${NC} IMSI=${new_imsi}  KI=…$(printf '%02x %02x' "${ms_idx}" "${OPERATOR_ID}")  VTY=${vty_ip}:4247  L1CTL=${l2_sock}"
+            -e "s|127.0.0.1|127.0.0.$ms_idx|" \
+            -e "s|layer2-socket ${ref_l2}|layer2-socket ${l2_sock}|" \
+            -e "/^line vty/,/^[^ ]/{s|bind [0-9.]*|bind ${vty_ip}|}" \
+            -e "s|imsi ${ref_imsi}|imsi ${new_imsi}|" \
+            -e "s|imei ${ref_imei}|imei ${new_imei}|" \
+            -e "s|ki comp128 ${ref_ki}|ki comp128 ${new_ki}|" \
+            "$base_cfg" > "$cfg"
+
         if ! grep -q "${l2_sock}" "$cfg"; then
-            echo -e "${YELLOW}  [WARN] layer2-socket non patché dans ${cfg}, forçage${NC}"
             sed -i "s|layer2-socket .*|layer2-socket ${l2_sock}|" "$cfg"
         fi
+
+        echo -e "  ${CYAN}[MS${ms_idx}]${NC} IMSI=${new_imsi}  KI=…$(printf '%02x ff' "${ms_idx}")  VTY=${vty_ip}:4247  L1CTL=/tmp/osmocom_l2_${ms_idx}"
     done
 }
 
-# ── Reset ─────────────────────────────────────────────────────────────────────
-echo -e "${GREEN}=== Reset Asterisk ===${NC}"
+# ── Helper : attendre qu'un port TCP soit ouvert ──────────────────────────────
+wait_port() {
+    local host="$1" port="$2" label="$3" timeout="${4:-60}"
+    local elapsed=0
+    echo -ne "  Attente ${label} (${host}:${port})"
+    while ! bash -c "echo >/dev/tcp/${host}/${port}" 2>/dev/null; do
+        sleep 1; elapsed=$((elapsed + 1))
+        echo -n "."
+        if [ "$elapsed" -ge "$timeout" ]; then
+            echo -e " ${RED}TIMEOUT${NC}"; return 1
+        fi
+    done
+    echo -e " ${GREEN}OK${NC} (${elapsed}s)"
+}
+
+# ── Helper : attendre qu'un port UDP soit bindé ───────────────────────────────
+wait_udp() {
+    local port="$1" label="$2" timeout="${3:-30}"
+    local elapsed=0
+    echo -ne "  Attente ${label} (UDP ${port})"
+    while ! ss -unlp | grep -q ":${port} "; do
+        sleep 1; elapsed=$((elapsed + 1))
+        echo -n "."
+        if [ "$elapsed" -ge "$timeout" ]; then
+            echo -e " ${RED}TIMEOUT${NC}"; return 1
+        fi
+    done
+    echo -e " ${GREEN}OK${NC} (${elapsed}s)"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── 1. Reset ──────────────────────────────────────────────────────────────────
+echo -e "${GREEN}=== [1/9] Reset ===${NC}"
 usermod -u 0 -o osmocom 2>/dev/null || true
 systemctl stop asterisk 2>/dev/null || true
 asterisk -rx "core stop now" 2>/dev/null || true
 pkill -9 -x asterisk 2>/dev/null || true
+systemctl stop osmo-sip-connector 2>/dev/null || true
+systemctl stop osmo-bts-trx 2>/dev/null || true
 sleep 1
 
-echo -e "${GREEN}=== Reset tmux ===${NC}"
 tmux kill-server 2>/dev/null || true
 sleep 0.3
 tmux start-server
 
-echo -e "${GREEN}=== Génération configs MS (N=${N_MS}) ===${NC}"
+# ── 2. Génération configs MS ──────────────────────────────────────────────────
+echo -e "${GREEN}=== [2/9] Génération configs MS (N=${N_MS}) ===${NC}"
 generate_ms_configs
 echo ""
 
-echo -e "${GREEN}=== Core Osmocom ===${NC}"
+# ── 3. Core Osmocom (sans bts-trx ni sip-connector) ──────────────────────────
+echo -e "${GREEN}=== [3/9] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
-chmod 666 /tmp/pcu_bts 2>/dev/null || true
-sleep 5
+wait_port 127.0.0.1 4254 "OsmoMSC VTY" 60 || true
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FakeTRX — UN SEUL processus pour TOUS les MS de la BTS
-#
-# Référence : https://osmocom.org/projects/baseband/wiki/FakeTRX
-#   "It's possible to handle multiple MS and/or BTS connections
-#    in a single FakeTRX process using --trx option."
-#
-# MS1 → transceiver par défaut (port 5700, inclus sans --trx)
-# MSi → --trx 127.0.0.1:(5700+(i-1)*20)
-#
-# Chaque trxcon MS_i se connecte via :  trxcon -r 127.0.0.1 -p PORT_i -s SOCK_i
-# ══════════════════════════════════════════════════════════════════════════════
-echo -e "${GREEN}=== FakeTRX — 1 processus, ${N_MS} MS ===${NC}"
-
+# ── 4. FakeTRX — bind ses sockets AVANT bts-trx ──────────────────────────────
+echo -e "${GREEN}=== [4/9] FakeTRX ===${NC}"
 tmux new-session -d -s "$SESSION" -n faketrx
 
-# Construire les arguments --trx pour MS 2..N
 FAKETRX_CMD="python3 ${FAKETRX_PY}"
 for ms_idx in $(seq 2 "${N_MS}"); do
     trx_port=$(( 6700 + (ms_idx - 1) * 20 ))
     FAKETRX_CMD="${FAKETRX_CMD} --trx 127.0.0.1:${trx_port}"
 done
+echo -e "  ${CYAN}Cmd :${NC} ${FAKETRX_CMD}"
+tmux send-keys -t "${SESSION}:faketrx" "${FAKETRX_CMD}" C-m
+wait_udp 5700 "FakeTRX" 30 || true
 
-echo -e "  ${CYAN}Cmd:${NC} ${FAKETRX_CMD}"
-tmux send-keys -t "${SESSION}:faketrx" \
-    "echo '=== FakeTRX — ${N_MS} transceiver(s) ===' && ${FAKETRX_CMD}" \
-    C-m
-# Laisser fake_trx lier ses sockets avant que les trxcon se connectent
-sleep 2
+# ── 5. osmo-bts-trx — une seule fois, fake_trx déjà prêt ────────────────────
+echo -e "${GREEN}=== [5/9] osmo-bts-trx ===${NC}"
+systemctl start osmo-bts-trx
+wait_port 127.0.0.1 4238 "OsmoBTS VTY" 30 || true
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Fenêtres MS — 2 panneaux (trxcon + mobile)
-#
-# RÈGLE : adresser TOUJOURS par nom de fenêtre, jamais par index numérique.
-#
-# Architecture par MS :
-#   ┌──────────────────────────────────────────────────────┐
-#   │  trxcon -r 127.0.0.1 -p PORT_i -s /tmp/osmocom_l2_i │  pane 0
-#   │    ↳ se connecte au fake_trx centralisé              │
-#   │    ↳ expose socket L1CTL pour l'application mobile   │
-#   ├──────────────────────────────────────────────────────┤
-#   │  mobile -c /root/.osmocom/bb/mobile_ms{i}.cfg        │  pane 1
-#   └──────────────────────────────────────────────────────┘
-# ══════════════════════════════════════════════════════════════════════════════
-echo -e "${GREEN}=== Démarrage des ${N_MS} MS ===${NC}"
+# ── 6. Fenêtres MS ────────────────────────────────────────────────────────────
+echo -e "${GREEN}=== [6/9] MS (${N_MS}) ===${NC}"
 
 for ms_idx in $(seq 1 "${N_MS}"); do
     trx_port=$(( 6700 + (ms_idx - 1) * 20 ))
@@ -182,73 +167,69 @@ for ms_idx in $(seq 1 "${N_MS}"); do
     cfg="/root/.osmocom/bb/mobile_ms${ms_idx}.cfg"
     win="ms${ms_idx}"
 
-    echo -e "  ${CYAN}[MS${ms_idx}]${NC} TRX:127.0.0.1:${trx_port}  L1CTL:${l2_socket}  VTY:127.0.${OPERATOR_ID}.${ms_idx}:4247"
+    echo -e "  ${CYAN}[MS${ms_idx}]${NC} TRX:${trx_port}  L1CTL:${l2_socket}  VTY:127.0.${OPERATOR_ID}.${ms_idx}:4247"
 
     tmux new-window -t "$SESSION" -n "$win"
 
-    # Pane 0 : trxcon
-    #   -r 127.0.0.1  IP du fake_trx (unique, local)
-    #   -p PORT_i     port du transceiver de ce MS dans fake_trx
-    #   -s SOCKET_i   socket L1CTL → mobile attend la connexion ici
     tmux send-keys -t "${SESSION}:${win}.0" \
         "echo '=== trxcon MS${ms_idx} → fake_trx:${trx_port} ===' && sleep 2 && \
-         trxcon -p ${trx_port} -s ${l2_socket}" \
-        C-m
+         trxcon -p ${trx_port} -s ${l2_socket}" C-m
 
-    # Pane 1 : mobile
     tmux split-window -v -t "${SESSION}:${win}"
     tmux send-keys -t "${SESSION}:${win}.1" \
-        "echo '=== mobile MS${ms_idx} ===' && sleep 5 && \
-         mobile -c ${cfg}" \
-        C-m
+        "echo '=== mobile MS${ms_idx} ===' && sleep 5 && mobile -c ${cfg}" C-m
 
     tmux select-layout -t "${SESSION}:${win}" even-vertical
 done
 
-# ── Asterisk ──────────────────────────────────────────────────────────────────
+# ── 7. Asterisk ───────────────────────────────────────────────────────────────
+echo -e "${GREEN}=== [7/9] Asterisk ===${NC}"
 tmux new-window -t "$SESSION" -n asterisk
 tmux send-keys -t "${SESSION}:asterisk" \
     "rm -f /var/lib/asterisk/astdb.sqlite3 && asterisk -cvvv" C-m
 
-# ── SMSC ──────────────────────────────────────────────────────────────────────
+wait_port 127.0.0.1 5060 "Asterisk SIP" 60 || true
+sleep 3
+
+# ── 8. osmo-sip-connector ─────────────────────────────────────────────────────
+echo -e "${GREEN}=== [8/9] osmo-sip-connector ===${NC}"
+tmux new-window -t "$SESSION" -n sip-connector
+tmux send-keys -t "${SESSION}:sip-connector" \
+    "echo '=== Attente MNCC socket /tmp/msc_mncc ===' && \
+     until [ -S /tmp/msc_mncc ]; do sleep 1; echo -n '.'; done && echo '' && \
+     echo '=== MNCC OK — start connector ===' && \
+     systemctl start osmo-sip-connector && \
+     sleep 2 && journalctl -fu osmo-sip-connector" \
+    C-m
+sleep 5
+
+# ── 9. SMSC + gapk ───────────────────────────────────────────────────────────
+echo -e "${GREEN}=== [9/9] SMSC + gapk ===${NC}"
+
 tmux new-window -t "$SESSION" -n smsc
 tmux send-keys -t "${SESSION}:smsc" "/etc/osmocom/smsc-start.sh" C-m
 
-# ── gapk audio ────────────────────────────────────────────────────────────────
 tmux new-window -t "$SESSION" -n gapk
 tmux send-keys -t "${SESSION}:gapk" \
-    "echo '=== gapk audio ===' && \
-     echo 'Mode auto : surveille OsmoMGW pour endpoints RTP actifs' && \
-     echo 'Mode BB   : appeler ext 888 depuis mobile → voix ALSA directe' && \
-     echo '  Pour passer en mode BB : Ctrl-C puis : gapk-start.sh bb-audio' && \
-     sleep 3 && gapk-start.sh auto" \
-    C-m
+    "echo '=== gapk audio ===' && sleep 3 && gapk-start.sh auto" C-m
 
-# ── Sélectionner MS1 ─────────────────────────────────────────────────────────
 tmux select-window -t "${SESSION}:ms1"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Résumé
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Résumé ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  Opérateur ${OPERATOR_ID} — Stack prête  (${N_MS} MS)${NC}"
+echo -e "${GREEN}║  Opérateur ${OPERATOR_ID} — Stack prête  (${N_MS} MS)                    ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  ${CYAN}FakeTRX :${NC}  1 processus, ${N_MS} transceiver(s)  (fenêtre: faketrx)"
+echo -e "  ${CYAN}Fenêtres :${NC} faketrx  $(for i in $(seq 1 $N_MS); do printf "ms%s  " $i; done)asterisk  sip-connector  smsc  gapk"
 echo ""
-echo -e "  ${CYAN}Mobile Stations :${NC}"
-for ms_idx in $(seq 1 "${N_MS}"); do
-    trx_port=$(( 5700 + (ms_idx - 1) * 20 ))
-    msisdn=$(( OPERATOR_ID * 10000 + ms_idx ))
-    echo -e "    ms${ms_idx}  TRX:${trx_port}  L1CTL:/tmp/osmocom_l2_${ms_idx}  VTY:127.0.${OPERATOR_ID}.${ms_idx}:4247  MSISDN:${msisdn}"
-done
+echo -e "  ${CYAN}Vérif TRX  :${NC} fenêtre faketrx → chercher 'RSP POWERON'"
+echo -e "  ${CYAN}Vérif TCH  :${NC} telnet 127.0.0.1 4242 → show bts 0"
+echo -e "  ${CYAN}Vérif PJSIP:${NC} asterisk -rx 'pjsip show endpoints'"
+echo -e "  ${CYAN}VTY MSC    :${NC} telnet 127.0.0.1 4254"
+echo -e "  ${CYAN}VTY HLR    :${NC} telnet 127.0.0.1 4258"
 echo ""
-echo -e "  ${CYAN}Fenêtres de service :${NC}  faketrx  asterisk  smsc  gapk"
-echo ""
-echo -e "  ${CYAN}Navigation :${NC}  Ctrl-b w (liste)   Ctrl-b [nom_fenetre]"
-echo -e "  ${CYAN}VTY HLR   :${NC}  telnet 127.0.0.2 4258"
-echo -e "  ${CYAN}Voix BB   :${NC}  appeler ext 888  (gapk → ALSA)"
+echo -e "  ${CYAN}Navigation :${NC}  Ctrl-b w   Ctrl-b n/p"
 echo ""
 
 tmux attach-session -t "$SESSION"
