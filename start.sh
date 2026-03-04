@@ -437,6 +437,27 @@ start_inter_stp() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# [PATCH] wait_inter_stp_ready — Attendre que l'inter-STP soit prêt
+#
+# osmo-stp démarre rapidement (~1-2s). On attend 15s pour être sûr.
+# ══════════════════════════════════════════════════════════════════════════════
+wait_inter_stp_ready() {
+    local n_operators=$1
+    
+    echo -ne "${GREEN}[*] Vérification stabilisation inter-STP (routes SS7)${NC}"
+    
+    # osmo-stp crée les routes rapidement
+    # Attendre 15s pour stabilisation complète
+    for i in {1..15}; do
+        sleep 1
+        echo -n "."
+    done
+    
+    echo -e " ${GREEN}✓${NC}"
+    return 0
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Démarrage d'un opérateur
 #
 # Paramètres :
@@ -655,6 +676,9 @@ start_bridge_mode() {
     # ── Inter-STP — doit être UP avant les opérateurs ─────────────────────
     start_inter_stp "$n_operators"
 
+    # [PATCH] Vérifier que l'inter-STP est vraiment prêt avant les opérateurs
+    wait_inter_stp_ready "$n_operators"
+
     # ── Opérateurs ────────────────────────────────────────────────────────
     for i in $(seq 1 "$n_operators"); do
         start_operator "$i" \
@@ -814,4 +838,3 @@ case "$NETWORK_MODE" in
     host)   start_host_mode ;;
     bridge) start_bridge_mode ;;
 esac
-

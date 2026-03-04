@@ -1,56 +1,53 @@
 #!/bin/bash
-# create_interop.sh — Génère osmo-stp-interop.cfg pour le hub SS7 central
+# create_interop.sh — Génère la configuration inter-STP (hub SS7 central)
 #
-# Architecture inter-STP :
-#   Point code  : 0.23.0
-#   Port écoute : 2908 (accept-asp-connections dynamic-permitted)
-#   1 AS par opérateur, SANS routing-key (AS "catch-all" par opérateur)
-#   Le routage se fait sur le point code destination (MTP3 DPC)
+# Paramètres :
+#   $1  n_operators   Nombre d'opérateurs (défaut: 2)
+#   $2  outfile       Chemin fichier config de sortie (défaut: osmo-stp-interop.cfg)
 #
-# RCTX = N×100+50  (doit correspondre à __RCTX_INTER__ dans osmo-stp.cfg)
+# Topologie :
+#   Inter-STP (PC 0.23.0) @ 0.0.0.0:2908
+#   ├── Reçoit connexion ASP Op1 (PC 1.23.2, RCTX 150)
+#   ├── Reçoit connexion ASP Op2 (PC 2.23.2, RCTX 250)
+#   └── Reçoit connexion ASP Op3 (PC 3.23.2, RCTX 350)
 #
-# Topologie (exemple 3 opérateurs) :
-#   STP Op1 (1.23.2 @ 172.20.0.11) ──SCTP──► Inter-STP :2908
-#   STP Op2 (2.23.2 @ 172.20.0.12) ──SCTP──► Inter-STP :2908
-#   STP Op3 (3.23.2 @ 172.20.0.13) ──SCTP──► Inter-STP :2908
-#
-#   Routes :
-#     1.23.{1,2,3} → as-op1
-#     2.23.{1,2,3} → as-op2
-#     3.23.{1,2,3} → as-op3
-#
-# Usage : ./create_interop.sh <n_operators> [output_file]
+# IMPORTANT : Les routing-keys doivent matcher exactement ce que les STP locaux envoient
+# STP local Op1 envoie : routing-key 150 1.23.2
+# Inter-STP AS doit recevoir : routing-key 150 1.23.2 (MATCH!)
 
-set -euo pipefail
+set -e
 
-N_OPERATORS=${1:-2}
-OUTPUT_FILE=${2:-"configs/osmo-stp-interop.cfg"}
+n_operators="${1:-2}"
+outfile="${2:-osmo-stp-interop.cfg}"
 
-if ! [[ "$N_OPERATORS" =~ ^[0-9]+$ ]] || [ "$N_OPERATORS" -lt 1 ] || [ "$N_OPERATORS" -gt 9 ]; then
-    echo "Usage: $0 <n_operators (1-9)> [output_file]"; exit 1
+if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 9 ]; then
+    echo "Erreur : n_operators doit être 1..9" >&2
+    exit 1
 fi
 
-echo "Génération ${OUTPUT_FILE} — ${N_OPERATORS} opérateur(s)..."
+cat > "$outfile" <<'EOFCONFIG'
+!
+! osmo-stp-interop.cfg — Configuration inter-STP centrale
+!
+! PC 0.23.0 : hub de routage SS7 pour N opérateurs
+! Écoute les connexions ASP des STP locaux sur 0.0.0.0:2908
+! Route les messages vers les destinations appropriées via les AS
+!
 
-# ── En-tête ────────────────────────────────────────────────────────────────────
-cat > "$OUTPUT_FILE" << 'EOHEADER'
-!
-! osmo-stp-interop.cfg — Inter-STP central (hub SS7)
-! Généré par create_interop.sh — ne pas éditer manuellement.
-!
-! Architecture :
-!   - 1 AS par opérateur, SANS routing-key (catch-all par opérateur)
-!   - Routage basé sur le DPC (point code destination)
-!   - dynamic-permitted : les ASP se connectent sans être pré-déclarés
-!
 log stderr
  logging filter all 1
  logging color 1
+ logging print category-hex 0
  logging print category 1
  logging print extended-timestamp 1
  logging print level 1
+ logging print file basename
  logging level lss7 info
+ logging level lsccp info
  logging level lm3ua info
+ logging level linp notice
+!
+stats interval 5
 !
 line vty
  no login
@@ -59,47 +56,57 @@ cs7 instance 0
  network-indicator international
  point-code 0.23.0
 !
- ! Écoute sur 172.20.0.10:2908 — les STPs opérateurs se connectent ici.
- ! dynamic-permitted : pas besoin de pré-déclarer les ASP entrants.
+ ! ── Server : écoute les connexions ASP des opérateurs ────────────────
+ ! Les STP locaux se connectent ici avec leurs ASP client
  xua rkm routing-key-allocation dynamic-permitted
+ 
  listen m3ua 2908
-  local-ip 172.20.0.10
   accept-asp-connections dynamic-permitted
-EOHEADER
-
-# ── AS par opérateur (SANS routing-key = catch-all) ───────────────────────────
-for i in $(seq 1 "$N_OPERATORS"); do
-    local_ip="172.20.0.$((10 + i))"
-    cat >> "$OUTPUT_FILE" << EOOPERATOR
+  local-ip 0.0.0.0
 !
- ! ── Opérateur ${i} : STP ${i}.23.2 @ ${local_ip} ─────────────────────────
- ! AS sans routing-key : accepte tout le trafic de cet opérateur.
- ! Le routage vers l'opérateur cible se fait sur le DPC via la route-table.
+EOFCONFIG
+
+# Générer dynamiquement les AS pour chaque opérateur
+# Les routing-keys DOIVENT matcher ce que les STP locaux envoient
+# STP local Op i envoie : routing-key (i*100+50) i.23.2
+for i in $(seq 1 "$n_operators"); do
+    rctx_inter=$(( i * 100 + 50 ))
+    pc_stp="${i}.23.2"    # PC du STP local (IMPORTANT!)
+    
+    cat >> "$outfile" <<EOF
+
+ ! ── Application Server pour Opérateur ${i} ──────────────────────────
+ ! Routing-key DOIT matcher ce que l'ASP Op${i} envoie : ${rctx_inter} ${pc_stp}
  as as-op${i} m3ua
+  routing-key ${rctx_inter} ${pc_stp}
   traffic-mode override
-EOOPERATOR
+EOF
 done
 
-# ── Route-table (match exact /14 = 32 bits en ITU 3.8.3) ──────────────────────
-echo "!" >> "$OUTPUT_FILE"
-echo " ! ── Table de routage SS7 ────────────────────────────────────────────" >> "$OUTPUT_FILE"
-echo " ! Masque 7.255.7 = match exact en format ITU 14-bit (3.8.3 : zone.network.node)" >> "$OUTPUT_FILE"
-echo " route-table system" >> "$OUTPUT_FILE"
+# Routes vers toutes les destinations
+cat >> "$outfile" <<'EOFROUTES'
 
-for i in $(seq 1 "$N_OPERATORS"); do
-    cat >> "$OUTPUT_FILE" << EOROUTES
-  ! Op${i} : MSC=${i}.23.1  STP=${i}.23.2  BSC=${i}.23.3 → as-op${i}
-  update route ${i}.23.1 7.255.7 linkset as-op${i}
-  update route ${i}.23.2 7.255.7 linkset as-op${i}
-  update route ${i}.23.3 7.255.7 linkset as-op${i}
-EOROUTES
+ ! ── Routage vers les destinations des opérateurs ──────────────────────
+ ! Les routes sont mappées aux AS via les routing-keys
+ route-table system
+EOFROUTES
+
+for i in $(seq 1 "$n_operators"); do
+    msc_pc="${i}.23.1"
+    bsc_pc="${i}.23.3"
+    
+    cat >> "$outfile" <<EOF
+  update route ${msc_pc} ${msc_pc} linkset as-op${i}
+  update route ${bsc_pc} ${bsc_pc} linkset as-op${i}
+EOF
 done
 
-# ── Résumé ─────────────────────────────────────────────────────────────────────
-echo ""
-echo "✓  ${OUTPUT_FILE} — ${N_OPERATORS} opérateur(s)"
-echo "   Inter-STP PC=0.23.0  @  172.20.0.10:2908"
-for i in $(seq 1 "$N_OPERATORS"); do
-    rctx=$(( i * 100 + 50 ))
-    echo "   Op${i} : STP ${i}.23.2 @ 172.20.0.$((10+i))  RCTX=${rctx}"
-done
+cat >> "$outfile" <<'EOF'
+
+!
+EOF
+
+echo "✓ Config inter-STP générée : $outfile" >&2
+echo "  Opérateurs : $n_operators" >&2
+echo "  Application Servers : $(seq 1 "$n_operators" | xargs -I{} echo -n "as-op{} ")" >&2
+echo "  Routes     : $((n_operators * 2)) destinations (MSC + BSC par opérateur)" >&2
