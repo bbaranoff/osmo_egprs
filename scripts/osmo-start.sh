@@ -37,7 +37,7 @@ systemctl start osmo-bsc
 echo "[4/4] Lancement des services DATA (GGSN, SGSN, PCU)..."
 systemctl start osmo-ggsn
 systemctl start osmo-sgsn
-systemctl start osmo-bts
+systemctl start osmo-bts-trx
 systemctl start osmo-pcu
 systemctl start osmo-sip-connector
 sleep 1

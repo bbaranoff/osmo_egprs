@@ -1,0 +1,817 @@
+VTY DEBUG DUMP — 2026-03-04 17:14:46
+Opérateurs : 3   Containers : osmo-operator-1 osmo-operator-2 osmo-operator-3
+
+════════════════════════════════════════════════════════════════════════
+  Container : osmo-operator-1  —  17:14:46
+════════════════════════════════════════════════════════════════════════
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSTP (port 4239)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSTP] port=4239
+  Commandes show : show cs7 instance 0 users,show cs7 instance 0 as all,show cs7 instance 0 asp,show cs7 instance 0 route,show talloc-context all brief
+
+    Copyright (C) 2015-2020 by Harald Welte <laforge@gnumonks.org>
+    Contributions by Holger Freyther, Neels Hofmeyr, Pau Espin, Vadim Yanitskiy
+    License GPLv2+: GNU GPL Version 2 or later <http://gnu.org/licenses/gpl-2.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    Free Software lives by contribution.  If you use this, please contribute!
+    % Logging was not enabled.
+                              Routing    Routing Key                          Cic   Cic   Traffic
+    AS Name      State        Context    Dpc           Si   Opc           Ssn Min   Max   Mode
+    ------------ ------------ ---------- ------------- ---- ------------- --- ----- ----- -------
+    as-inter     AS_ACTIVE    150        1.23.2                                            override
+    as-rkm-110   AS_ACTIVE    110        1.23.1                                            override
+    as-rkm-130   AS_ACTIVE    130        1.23.3                                            override
+    ASP Name      AS Name       State          Type  Role  SCTP Role  Local Addresses          Remote Addresses
+    ------------  ------------  -------------  ----  ----  ---------  -----------------------  -----------------------
+    asp-to-inter  as-inter      ASP_ACTIVE     m3ua  asp   client     172.20.0.11:2910         172.20.0.10:2908       
+    asp-dyn-0     as-rkm-110    ASP_ACTIVE     m3ua  sg    server     (127.0.0.1|127.0.0.2):2905  127.0.0.1:2906         
+    asp-dyn-1     as-rkm-130    ASP_ACTIVE     m3ua  sg    server     (127.0.0.1|127.0.0.2):2905  127.0.0.1:2907         
+    Routing table = system
+    C=Cong Q=QoS P=Prio
+    Destination            C Q P Linkset Name        Linkset Non-adj Route
+    ---------------------- - - - ------------------- ------- ------- -------
+    2.23.2/14        acces   0 5 as-inter            avail   allowed avail   dyn
+    3.23.2/14        acces   0 5 as-inter            avail   allowed avail   dyn
+    1.23.1/14        acces   0 5 as-rkm-110          avail   allowed avail   dyn
+    1.23.3/14        acces   0 5 as-rkm-130          avail   allowed avail   dyn
+    0.0.0/0          acces   0 5 as-inter            avail   allowed avail      
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoHLR (port 4258)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoHLR] port=4258
+  Commandes show : show subscriber all,show talloc-context all brief
+
+    Copyright (C) 2016-2023 by Harald Welte, sysmocom s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    talloc report on 'null_context' (total 188542 bytes in 8458 blocks)
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x6396ca8afe50
+      vty                            contains 163517 bytes in 8377 blocks (ref 0) 0x6396ca782190
+      OsmoHLR                        contains  25001 bytes in  79 blocks (ref 0) 0x6396ca77e760
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoMGW (port 4243)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoMGW] port=4243
+  Commandes show : show mgcp stats,show talloc-context all brief
+
+    Copyright (C) 2009-2010 Holger Freyther and On-Waves
+    Copyright (C) 2017-2022 by sysmocom s.f.m.c. GmbH
+    Contributions by Pablo Neira Ayuso, Jacob Erlbeck, Neels Hofmeyr
+    Philipp Maier
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoMSC (port 4254)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoMSC] port=4254
+  Commandes show : show network,show subscriber all,show transaction all,show call-legs,show cs7 instance 0 users,show talloc-context all brief
+
+    Copyright (C) 2016 by sysmocom s.f.m.c. GmbH <info@sysmocom.de>
+    Based on OsmoNITB:
+      (C) 2008-2010 by Harald Welte <laforge@gnumonks.org>
+      (C) 2009-2012 by Holger Hans Peter Freyther <zecke@selfish.org>
+    Contributions by Daniel Willmann, Jan Lübbe, Stefan Schmidt
+    Dieter Spaar, Andreas Eversberg, Sylvain Munaut, Neels Hofmeyr
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    SI 3: SCCP
+    talloc report on 'null_context' (total 345164 bytes in 15930 blocks)
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x55c68fd86f00
+      vty                            contains 299045 bytes in 15786 blocks (ref 0) 0x55c68fb89470
+      osmo_msc                       contains  46095 bytes in 142 blocks (ref 0) 0x55c68fb86760
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoBSC (port 4242)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoBSC] port=4242
+  Commandes show : show network,show bts all,show paging all,show lchan all,show cs7 instance 0 users,show cs7 instance 0 asp,show talloc-context all brief
+
+    Copyright (C) 2008-2018 Harald Welte, Holger Freyther
+    Contributions by Daniel Willmann, Jan Lübbe, Stefan Schmidt
+    Dieter Spaar, Andreas Eversberg, Sylvain Munaut, Neels Hofmeyr
+    Copyright (C) 2013-2022 sysmocom - s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    SI 3: SCCP
+    ASP Name      AS Name       State          Type  Role  SCTP Role  Local Addresses          Remote Addresses
+    ------------  ------------  -------------  ----  ----  ---------  -----------------------  -----------------------
+    asp-to-stp    as-bsc        ASP_ACTIVE     m3ua  asp   client     127.0.0.1:2907           (127.0.0.1|127.0.0.2):2905
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoBTS (port 4241)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoBTS] port=4241
+  Commandes show : show bts 0,show trx 0 0,show ts all,show lchan all,show talloc-context all brief
+
+    Copyright (C) 2010-2011 by Harald Welte, Andreas Eversberg and On-Waves
+    Copyright (C) 2011-2022 by sysmocom - s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    TRX 0 of BTS 0 is on ARFCN 514
+    Description: (null)
+      RF Nominal Power: 50 dBm, reduced by 0 dB, resulting BS power: 50 dBm
+      BS Power control parameters (fall-back):
+        Power control interval: 960 ms (every 2 SACCH block(s))
+        Power increase step size: 4
+        Power reduce step size: 2
+        RxLev measurement processing:
+          Lower threshold (L_RXLEV_XX_P): 32
+          Upper threshold (U_RXLEV_XX_P): 38
+          Lower threshold comparators: P1=00 / N1=00
+          Upper threshold comparators: P2=00 / N2=00
+          Pre-processing algorithm: EWMA (alpha=50)
+          Pre-processing parameters: Hreqave=0 / Hreqt=0
+        RxQual measurement processing:
+          Lower threshold (L_RXQUAL_XX_P): 3
+          Upper threshold (U_RXQUAL_XX_P): 0
+          Lower threshold comparators: P3=00 / N3=00
+          Upper threshold comparators: P4=00 / N4=00
+          Pre-processing algorithm: disabled (pass-through)
+      MS Power control parameters (from BSC):
+        Power control interval: 1920 ms (every 4 SACCH block(s))
+        Power increase step size: 4
+        Power reduce step size: 2
+        RxLev measurement processing:
+          Lower threshold (L_RXLEV_XX_P): 32
+          Upper threshold (U_RXLEV_XX_P): 38
+          Lower threshold comparators: P1=10 / N1=12
+          Upper threshold comparators: P2=19 / N2=20
+          Pre-processing algorithm: EWMA (alpha=50)
+          Pre-processing parameters: Hreqave=0 / Hreqt=0
+        RxQual measurement processing:
+          Lower threshold (L_RXQUAL_XX_P): 3
+          Upper threshold (U_RXQUAL_XX_P): 0
+          Lower threshold comparators: P3=05 / N3=07
+          Upper threshold comparators: P4=15 / N4=18
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (FR/EFR):
+          Lower threshold (L_CI_FR_XX_P): 0
+          Upper threshold (U_CI_FR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (HR):
+          Lower threshold (L_CI_HR_XX_P): 0
+          Upper threshold (U_CI_HR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (AMR-FR):
+          Lower threshold (L_CI_AMR_FR_XX_P): 0
+          Upper threshold (U_CI_AMR_FR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (AMR-HR):
+          Lower threshold (L_CI_AMR_HR_XX_P): 0
+          Upper threshold (U_CI_AMR_HR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (SDCCH):
+          Lower threshold (L_CI_SDCCH_XX_P): 0
+          Upper threshold (U_CI_SDCCH_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (GPRS):
+          Lower threshold (L_CI_GPRS_XX_P): 0
+          Upper threshold (U_CI_GPRS_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+      NM State: Oper 'Enabled', Admin 'Unlocked', Avail 'OK'
+      RSL State: connected
+      Baseband Transceiver NM State: Oper 'Enabled', Admin 'Unlocked', Avail 'OK'
+      IPA stream ID: 0x00
+    talloc report on 'null_context' (total 2723134 bytes in 10023 blocks)
+      lapd context                   contains      1 bytes in   1 blocks (ref 0) 0x59547b88f240
+      (bts=0,trx=0,ts=0,ss=0)        contains     24 bytes in   1 blocks (ref 0) 0x59547bb04400
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x59547b9b65c0
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x59547b9b6a90
+      struct gsmtap_inst             contains    120 bytes in   1 blocks (ref 0) 0x59547b9b6c20
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x59547b9b4ce0
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x59547b9b4b70
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x59547b9b4550
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x59547b9afd70
+      vty                            contains 182827 bytes in 9601 blocks (ref 0) 0x59547b876ea0
+      OsmoBTS context                contains 2544058 bytes in 413 blocks (ref 0) 0x59547b85b400
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoPCU (port 4240)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoPCU] port=4240
+  Commandes show : show talloc-context all brief
+
+    Copyright (C) 2012-2013 by Ivan Kluchnikov and Andreas Eversberg
+    Copyright (C) 2013-2022 by sysmocom - s.f.m.c. GmbH
+    License GNU GPL version 2 or later
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSGSN (port 4245)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSGSN] port=4245
+  Commandes show : show sgsn,show pdp-context all,show talloc-context all brief
+
+    Copyright (C) 2010 Harald Welte and On-Waves
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoGGSN (port 4260)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoGGSN] port=4260
+  Commandes show : show ggsn,show pdp-context all,show talloc-context all brief
+
+    Copyright (C) 2011-2017 Harald Welte <laforge@gnumonks.org>
+    Copyright (C) 2012-2017 Holger Hans Peter Freyther <holger@moiji-mobile.com>
+    Copyright (C) 2012-2017 sysmocom - s.f.m.c. GmbH
+    Copyright (C) 2002-2005 Mondru AB
+    License GPLv2: GNU GPL version 2 <http://gnu.org/licenses/gpl-2.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSIPconn (port 4255)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSIPconn] port=4255
+  Commandes show : show talloc-context all brief
+
+    
+
+════════════════════════════════════════════════════════════════════════
+  Container : osmo-operator-2  —  17:15:08
+════════════════════════════════════════════════════════════════════════
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSTP (port 4239)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSTP] port=4239
+  Commandes show : show cs7 instance 0 users,show cs7 instance 0 as all,show cs7 instance 0 asp,show cs7 instance 0 route,show talloc-context all brief
+
+    Copyright (C) 2015-2020 by Harald Welte <laforge@gnumonks.org>
+    Contributions by Holger Freyther, Neels Hofmeyr, Pau Espin, Vadim Yanitskiy
+    License GPLv2+: GNU GPL Version 2 or later <http://gnu.org/licenses/gpl-2.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    Free Software lives by contribution.  If you use this, please contribute!
+    % Logging was not enabled.
+                              Routing    Routing Key                          Cic   Cic   Traffic
+    AS Name      State        Context    Dpc           Si   Opc           Ssn Min   Max   Mode
+    ------------ ------------ ---------- ------------- ---- ------------- --- ----- ----- -------
+    as-inter     AS_ACTIVE    250        2.23.2                                            override
+    as-rkm-210   AS_ACTIVE    210        2.23.1                                            override
+    as-rkm-230   AS_ACTIVE    230        2.23.3                                            override
+    ASP Name      AS Name       State          Type  Role  SCTP Role  Local Addresses          Remote Addresses
+    ------------  ------------  -------------  ----  ----  ---------  -----------------------  -----------------------
+    asp-to-inter  as-inter      ASP_ACTIVE     m3ua  asp   client     172.20.0.12:2910         172.20.0.10:2908       
+    asp-dyn-0     as-rkm-210    ASP_ACTIVE     m3ua  sg    server     (127.0.0.1|127.0.0.2):2905  127.0.0.1:2906         
+    asp-dyn-1     as-rkm-230    ASP_ACTIVE     m3ua  sg    server     (127.0.0.1|127.0.0.2):2905  127.0.0.1:2907         
+    Routing table = system
+    C=Cong Q=QoS P=Prio
+    Destination            C Q P Linkset Name        Linkset Non-adj Route
+    ---------------------- - - - ------------------- ------- ------- -------
+    3.23.2/14        acces   0 5 as-inter            avail   allowed avail   dyn
+    2.23.1/14        acces   0 5 as-rkm-210          avail   allowed avail   dyn
+    2.23.3/14        acces   0 5 as-rkm-230          avail   allowed avail   dyn
+    0.0.0/0          acces   0 5 as-inter            avail   allowed avail      
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoHLR (port 4258)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoHLR] port=4258
+  Commandes show : show subscriber all,show talloc-context all brief
+
+    Copyright (C) 2016-2023 by Harald Welte, sysmocom s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    talloc report on 'null_context' (total 188542 bytes in 8458 blocks)
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x570777f06e50
+      vty                            contains 163517 bytes in 8377 blocks (ref 0) 0x570777dd9190
+      OsmoHLR                        contains  25001 bytes in  79 blocks (ref 0) 0x570777dd5760
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoMGW (port 4243)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoMGW] port=4243
+  Commandes show : show mgcp stats,show talloc-context all brief
+
+    Copyright (C) 2009-2010 Holger Freyther and On-Waves
+    Copyright (C) 2017-2022 by sysmocom s.f.m.c. GmbH
+    Contributions by Pablo Neira Ayuso, Jacob Erlbeck, Neels Hofmeyr
+    Philipp Maier
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoMSC (port 4254)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoMSC] port=4254
+  Commandes show : show network,show subscriber all,show transaction all,show call-legs,show cs7 instance 0 users,show talloc-context all brief
+
+    Copyright (C) 2016 by sysmocom s.f.m.c. GmbH <info@sysmocom.de>
+    Based on OsmoNITB:
+      (C) 2008-2010 by Harald Welte <laforge@gnumonks.org>
+      (C) 2009-2012 by Holger Hans Peter Freyther <zecke@selfish.org>
+    Contributions by Daniel Willmann, Jan Lübbe, Stefan Schmidt
+    Dieter Spaar, Andreas Eversberg, Sylvain Munaut, Neels Hofmeyr
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    SI 3: SCCP
+    talloc report on 'null_context' (total 342949 bytes in 15927 blocks)
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x5d4d078d4f00
+      vty                            contains 299045 bytes in 15786 blocks (ref 0) 0x5d4d076d7470
+      osmo_msc                       contains  43880 bytes in 139 blocks (ref 0) 0x5d4d076d4760
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoBSC (port 4242)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoBSC] port=4242
+  Commandes show : show network,show bts all,show paging all,show lchan all,show cs7 instance 0 users,show cs7 instance 0 asp,show talloc-context all brief
+
+    Copyright (C) 2008-2018 Harald Welte, Holger Freyther
+    Contributions by Daniel Willmann, Jan Lübbe, Stefan Schmidt
+    Dieter Spaar, Andreas Eversberg, Sylvain Munaut, Neels Hofmeyr
+    Copyright (C) 2013-2022 sysmocom - s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    SI 3: SCCP
+    ASP Name      AS Name       State          Type  Role  SCTP Role  Local Addresses          Remote Addresses
+    ------------  ------------  -------------  ----  ----  ---------  -----------------------  -----------------------
+    asp-to-stp    as-bsc        ASP_ACTIVE     m3ua  asp   client     127.0.0.1:2907           (127.0.0.1|127.0.0.2):2905
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoBTS (port 4241)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoBTS] port=4241
+  Commandes show : show bts 0,show trx 0 0,show ts all,show lchan all,show talloc-context all brief
+
+    Copyright (C) 2010-2011 by Harald Welte, Andreas Eversberg and On-Waves
+    Copyright (C) 2011-2022 by sysmocom - s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    TRX 0 of BTS 0 is on ARFCN 516
+    Description: (null)
+      RF Nominal Power: 50 dBm, reduced by 0 dB, resulting BS power: 50 dBm
+      BS Power control parameters (fall-back):
+        Power control interval: 960 ms (every 2 SACCH block(s))
+        Power increase step size: 4
+        Power reduce step size: 2
+        RxLev measurement processing:
+          Lower threshold (L_RXLEV_XX_P): 32
+          Upper threshold (U_RXLEV_XX_P): 38
+          Lower threshold comparators: P1=00 / N1=00
+          Upper threshold comparators: P2=00 / N2=00
+          Pre-processing algorithm: EWMA (alpha=50)
+          Pre-processing parameters: Hreqave=0 / Hreqt=0
+        RxQual measurement processing:
+          Lower threshold (L_RXQUAL_XX_P): 3
+          Upper threshold (U_RXQUAL_XX_P): 0
+          Lower threshold comparators: P3=00 / N3=00
+          Upper threshold comparators: P4=00 / N4=00
+          Pre-processing algorithm: disabled (pass-through)
+      MS Power control parameters (from BSC):
+        Power control interval: 1920 ms (every 4 SACCH block(s))
+        Power increase step size: 4
+        Power reduce step size: 2
+        RxLev measurement processing:
+          Lower threshold (L_RXLEV_XX_P): 32
+          Upper threshold (U_RXLEV_XX_P): 38
+          Lower threshold comparators: P1=10 / N1=12
+          Upper threshold comparators: P2=19 / N2=20
+          Pre-processing algorithm: EWMA (alpha=50)
+          Pre-processing parameters: Hreqave=0 / Hreqt=0
+        RxQual measurement processing:
+          Lower threshold (L_RXQUAL_XX_P): 3
+          Upper threshold (U_RXQUAL_XX_P): 0
+          Lower threshold comparators: P3=05 / N3=07
+          Upper threshold comparators: P4=15 / N4=18
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (FR/EFR):
+          Lower threshold (L_CI_FR_XX_P): 0
+          Upper threshold (U_CI_FR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (HR):
+          Lower threshold (L_CI_HR_XX_P): 0
+          Upper threshold (U_CI_HR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (AMR-FR):
+          Lower threshold (L_CI_AMR_FR_XX_P): 0
+          Upper threshold (U_CI_AMR_FR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (AMR-HR):
+          Lower threshold (L_CI_AMR_HR_XX_P): 0
+          Upper threshold (U_CI_AMR_HR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (SDCCH):
+          Lower threshold (L_CI_SDCCH_XX_P): 0
+          Upper threshold (U_CI_SDCCH_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (GPRS):
+          Lower threshold (L_CI_GPRS_XX_P): 0
+          Upper threshold (U_CI_GPRS_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+      NM State: Oper 'Enabled', Admin 'Unlocked', Avail 'OK'
+      RSL State: connected
+      Baseband Transceiver NM State: Oper 'Enabled', Admin 'Unlocked', Avail 'OK'
+      IPA stream ID: 0x00
+    talloc report on 'null_context' (total 2723134 bytes in 10023 blocks)
+      lapd context                   contains      1 bytes in   1 blocks (ref 0) 0x6461e2e2a240
+      (bts=0,trx=0,ts=0,ss=0)        contains     24 bytes in   1 blocks (ref 0) 0x6461e309f400
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x6461e2f515c0
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x6461e2f51a90
+      struct gsmtap_inst             contains    120 bytes in   1 blocks (ref 0) 0x6461e2f51c20
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x6461e2f4fce0
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x6461e2f4fb70
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x6461e2f4f550
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x6461e2f4ad70
+      vty                            contains 182827 bytes in 9601 blocks (ref 0) 0x6461e2e11ea0
+      OsmoBTS context                contains 2544058 bytes in 413 blocks (ref 0) 0x6461e2df6400
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoPCU (port 4240)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoPCU] port=4240
+  Commandes show : show talloc-context all brief
+
+    Copyright (C) 2012-2013 by Ivan Kluchnikov and Andreas Eversberg
+    Copyright (C) 2013-2022 by sysmocom - s.f.m.c. GmbH
+    License GNU GPL version 2 or later
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSGSN (port 4245)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSGSN] port=4245
+  Commandes show : show sgsn,show pdp-context all,show talloc-context all brief
+
+    Copyright (C) 2010 Harald Welte and On-Waves
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoGGSN (port 4260)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoGGSN] port=4260
+  Commandes show : show ggsn,show pdp-context all,show talloc-context all brief
+
+    Copyright (C) 2011-2017 Harald Welte <laforge@gnumonks.org>
+    Copyright (C) 2012-2017 Holger Hans Peter Freyther <holger@moiji-mobile.com>
+    Copyright (C) 2012-2017 sysmocom - s.f.m.c. GmbH
+    Copyright (C) 2002-2005 Mondru AB
+    License GPLv2: GNU GPL version 2 <http://gnu.org/licenses/gpl-2.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSIPconn (port 4255)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSIPconn] port=4255
+  Commandes show : show talloc-context all brief
+
+    
+
+════════════════════════════════════════════════════════════════════════
+  Container : osmo-operator-3  —  17:15:31
+════════════════════════════════════════════════════════════════════════
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSTP (port 4239)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSTP] port=4239
+  Commandes show : show cs7 instance 0 users,show cs7 instance 0 as all,show cs7 instance 0 asp,show cs7 instance 0 route,show talloc-context all brief
+
+    Copyright (C) 2015-2020 by Harald Welte <laforge@gnumonks.org>
+    Contributions by Holger Freyther, Neels Hofmeyr, Pau Espin, Vadim Yanitskiy
+    License GPLv2+: GNU GPL Version 2 or later <http://gnu.org/licenses/gpl-2.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    Free Software lives by contribution.  If you use this, please contribute!
+    % Logging was not enabled.
+                              Routing    Routing Key                          Cic   Cic   Traffic
+    AS Name      State        Context    Dpc           Si   Opc           Ssn Min   Max   Mode
+    ------------ ------------ ---------- ------------- ---- ------------- --- ----- ----- -------
+    as-inter     AS_ACTIVE    350        3.23.2                                            override
+    as-rkm-310   AS_ACTIVE    310        3.23.1                                            override
+    as-rkm-330   AS_ACTIVE    330        3.23.3                                            override
+    ASP Name      AS Name       State          Type  Role  SCTP Role  Local Addresses          Remote Addresses
+    ------------  ------------  -------------  ----  ----  ---------  -----------------------  -----------------------
+    asp-to-inter  as-inter      ASP_ACTIVE     m3ua  asp   client     172.20.0.13:2910         172.20.0.10:2908       
+    asp-dyn-0     as-rkm-310    ASP_ACTIVE     m3ua  sg    server     (127.0.0.1|127.0.0.2):2905  127.0.0.1:2906         
+    asp-dyn-1     as-rkm-330    ASP_ACTIVE     m3ua  sg    server     (127.0.0.1|127.0.0.2):2905  127.0.0.1:2907         
+    Routing table = system
+    C=Cong Q=QoS P=Prio
+    Destination            C Q P Linkset Name        Linkset Non-adj Route
+    ---------------------- - - - ------------------- ------- ------- -------
+    3.23.1/14        acces   0 5 as-rkm-310          avail   allowed avail   dyn
+    3.23.3/14        acces   0 5 as-rkm-330          avail   allowed avail   dyn
+    0.0.0/0          acces   0 5 as-inter            avail   allowed avail      
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoHLR (port 4258)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoHLR] port=4258
+  Commandes show : show subscriber all,show talloc-context all brief
+
+    Copyright (C) 2016-2023 by Harald Welte, sysmocom s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    talloc report on 'null_context' (total 188542 bytes in 8458 blocks)
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x57679ddfae50
+      vty                            contains 163517 bytes in 8377 blocks (ref 0) 0x57679dccd190
+      OsmoHLR                        contains  25001 bytes in  79 blocks (ref 0) 0x57679dcc9760
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoMGW (port 4243)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoMGW] port=4243
+  Commandes show : show mgcp stats,show talloc-context all brief
+
+    Copyright (C) 2009-2010 Holger Freyther and On-Waves
+    Copyright (C) 2017-2022 by sysmocom s.f.m.c. GmbH
+    Contributions by Pablo Neira Ayuso, Jacob Erlbeck, Neels Hofmeyr
+    Philipp Maier
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoMSC (port 4254)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoMSC] port=4254
+  Commandes show : show network,show subscriber all,show transaction all,show call-legs,show cs7 instance 0 users,show talloc-context all brief
+
+    Copyright (C) 2016 by sysmocom s.f.m.c. GmbH <info@sysmocom.de>
+    Based on OsmoNITB:
+      (C) 2008-2010 by Harald Welte <laforge@gnumonks.org>
+      (C) 2009-2012 by Holger Hans Peter Freyther <zecke@selfish.org>
+    Contributions by Daniel Willmann, Jan Lübbe, Stefan Schmidt
+    Dieter Spaar, Andreas Eversberg, Sylvain Munaut, Neels Hofmeyr
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    SI 3: SCCP
+    talloc report on 'null_context' (total 340734 bytes in 15924 blocks)
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x6376871d5f00
+      vty                            contains 299045 bytes in 15786 blocks (ref 0) 0x637686fd8470
+      osmo_msc                       contains  41665 bytes in 136 blocks (ref 0) 0x637686fd5760
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoBSC (port 4242)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoBSC] port=4242
+  Commandes show : show network,show bts all,show paging all,show lchan all,show cs7 instance 0 users,show cs7 instance 0 asp,show talloc-context all brief
+
+    Copyright (C) 2008-2018 Harald Welte, Holger Freyther
+    Contributions by Daniel Willmann, Jan Lübbe, Stefan Schmidt
+    Dieter Spaar, Andreas Eversberg, Sylvain Munaut, Neels Hofmeyr
+    Copyright (C) 2013-2022 sysmocom - s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    SI 3: SCCP
+    ASP Name      AS Name       State          Type  Role  SCTP Role  Local Addresses          Remote Addresses
+    ------------  ------------  -------------  ----  ----  ---------  -----------------------  -----------------------
+    asp-to-stp    as-bsc        ASP_ACTIVE     m3ua  asp   client     127.0.0.1:2907           (127.0.0.1|127.0.0.2):2905
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoBTS (port 4241)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoBTS] port=4241
+  Commandes show : show bts 0,show trx 0 0,show ts all,show lchan all,show talloc-context all brief
+
+    Copyright (C) 2010-2011 by Harald Welte, Andreas Eversberg and On-Waves
+    Copyright (C) 2011-2022 by sysmocom - s.f.m.c. GmbH
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+    TRX 0 of BTS 0 is on ARFCN 518
+    Description: (null)
+      RF Nominal Power: 50 dBm, reduced by 0 dB, resulting BS power: 50 dBm
+      BS Power control parameters (fall-back):
+        Power control interval: 960 ms (every 2 SACCH block(s))
+        Power increase step size: 4
+        Power reduce step size: 2
+        RxLev measurement processing:
+          Lower threshold (L_RXLEV_XX_P): 32
+          Upper threshold (U_RXLEV_XX_P): 38
+          Lower threshold comparators: P1=00 / N1=00
+          Upper threshold comparators: P2=00 / N2=00
+          Pre-processing algorithm: EWMA (alpha=50)
+          Pre-processing parameters: Hreqave=0 / Hreqt=0
+        RxQual measurement processing:
+          Lower threshold (L_RXQUAL_XX_P): 3
+          Upper threshold (U_RXQUAL_XX_P): 0
+          Lower threshold comparators: P3=00 / N3=00
+          Upper threshold comparators: P4=00 / N4=00
+          Pre-processing algorithm: disabled (pass-through)
+      MS Power control parameters (from BSC):
+        Power control interval: 1920 ms (every 4 SACCH block(s))
+        Power increase step size: 4
+        Power reduce step size: 2
+        RxLev measurement processing:
+          Lower threshold (L_RXLEV_XX_P): 32
+          Upper threshold (U_RXLEV_XX_P): 38
+          Lower threshold comparators: P1=10 / N1=12
+          Upper threshold comparators: P2=19 / N2=20
+          Pre-processing algorithm: EWMA (alpha=50)
+          Pre-processing parameters: Hreqave=0 / Hreqt=0
+        RxQual measurement processing:
+          Lower threshold (L_RXQUAL_XX_P): 3
+          Upper threshold (U_RXQUAL_XX_P): 0
+          Lower threshold comparators: P3=05 / N3=07
+          Upper threshold comparators: P4=15 / N4=18
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (FR/EFR):
+          Lower threshold (L_CI_FR_XX_P): 0
+          Upper threshold (U_CI_FR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (HR):
+          Lower threshold (L_CI_HR_XX_P): 0
+          Upper threshold (U_CI_HR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (AMR-FR):
+          Lower threshold (L_CI_AMR_FR_XX_P): 0
+          Upper threshold (U_CI_AMR_FR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (AMR-HR):
+          Lower threshold (L_CI_AMR_HR_XX_P): 0
+          Upper threshold (U_CI_AMR_HR_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (SDCCH):
+          Lower threshold (L_CI_SDCCH_XX_P): 0
+          Upper threshold (U_CI_SDCCH_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+        C/I measurement processing (GPRS):
+          Lower threshold (L_CI_GPRS_XX_P): 0
+          Upper threshold (U_CI_GPRS_XX_P): 0
+          Lower threshold comparators: P0=00 / N0=00
+          Upper threshold comparators: P1=00 / N1=00
+          Pre-processing algorithm: disabled (pass-through)
+      NM State: Oper 'Enabled', Admin 'Unlocked', Avail 'OK'
+      RSL State: connected
+      Baseband Transceiver NM State: Oper 'Enabled', Admin 'Unlocked', Avail 'OK'
+      IPA stream ID: 0x00
+    talloc report on 'null_context' (total 2723134 bytes in 10023 blocks)
+      lapd context                   contains      1 bytes in   1 blocks (ref 0) 0x5f6c39a52240
+      (bts=0,trx=0,ts=0,ss=0)        contains     24 bytes in   1 blocks (ref 0) 0x5f6c39cc7400
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x5f6c39b795c0
+      struct lookup_helper           contains     24 bytes in   1 blocks (ref 0) 0x5f6c39b79a90
+      struct gsmtap_inst             contains    120 bytes in   1 blocks (ref 0) 0x5f6c39b79c20
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x5f6c39b77ce0
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x5f6c39b77b70
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x5f6c39b77550
+      struct signal_handler          contains     40 bytes in   1 blocks (ref 0) 0x5f6c39b72d70
+      vty                            contains 182827 bytes in 9601 blocks (ref 0) 0x5f6c39a39ea0
+      OsmoBTS context                contains 2544058 bytes in 413 blocks (ref 0) 0x5f6c39a1e400
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoPCU (port 4240)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoPCU] port=4240
+  Commandes show : show talloc-context all brief
+
+    Copyright (C) 2012-2013 by Ivan Kluchnikov and Andreas Eversberg
+    Copyright (C) 2013-2022 by sysmocom - s.f.m.c. GmbH
+    License GNU GPL version 2 or later
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSGSN (port 4245)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSGSN] port=4245
+  Commandes show : show sgsn,show pdp-context all,show talloc-context all brief
+
+    Copyright (C) 2010 Harald Welte and On-Waves
+    License AGPLv3+: GNU AGPL version 3 or later <http://gnu.org/licenses/agpl-3.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoGGSN (port 4260)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoGGSN] port=4260
+  Commandes show : show ggsn,show pdp-context all,show talloc-context all brief
+
+    Copyright (C) 2011-2017 Harald Welte <laforge@gnumonks.org>
+    Copyright (C) 2012-2017 Holger Hans Peter Freyther <holger@moiji-mobile.com>
+    Copyright (C) 2012-2017 sysmocom - s.f.m.c. GmbH
+    Copyright (C) 2002-2005 Mondru AB
+    License GPLv2: GNU GPL version 2 <http://gnu.org/licenses/gpl-2.0.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    % Logging was not enabled.
+
+  ────────────────────────────────────────────────────────────────────
+  OsmoSIPconn (port 4255)
+  ────────────────────────────────────────────────────────────────────
+
+  [OsmoSIPconn] port=4255
+  Commandes show : show talloc-context all brief
+
+    
+
+════════════════════════════════════════════════════════════════════════
+  RÉSUMÉ — 2026-03-04 17:15:53
+════════════════════════════════════════════════════════════════════════
+  VTY interrogés : 30
+  VTY non disponibles : 0
+  Fichier : /tmp/vty-debug-dump.txt
+  Taille  : 53434 octets  /  816 lignes

@@ -22,14 +22,6 @@
 # Inter-container : 172.20.0.X (STP → inter-STP)
 
 set -e
-# DEBUG mode
-if [[ -n "$DEBUG" ]]; then
-    set -x
-    PS4='[DEBUG] + ${BASH_SOURCE}:${LINENO}: '
-    echo "=== MODE DEBUG ACTIVÉ ==="
-    echo ""
-fi
-
 
 IMAGE_BASE="osmocom-nitb"
 IMAGE_RUN="osmocom-run"
@@ -418,7 +410,7 @@ start_inter_stp() {
         -v "${inter_cfg}:/etc/osmocom/osmo-stp-interop.cfg:ro" \
         --entrypoint bash \
         "$IMAGE_RUN" \
-        -c "exec sleep infinity" > /dev/null
+        -c "sleep infinity" > /dev/null
 
     docker exec "$INTER_STP_CONTAINER" \
         tmux new-session -d -s stp \
