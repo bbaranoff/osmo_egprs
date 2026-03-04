@@ -104,7 +104,7 @@ reset_trx() {
     [[ -n "${DEBUG:-}" ]] && echo "[DEBUG] reset_trx: attente ${vty_host}:${vty_port}"
     
     echo -ne "  Attente VTY OsmoBTS (${vty_host}:${vty_port})"
-    local elapsed=0
+    elapsed=0
     while ! bash -c "echo >/dev/tcp/${vty_host}/${vty_port}" 2>/dev/null; do
         sleep 1; elapsed=$((elapsed + 1)); echo -n "."
         if [ "$elapsed" -ge 60 ]; then
@@ -137,7 +137,7 @@ VTYCMDS
 # ── Helper : attendre qu'un port TCP soit ouvert ──────────────────────────────
 wait_port() {
     local host="$1" port="$2" label="$3" timeout="${4:-60}"
-    local elapsed=0
+    elapsed=0
     [[ -n "${DEBUG:-}" ]] && echo "[DEBUG] wait_port: $host:$port ($label)"
     echo -ne "  Attente ${label} (${host}:${port})"
     while ! bash -c "echo >/dev/tcp/${host}/${port}" 2>/dev/null; do
@@ -153,7 +153,7 @@ wait_port() {
 # ── Helper : attendre qu'un port UDP soit bindé ───────────────────────────────
 wait_udp() {
     local port="$1" label="$2" timeout="${3:-30}"
-    local elapsed=0
+    elapsed=0
     [[ -n "${DEBUG:-}" ]] && echo "[DEBUG] wait_udp: UDP $port ($label)"
     echo -ne "  Attente ${label} (UDP ${port})"
     while ! ss -unlp | grep -q ":${port} "; do
@@ -181,6 +181,7 @@ sleep 1
 tmux kill-server 2>/dev/null || true
 sleep 0.3
 tmux start-server
+tmux new-session -d -s "$SESSION" -n main
 
 # ── 2. Génération configs MS ──────────────────────────────────────────────────
 echo -e "${GREEN}=== [2/9] Génération configs MS (N=${N_MS}) ===${NC}"
@@ -193,30 +194,23 @@ echo -e "${GREEN}=== [3/9] Core Osmocom ===${NC}"
 [[ -n "${DEBUG:-}" ]] && echo "[DEBUG] Launching /etc/osmocom/osmo-start.sh..."
 /etc/osmocom/osmo-start.sh
 
-# ── 4. FakeTRX — créer la session tmux ET binder les sockets AVANT bts-trx ───
+# ── 4. FakeTRX ───────────────────────────────────────────────────────────────
 echo -e "${GREEN}=== [4/9] FakeTRX ===${NC}"
-[[ -n "${DEBUG:-}" ]] && echo "[DEBUG] Creating tmux session and fake_trx..."
 
-tmux new-session -d -s "$SESSION" -n faketrx
+tmux new-window -t "$SESSION" -n faketrx
 
 FAKETRX_CMD="python3 ${FAKETRX_PY}"
-# MS1 utilise le port 6700 par défaut (pas de --trx nécessaire).
-# On déclare seulement les TRX additionnels pour MS2..N.
 for ms_idx in $(seq 2 "${N_MS}"); do
     trx_port=$(( 6700 + (ms_idx - 1) * 20 ))
     FAKETRX_CMD="${FAKETRX_CMD} --trx 127.0.0.1:${trx_port}"
 done
 
-[[ -n "${DEBUG:-}" ]] && echo "[DEBUG] FakeTRX Cmd: ${FAKETRX_CMD}"
 echo -e "  ${CYAN}Cmd :${NC} ${FAKETRX_CMD}"
-
 tmux send-keys -t "${SESSION}:faketrx" "${FAKETRX_CMD}" C-m
-wait_udp 5700 "FakeTRX" 30 || true
 
-# ── 5. OsmoBTS-TRX (lancer APRÈS fake_trx pour éviter les race conditions) ───
+# ── 5. OsmoBTS-TRX (APRÈS fake_trx confirmé) ─────────────────────
 echo -e "${GREEN}=== [5/9] OsmoBTS-TRX ===${NC}"
-[[ -n "${DEBUG:-}" ]] && echo "[DEBUG] Launching osmo-bts-trx..."
-# osmo-bts-trx est lancé via osmo-start.sh, on attend juste que ce soit prêt
+systemctl start osmo-bts-trx
 wait_port 127.0.0.1 4241 "OsmoBTS VTY" 60 || true
 
 # ── 6. Fenêtres MS ────────────────────────────────────────────────────────────
@@ -263,24 +257,20 @@ tmux send-keys -t "${SESSION}:asterisk" \
 wait_port 127.0.0.1 5060 "Asterisk SIP" 60 || true
 sleep 3
 
-# ── 8. sip-connector (OPTIONNEL - après Asterisk) ────────────────────────────
+# ── 8. SIP-Connector (APRÈS Asterisk confirmé) ────────────────────
 echo -e "${GREEN}=== [8/9] SIP-Connector ===${NC}"
-[[ -n "${DEBUG:-}" ]] && echo "[DEBUG] sip-connector (optionnel)"
+[[ -n "${DEBUG:-}" ]] && echo "[DEBUG] Starting osmo-sip-connector after Asterisk..."
 
-if command -v sip-connector >/dev/null 2>&1 || [ -f /root/sip-connector.sh ]; then
-    tmux new-window -t "$SESSION" -n sip-connector
-    if [ -f /root/sip-connector.sh ]; then
-        tmux send-keys -t "${SESSION}:sip-connector" \
-            "sleep 3 && bash /root/sip-connector.sh" C-m
-    else
-        tmux send-keys -t "${SESSION}:sip-connector" \
-            "sleep 3 && sip-connector" C-m
-    fi
-    sleep 3
-else
-    echo -e "  ${YELLOW}[*] sip-connector non disponible (optionnel)${NC}"
-fi
+# Attendre que le socket MNCC existe (créé par OsmoMSC)
+echo -ne "  Attente MNCC socket /tmp/msc_mncc"
+elapsed=0
+while [ ! -S /tmp/msc_mncc ] && [ $elapsed -lt 30 ]; do
+    sleep 1; elapsed=$((elapsed + 1)); echo -n "."
+done
+[ -S /tmp/msc_mncc ] && echo -e " ${GREEN}OK${NC}" || echo -e " ${YELLOW}absent${NC}"
 
+systemctl start osmo-sip-connector
+wait_port 127.0.0.1 4255 "SIP-Connector VTY" 30 || true
 # ── 9. SMSC + gapk ───────────────────────────────────────────────────────────
 echo -e "${GREEN}=== [9/9] SMSC + gapk ===${NC}"
 [[ -n "${DEBUG:-}" ]] && echo "[DEBUG] Starting SMSC and gapk..."
@@ -314,10 +304,12 @@ echo ""
 echo -e "  ${CYAN}Navigation :${NC}  Ctrl-b w   Ctrl-b n/p"
 echo ""
 
-[[ -n "${DEBUG:-}" ]] && echo "[DEBUG] run.sh: orchestration complète"
+tmux send-keys -t "${SESSION}:faketrx" C-c
+sleep 10
+echo -e "  ${CYAN}Restart :${NC} ${FAKETRX_CMD}"
+tmux send-keys -t "${SESSION}:faketrx" "${FAKETRX_CMD}" C-m
+sleep 2
 
-# ── Reset TRX via VTY OsmoBTS ─────────────────────────────────────────────────
-echo -e "${GREEN}=== [+] Reset TRX ===${NC}"
-reset_trx
 
+tmux select-window -t "${SESSION}:faketrx"
 tmux attach-session -t "$SESSION"
