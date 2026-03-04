@@ -82,6 +82,40 @@ generate_ms_configs() {
     done
 }
 
+# ── Helper : reset TRX via VTY OsmoBTS (port 4236) ──────────────────────────
+reset_trx() {
+    local vty_host="127.0.0.1" vty_port=4236
+    echo -ne "  Attente VTY OsmoBTS (${vty_host}:${vty_port})"
+    local elapsed=0
+    while ! bash -c "echo >/dev/tcp/${vty_host}/${vty_port}" 2>/dev/null; do
+        sleep 1; elapsed=$((elapsed + 1)); echo -n "."
+        if [ "$elapsed" -ge 60 ]; then
+            echo -e " ${RED}TIMEOUT — reset TRX ignoré${NC}"; return 1
+        fi
+    done
+    echo -e " ${GREEN}OK${NC} (${elapsed}s)"
+
+    cat > /tmp/trx_reset.vty << 'VTYCMDS'
+enable
+trx 0 reset
+end
+VTYCMDS
+
+    if command -v nc >/dev/null 2>&1; then
+        (sleep 1; cat /tmp/trx_reset.vty; sleep 1) \
+            | nc -q2 "${vty_host}" "${vty_port}" 2>/dev/null \
+            | grep -vE "^(OsmoBTS|Welcome|VTY|\s*$)" \
+            | sed "s/^/  /" || true
+    else
+        (sleep 1; cat /tmp/trx_reset.vty; sleep 2) \
+            | telnet "${vty_host}" "${vty_port}" 2>/dev/null \
+            | grep -vE "^(Trying|Connected|Escape|OsmoBTS|Welcome)" \
+            | sed "s/^/  /" || true
+    fi
+    rm -f /tmp/trx_reset.vty
+    echo -e "  ${GREEN}✓ TRX reset envoyé${NC}"
+}
+
 # ── Helper : attendre qu'un port TCP soit ouvert ──────────────────────────────
 wait_port() {
     local host="$1" port="$2" label="$3" timeout="${4:-60}"
@@ -119,11 +153,8 @@ wait_udp() {
 # ── 1. Reset ──────────────────────────────────────────────────────────────────
 echo -e "${GREEN}=== [1/9] Reset ===${NC}"
 usermod -u 0 -o osmocom 2>/dev/null || true
-systemctl stop asterisk 2>/dev/null || true
-asterisk -rx "core stop now" 2>/dev/null || true
-pkill -9 -x asterisk 2>/dev/null || true
-systemctl stop osmo-sip-connector 2>/dev/null || true
-systemctl stop osmo-bts-trx 2>/dev/null || true
+
+pkill -9 -f fake_trx.py 2>/dev/null || true
 sleep 1
 
 tmux kill-server 2>/dev/null || true
@@ -138,13 +169,14 @@ echo ""
 # ── 3. Core Osmocom (sans bts-trx ni sip-connector) ──────────────────────────
 echo -e "${GREEN}=== [3/9] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
-wait_port 127.0.0.1 4254 "OsmoMSC VTY" 60 || true
 
-# ── 4. FakeTRX — bind ses sockets AVANT bts-trx ──────────────────────────────
+# ── 4. FakeTRX — créer la session tmux ET binder les sockets AVANT bts-trx ───
 echo -e "${GREEN}=== [4/9] FakeTRX ===${NC}"
 tmux new-session -d -s "$SESSION" -n faketrx
 
 FAKETRX_CMD="python3 ${FAKETRX_PY}"
+# MS1 utilise le port 6700 par défaut (pas de --trx nécessaire).
+# On déclare seulement les TRX additionnels pour MS2..N.
 for ms_idx in $(seq 2 "${N_MS}"); do
     trx_port=$(( 6700 + (ms_idx - 1) * 20 ))
     FAKETRX_CMD="${FAKETRX_CMD} --trx 127.0.0.1:${trx_port}"
@@ -152,11 +184,6 @@ done
 echo -e "  ${CYAN}Cmd :${NC} ${FAKETRX_CMD}"
 tmux send-keys -t "${SESSION}:faketrx" "${FAKETRX_CMD}" C-m
 wait_udp 5700 "FakeTRX" 30 || true
-
-# ── 5. osmo-bts-trx — une seule fois, fake_trx déjà prêt ────────────────────
-echo -e "${GREEN}=== [5/9] osmo-bts-trx ===${NC}"
-systemctl start osmo-bts-trx
-wait_port 127.0.0.1 4238 "OsmoBTS VTY" 30 || true
 
 # ── 6. Fenêtres MS ────────────────────────────────────────────────────────────
 echo -e "${GREEN}=== [6/9] MS (${N_MS}) ===${NC}"
@@ -171,9 +198,13 @@ for ms_idx in $(seq 1 "${N_MS}"); do
 
     tmux new-window -t "$SESSION" -n "$win"
 
+    if [ "$ms_idx" -eq 1 ]; then
+        trxcon_cmd="trxcon -s ${l2_socket}"
+    else
+        trxcon_cmd="trxcon -p ${trx_port} -s ${l2_socket}"
+    fi
     tmux send-keys -t "${SESSION}:${win}.0" \
-        "echo '=== trxcon MS${ms_idx} → fake_trx:${trx_port} ===' && sleep 2 && \
-         trxcon -p ${trx_port} -s ${l2_socket}" C-m
+        "echo '=== trxcon MS${ms_idx} → fake_trx:${trx_port} ===' && sleep 2 && ${trxcon_cmd}" C-m
 
     tmux split-window -v -t "${SESSION}:${win}"
     tmux send-keys -t "${SESSION}:${win}.1" \
@@ -186,22 +217,10 @@ done
 echo -e "${GREEN}=== [7/9] Asterisk ===${NC}"
 tmux new-window -t "$SESSION" -n asterisk
 tmux send-keys -t "${SESSION}:asterisk" \
-    "rm -f /var/lib/asterisk/astdb.sqlite3 && asterisk -cvvv" C-m
+    "pkill asterisk 2>/dev/null; sleep 2; pkill -9 asterisk 2>/dev/null; sleep 1; rm -f /var/lib/asterisk/astdb.sqlite3; asterisk -cvvv" C-m
 
 wait_port 127.0.0.1 5060 "Asterisk SIP" 60 || true
 sleep 3
-
-# ── 8. osmo-sip-connector ─────────────────────────────────────────────────────
-echo -e "${GREEN}=== [8/9] osmo-sip-connector ===${NC}"
-tmux new-window -t "$SESSION" -n sip-connector
-tmux send-keys -t "${SESSION}:sip-connector" \
-    "echo '=== Attente MNCC socket /tmp/msc_mncc ===' && \
-     until [ -S /tmp/msc_mncc ]; do sleep 1; echo -n '.'; done && echo '' && \
-     echo '=== MNCC OK — start connector ===' && \
-     systemctl start osmo-sip-connector && \
-     sleep 2 && journalctl -fu osmo-sip-connector" \
-    C-m
-sleep 5
 
 # ── 9. SMSC + gapk ───────────────────────────────────────────────────────────
 echo -e "${GREEN}=== [9/9] SMSC + gapk ===${NC}"
@@ -215,7 +234,6 @@ tmux send-keys -t "${SESSION}:gapk" \
 
 tmux select-window -t "${SESSION}:ms1"
 
-# ── Résumé ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║  Opérateur ${OPERATOR_ID} — Stack prête  (${N_MS} MS)                    ║${NC}"
@@ -231,5 +249,9 @@ echo -e "  ${CYAN}VTY HLR    :${NC} telnet 127.0.0.1 4258"
 echo ""
 echo -e "  ${CYAN}Navigation :${NC}  Ctrl-b w   Ctrl-b n/p"
 echo ""
+
+# ── Reset TRX via VTY OsmoBTS ─────────────────────────────────────────────────
+echo -e "${GREEN}=== [+] Reset TRX ===${NC}"
+reset_trx
 
 tmux attach-session -t "$SESSION"

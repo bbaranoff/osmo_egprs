@@ -27,21 +27,19 @@ echo "[1/4] Configuration réseau et interface TUN..."
 
 echo "[2/4] Lancement de la signalisation (STP, HLR, MGW)..."
 systemctl start osmo-stp
-sleep 1
 systemctl start osmo-hlr
 systemctl start osmo-mgw
 
 echo "[3/4] Lancement du Core Network (MSC, BSC)..."
 systemctl start osmo-msc
-sleep 2
 systemctl start osmo-bsc
-sleep 3
 
 echo "[4/4] Lancement des services DATA (GGSN, SGSN, PCU)..."
 systemctl start osmo-ggsn
 systemctl start osmo-sgsn
-sleep 1
+systemctl start osmo-bts
 systemctl start osmo-pcu
+systemctl start osmo-sip-connector
 sleep 1
 chmod 777 /tmp/pcu_bts 2>/dev/null || true
 
