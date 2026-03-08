@@ -22,6 +22,14 @@ RUN mkdir -p \
 RUN apt-get install -y --no-install-recommends telnet iproute2 tmux && \
     rm -rf /var/lib/apt/lists/*
 
+# ── Patch fake_trx : forcer TRXD v0 ─────────────────────────────────────────
+# osmo-bts-trx 1.10+ négocie TRXD v1 via SETFORMAT, mais trxcon (OsmocomBB)
+# ne supporte que v0. Le header v1 a 2 octets de plus → décalage des soft-bits
+# → BER constant 55/456 sur chaque frame → FBSB_SEARCH échoue en boucle.
+# Fix : forcer ver_req=0 dans la réponse SETFORMAT → le BTS reste en v0.
+RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/' \
+    /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
+
 # ── Scripts ────────────────────────────────────────────────────────────────────
 COPY scripts/ /scripts/
 RUN chmod +x /scripts/*.sh

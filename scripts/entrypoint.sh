@@ -58,45 +58,7 @@ else
   echo >&2 'ERROR: systemd is not installed'
   exit 1
 fi
-# ── Répertoires ───────────────────────────────────────────────────────────────
-RUN mkdir -p \
-    /etc/osmocom /etc/asterisk \
-    /var/lib/asterisk /var/log/asterisk /var/run/asterisk \
-    /var/log/osmocom /var/run/smsc \
-    /root/.osmocom/bb /scripts && \
-    chmod 755 /etc/asterisk /var/lib/asterisk /var/log/asterisk \
-              /var/run/asterisk /var/log/osmocom
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends telnet iproute2 tmux && \
-    rm -rf /var/lib/apt/lists/*
-
-# ── Scripts généraux ──────────────────────────────────────────────────────────
-COPY scripts/ /scripts/
-RUN chmod +x /scripts/*.sh 2>/dev/null || true
-
-# ── Configs ───────────────────────────────────────────────────────────────────
-COPY configs/*.conf /etc/asterisk/
-COPY configs/*.cfg /etc/osmocom/
-COPY configs/sms-routing.conf /etc/osmocom/sms-routing.conf
-COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
-
-# ── Scripts SMS (proto-smsc-daemon + interop relay) ───────────────────────────
-COPY scripts/osmo-start.sh        /root/osmo-start.sh
-COPY scripts/run.sh               /root/run.sh
-COPY scripts/smsc-start.sh        /etc/osmocom/smsc-start.sh
-COPY scripts/send-mt-sms.sh       /etc/osmocom/send-mt-sms.sh
-COPY scripts/sms-interop-relay.py /etc/osmocom/sms-interop-relay.py
-COPY var/*                         /var/lib/osmocom/
-
-RUN chmod +x /root/osmo-start.sh /root/run.sh \
-    /etc/osmocom/smsc-start.sh /etc/osmocom/send-mt-sms.sh \
-    /etc/osmocom/sms-interop-relay.py
-
-# ── Vérification binaires ────────────────────────────────────────────────────
-RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
-    echo "=== proto-smsc binaries OK ===" || \
-    echo "WARNING: proto-smsc binaries not found"
-
-# ── Port TCP relay interop SMS (communication entre containers) ───────────────
-EXPOSE 7890
+# NOTE : Les directives RUN/COPY/EXPOSE qui étaient ici sont des instructions
+# Dockerfile et doivent être dans le Dockerfile, pas dans ce script.
+# exec systemd remplace le process — rien après cette ligne n'est exécuté.
