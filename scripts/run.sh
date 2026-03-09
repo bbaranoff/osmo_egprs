@@ -388,7 +388,7 @@ tmux new-window -t "$SESSION" -n faketrx
 # -p  = BB base port  (défaut 6700, trxcon MS1 s'y connecte)
 FAKETRX_CMD="python3 ${FAKETRX_PY} -b 127.0.0.1 -R 127.0.0.1 -r 127.0.0.1 -P 5700 -p 6700"
 for ms_idx in $(seq 2 "${N_MS}"); do
-    trx_port=$(( 6700 + (ms_idx - 1) * 20 ))
+    trx_port=$(( 6700 + (ms_idx - 1) * 10 ))
     FAKETRX_CMD="${FAKETRX_CMD} --trx 127.0.0.1:${trx_port}"
 done
 
@@ -418,7 +418,7 @@ tmux new-window -t "$SESSION" -n trxcon
 
 for ms_idx in $(seq 1 "${N_MS}"); do
     l2_sock="${L2_SOCK_BASE}_${ms_idx}"
-    trx_port=$(( 6700 + (ms_idx - 1) * 20 ))
+    trx_port=$(( 6700 + (ms_idx - 1) * 10 ))
 
     # Toujours explicite : bind, remote, port, max-clients=1
     trxcon_cmd="trxcon -C 1 -b 127.0.0.1 -i 127.0.0.1 -p ${trx_port} -s ${l2_sock} -F 100"

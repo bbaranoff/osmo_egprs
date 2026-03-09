@@ -5,15 +5,15 @@
 #
 # Topologie SS7 en mode bridge (exemple 3 opérateurs) :
 #
-#         ┌──────────── Inter-STP (PC 0.23.0) ──────────────┐
+#         ┌──────────── Inter-STP (PC 0.0.0) ───────────────┐
 #         │  172.20.0.10:2908 (dynamic-permitted)            │
 #         └─────────────────────────────────────────────────┘
 #              ▲ RCTX 150    ▲ RCTX 250    ▲ RCTX 350
 #   ┌──────────┴───┐  ┌──────┴───────┐  ┌──┴────────────┐
 #   │ Op1:172.20.0.11│  │Op2:172.20.0.12│  │Op3:172.20.0.13│
-#   │ STP 1.23.2    │  │ STP 2.23.2   │  │ STP 3.23.2   │
-#   │ MSC 1.23.1    │  │ MSC 2.23.1   │  │ MSC 3.23.1   │
-#   │ BSC 1.23.3    │  │ BSC 2.23.3   │  │ BSC 3.23.3   │
+#   │ STP 1.1.2    │  │ STP 1.2.2    │  │ STP 1.3.2    │
+#   │ MSC 1.1.1    │  │ MSC 1.2.1    │  │ MSC 1.3.1    │
+#   │ BSC 1.1.3    │  │ BSC 1.2.3    │  │ BSC 1.3.3    │
 #   └───────────────┘  └──────────────┘  └──────────────┘
 #
 # Réseau backbone : gsm-inter (172.20.0.0/24)
@@ -236,9 +236,9 @@ _generate_sms_routing_conf_fallback() {
 #   $2  container_ip   IP privée (172.20.N.10)
 #   $3  gateway_ip     Passerelle réseau privé (172.20.N.1)
 #   $4  op_id          Identifiant opérateur (1…N)
-#   $5  pc_msc         Point code MSC (N.23.1)
-#   $6  pc_stp         Point code STP (N.23.2)
-#   $7  pc_bsc         Point code BSC (N.23.3)
+#   $5  pc_msc         Point code MSC (1.N.1)
+#   $6  pc_stp         Point code STP (1.N.2)
+#   $7  pc_bsc         Point code BSC (1.N.3)
 #   $8  mcc            Mobile Country Code (ex: 001)
 #   $9  mnc            Mobile Network Code (ex: 01)
 #   $10 op_name        Nom opérateur
@@ -290,7 +290,7 @@ apply_config_templates() {
     local arfcn=$(( 512 + op_id * 2 ))
     local ipa_unit_id=$(( 6000 + op_id ))
     local cell_id=$(( 6000 + op_id ))
-    local bsic=$(( 60 + op_id ))
+    local bsic=$(( (op_id * 7) % 64 ))
     local bvci=$(( op_id * 10 + 2 ))
     local nsei=$(( op_id * 10 ))
     local nsvci=$(( op_id * 10 ))
@@ -407,7 +407,7 @@ start_inter_stp() {
         echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
     fi
 
-    echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.23.0)...${NC}"
+    echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.0.0)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
 
     docker run -d \
@@ -491,7 +491,7 @@ start_operator() {
 
     echo -e "${CYAN}── Opérateur ${op_id} : ${op_name} (MCC=${mcc} MNC=${mnc}) ──${NC}"
     echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Privé : ${CYAN}${container_ip}${NC}"
-    echo -e "  STP PC     : ${op_id}.23.2  RCTX inter : ${rctx_inter}  MS : ${CYAN}${n_ms}${NC}"
+    echo -e "  STP PC     : 1.${op_id}.2  RCTX inter : ${rctx_inter}  MS : ${CYAN}${n_ms}${NC}"
 
     # Réseau privé par opérateur
     docker network inspect "$net_name" &>/dev/null || \
@@ -502,7 +502,7 @@ start_operator() {
     tmpdir=$(mktemp -d)
     apply_config_templates "$tmpdir" \
         "$container_ip" "$gateway" \
-        "$op_id" "${op_id}.23.1" "${op_id}.23.2" "${op_id}.23.3" \
+        "$op_id" "1.${op_id}.1" "1.${op_id}.2" "1.${op_id}.3" \
         "$mcc" "$mnc" "$op_name" \
         "$INTER_STP_IP" "no shutdown" \
         "$n_operators"
@@ -591,7 +591,7 @@ start_host_mode() {
     tmpdir=$(mktemp -d)
     apply_config_templates "$tmpdir" \
         "$src_ip" "$gw_ip" \
-        "1" "1.23.1" "1.23.2" "1.23.3" \
+        "1" "1.1.1" "1.1.2" "1.1.3" \
         "001" "01" "OsmoGSM" \
         "127.0.0.1" "shutdown" \
         "1"
@@ -707,13 +707,13 @@ start_bridge_mode() {
     echo ""
     echo -e "${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
     echo ""
-    echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC}  PC=0.23.0"
+    echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC}  PC=0.0.0"
     for i in $(seq 1 "$n_operators"); do
         local rctx
         rctx=$(op_rctx_inter "$i")
         local bb_ip
         bb_ip=$(op_backbone_ip "$i")
-        echo -e "  Op${i} ${OP_NAME[$i]}  STP ${i}.23.2 @ ${bb_ip}  ──RCTX ${rctx}──►  inter-STP  [MS: ${OP_MS[$i]}]"
+        echo -e "  Op${i} ${OP_NAME[$i]}  STP 1.${i}.2 @ ${bb_ip}  ──RCTX ${rctx}──►  inter-STP  [MS: ${OP_MS[$i]}]"
     done
     echo ""
 
@@ -790,14 +790,14 @@ XTERM_SCRIPT
     local tmpscript_stp="/tmp/osmo-xterm-stp.sh"
     cat > "$tmpscript_stp" << XTERM_STP
 #!/bin/bash
-echo "=== Inter-STP 0.23.0 @ ${INTER_STP_IP}:2908 ==="
+echo "=== Inter-STP 0.0.0 @ ${INTER_STP_IP}:2908 ==="
 echo "  VTY : sudo docker exec -it ${INTER_STP_CONTAINER} telnet 127.0.0.1 4239"
 echo ""
 sleep 3
 exec sudo docker exec -ti ${INTER_STP_CONTAINER} tmux attach -t stp
 XTERM_STP
 
-    _open_term_script "Inter-STP (PC 0.23.0)" "$tmpscript_stp"
+    _open_term_script "Inter-STP (PC 0.0.0)" "$tmpscript_stp"
 }
 
 

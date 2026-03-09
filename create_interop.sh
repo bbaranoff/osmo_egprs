@@ -6,22 +6,22 @@
 #   $2  outfile       Chemin fichier config de sortie (défaut: osmo-stp-interop.cfg)
 #
 # Topologie :
-#   Inter-STP (PC 0.23.0) @ 0.0.0.0:2908
-#   ├── Reçoit connexion ASP Op1 (PC 1.23.2, RCTX 150)
-#   ├── Reçoit connexion ASP Op2 (PC 2.23.2, RCTX 250)
-#   └── Reçoit connexion ASP Op3 (PC 3.23.2, RCTX 350)
+#   Inter-STP (PC 0.0.0) @ 0.0.0.0:2908
+#   ├── Reçoit connexion ASP Op1 (PC 1.1.2, RCTX 150)
+#   ├── Reçoit connexion ASP Op2 (PC 1.2.2, RCTX 250)
+#   └── Reçoit connexion ASP Op3 (PC 1.3.2, RCTX 350)
 #
 # IMPORTANT : Les routing-keys doivent matcher exactement ce que les STP locaux envoient
-# STP local Op1 envoie : routing-key 150 1.23.2
-# Inter-STP AS doit recevoir : routing-key 150 1.23.2 (MATCH!)
+# STP local Op1 envoie : routing-key 150 1.1.2
+# Inter-STP AS doit recevoir : routing-key 150 1.1.2 (MATCH!)
 
 set -e
 
 n_operators="${1:-2}"
 outfile="${2:-osmo-stp-interop.cfg}"
 
-if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 9 ]; then
-    echo "Erreur : n_operators doit être 1..9" >&2
+if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 255 ]; then
+    echo "Erreur : n_operators doit être 1..255" >&2
     exit 1
 fi
 
@@ -29,7 +29,7 @@ cat > "$outfile" <<'EOFCONFIG'
 !
 ! osmo-stp-interop.cfg — Configuration inter-STP centrale
 !
-! PC 0.23.0 : hub de routage SS7 pour N opérateurs
+! PC 0.0.0 : hub de routage SS7 pour N opérateurs
 ! Écoute les connexions ASP des STP locaux sur 0.0.0.0:2908
 ! Route les messages vers les destinations appropriées via les AS
 !
@@ -54,7 +54,7 @@ line vty
 !
 cs7 instance 0
  network-indicator international
- point-code 0.23.0
+ point-code 0.0.0
 !
  ! ── Server : écoute les connexions ASP des opérateurs ────────────────
  ! Les STP locaux se connectent ici avec leurs ASP client
@@ -68,10 +68,10 @@ EOFCONFIG
 
 # Générer dynamiquement les AS pour chaque opérateur
 # Les routing-keys DOIVENT matcher ce que les STP locaux envoient
-# STP local Op i envoie : routing-key (i*100+50) i.23.2
+# STP local Op i envoie : routing-key (i*100+50) 1.i.2
 for i in $(seq 1 "$n_operators"); do
     rctx_inter=$(( i * 100 + 50 ))
-    pc_stp="${i}.23.2"    # PC du STP local (IMPORTANT!)
+    pc_stp="1.${i}.2"    # PC du STP local (IMPORTANT!)
     
     cat >> "$outfile" <<EOF
 
@@ -92,12 +92,12 @@ cat >> "$outfile" <<'EOFROUTES'
 EOFROUTES
 
 for i in $(seq 1 "$n_operators"); do
-    msc_pc="${i}.23.1"
-    bsc_pc="${i}.23.3"
+    msc_pc="1.${i}.1"
+    bsc_pc="1.${i}.3"
     
     cat >> "$outfile" <<EOF
-  update route ${msc_pc} ${msc_pc} linkset as-op${i}
-  update route ${bsc_pc} ${bsc_pc} linkset as-op${i}
+  update route ${msc_pc} 7.255.7 linkset as-op${i}
+  update route ${bsc_pc} 7.255.7 linkset as-op${i}
 EOF
 done
 
