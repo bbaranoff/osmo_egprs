@@ -116,7 +116,7 @@ build_alsa_args() {
 # ══════════════════════════════════════════════════════════════════════════════
 build_run_image() {
     echo -e "${GREEN}Build de l'image run (Dockerfile.run)...${NC}"
-    docker build -f Dockerfile.run -t "$IMAGE_RUN" .
+    docker build --no-cache -f Dockerfile.run -t "$IMAGE_RUN" .
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
 }
 
@@ -304,6 +304,7 @@ apply_config_templates() {
     for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
         [ -f "$f" ] || continue
         sed -i \
+            -e "s|__INTER_NET_GATEWAY__|172.20.0.1|g" \
             -e "s|__CONTAINER_IP__|${container_ip}|g" \
             -e "s|__GATEWAY_IP__|${gateway_ip}|g" \
             -e "s|__HLR_IP__|127.0.0.2|g" \
@@ -464,7 +465,50 @@ wait_inter_stp_ready() {
     echo -e " ${GREEN}✓${NC}"
     return 0
 }
+# ── Attente BB VTY ──────────────────────────────────────────────────────────
+wait_bb_vty() {
+    local container="$1"
+    local timeout=120
+    local elapsed=0
 
+    echo -ne "  Attente BB VTY 4247 "
+
+    while ! docker exec "$container" bash -c \
+        "echo >/dev/tcp/127.0.0.1/4247" 2>/dev/null; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        echo -n "."
+
+        if [ "$elapsed" -ge "$timeout" ]; then
+            echo -e " ${RED}TIMEOUT${NC}"
+            echo "Verifier : docker logs $container"
+            return 1
+        fi
+    done
+
+    echo -e " ${GREEN}OK${NC}"
+}
+wait_stp_vty() {
+    local container="$1"
+    local timeout=60
+    local elapsed=0
+
+    echo -ne "  Attente STP VTY 4239 "
+
+    while ! docker exec "$container" bash -c \
+        "echo >/dev/tcp/127.0.0.1/4239" 2>/dev/null; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        echo -n "."
+
+        if [ "$elapsed" -ge "$timeout" ]; then
+            echo -e " ${RED}TIMEOUT${NC}"
+            return 1
+        fi
+    done
+
+    echo -e " ${GREEN}OK${NC}"
+}
 # ══════════════════════════════════════════════════════════════════════════════
 # Démarrage d'un opérateur
 #
@@ -476,85 +520,380 @@ wait_inter_stp_ready() {
 #   $5  n_operators   Nombre total d'opérateurs
 #   $6  n_ms          Nombre de Mobile Stations pour cet opérateur (défaut: 1)
 # ══════════════════════════════════════════════════════════════════════════════
-start_operator() {
-    local op_id=$1 mcc=$2 mnc=$3 op_name=$4 n_operators=$5 n_ms=${6:-1}
-    local container_name net_name subnet gateway container_ip inter_local_ip
+# ══════════════════════════════════════════════════════════════════════════════
+# Mode bridge (N opérateurs avec inter-STP central)
+# ══════════════════════════════════════════════════════════════════════════════
+start_bridge_mode() {
+    # ── Saisie du nombre d'opérateurs ──────────────────────────────────────
+    local n_operators
+    read -rp "Nombre d'opérateurs [2] : " n_operators
+    n_operators=${n_operators:-2}
+    if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 36 ]; then
+        echo -e "${RED}Nombre invalide (1–36).${NC}"; exit 1
+    fi
 
-    container_name=$(op_container "$op_id")
-    net_name="gsm-net-op${op_id}"
-    subnet=$(op_private_net "$op_id")
-    gateway=$(op_private_gw "$op_id")
-    container_ip=$(op_private_ip "$op_id")
-    inter_local_ip=$(op_backbone_ip "$op_id")
-    local rctx_inter
-    rctx_inter=$(op_rctx_inter "$op_id")
+    # ── Option pour utiliser les valeurs par défaut pour tous ───────────────
+    local use_defaults
+    read -rp "Utiliser les valeurs par défaut pour tous (MCC=001, MNC=01/02/..., Nom=OsmoOPx) ? [o/N] : " use_defaults
 
-    echo -e "${CYAN}── Opérateur ${op_id} : ${op_name} (MCC=${mcc} MNC=${mnc}) ──${NC}"
-    echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Privé : ${CYAN}${container_ip}${NC}"
-    echo -e "  STP PC     : 1.${op_id}.2  RCTX inter : ${rctx_inter}  MS : ${CYAN}${n_ms}${NC}"
+    # ── Option pour définir le même nombre de MS pour tous les opérateurs ──
+    local same_ms_all="N"  # Initialisation par défaut
+    if [[ ! "$use_defaults" =~ ^[OoYy]$ ]]; then
+        read -rp "Même nombre de MS pour tous les opérateurs ? [o/N] : " same_ms_all
+        same_ms_all=${same_ms_all:-N}
+    fi
+    
+    # ── Saisie des paramètres par opérateur ────────────────────────────────
+    declare -A OP_MCC OP_MNC OP_NAME OP_MS
+    
+    if [[ "$use_defaults" =~ ^[OoYy]$ ]]; then
+        # Mode valeurs par défaut pour tous
+        # Demander le nombre de MS même en mode défaut
+        local common_ms
+        read -rp "  Nombre de MS pour chaque opérateur [8] : " common_ms
+        common_ms=${common_ms:-8}
+        if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then
+            echo -e "${YELLOW}  Valeur invalide, forcée à 8${NC}"
+            common_ms=8
+        fi
+        echo -e "${GREEN}  → Tous les opérateurs auront ${common_ms} MS${NC}"
+        
+        for i in $(seq 1 "$n_operators"); do
+            OP_MCC[$i]="001"
+            OP_MNC[$i]=$(printf '%02d' "$i")
+            OP_NAME[$i]="OsmoOP${i}"
+            OP_MS[$i]=$common_ms
+            echo -e "${CYAN}── Opérateur ${i} ──${NC}"
+            echo -e "  → MCC=001  MNC=${OP_MNC[$i]}  Nom=OsmoOP${i}  MS=${CYAN}${OP_MS[$i]}${NC}"
+        done
+    else
+        # Mode saisie manuelle
+        if [[ "$same_ms_all" =~ ^[OoYy]$ ]]; then
+            # MS identique pour tous
+            local common_ms
+            read -rp "  Nombre de MS pour chaque opérateur [8] : " common_ms
+            common_ms=${common_ms:-8}
+            if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then
+                echo -e "${YELLOW}  Valeur invalide, forcée à 8${NC}"
+                common_ms=8
+            fi
+            echo -e "${GREEN}  → Tous les opérateurs auront ${common_ms} MS${NC}"
+            
+            for i in $(seq 1 "$n_operators"); do
+                echo -e "${CYAN}── Opérateur ${i} ──${NC}"
+                read -rp "  MCC   [001]      : " mcc;  OP_MCC[$i]=${mcc:-001}
+                read -rp "  MNC   [$(printf '%02d' "$i")]     : " mnc
+                OP_MNC[$i]=${mnc:-$(printf '%02d' "$i")}
+                read -rp "  Nom   [OsmoOP${i}]: " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                OP_MS[$i]=$common_ms
+                echo -e "  → MCC=${OP_MCC[$i]}  MNC=${OP_MNC[$i]}  Nom=${OP_NAME[$i]}  MS=${CYAN}${OP_MS[$i]}${NC}"
+            done
+        else
+            # MS différents par opérateur (saisie complète)
+            for i in $(seq 1 "$n_operators"); do
+                echo -e "${CYAN}── Opérateur ${i} ──${NC}"
+                read -rp "  MCC   [001]      : " mcc;  OP_MCC[$i]=${mcc:-001}
+                read -rp "  MNC   [$(printf '%02d' "$i")]     : " mnc
+                OP_MNC[$i]=${mnc:-$(printf '%02d' "$i")}
+                read -rp "  Nom   [OsmoOP${i}]: " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                read -rp "  MS    [1]         : " n_ms; OP_MS[$i]=${n_ms:-1}
+                if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then
+                    echo -e "  ${YELLOW}Nombre de MS invalide, forcé à 1${NC}"
+                    OP_MS[$i]=1
+                fi
+                echo -e "  → MCC=${OP_MCC[$i]}  MNC=${OP_MNC[$i]}  Nom=${OP_NAME[$i]}  MS=${CYAN}${OP_MS[$i]}${NC}"
+            done
+        fi
+    fi
+    # ── Réseau backbone ────────────────────────────────────────────────────
+    echo -e "${GREEN}Création du réseau backbone ${INTER_NET}...${NC}"
+    docker network inspect "$INTER_NET" &>/dev/null || \
+        docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" "$INTER_NET" &>/dev/null
 
-    # Réseau privé par opérateur
-    docker network inspect "$net_name" &>/dev/null || \
-        docker network create --subnet="$subnet" --gateway="$gateway" "$net_name" &>/dev/null
+    # ── SMS Routing ────────────────────────────────────────────────────────
+    SMS_ROUTING_DIR=$(mktemp -d)
+    if declare -f sms_routing_generate_all > /dev/null 2>&1; then
+        echo -e "${GREEN}Génération tables SMS routing (${n_operators} ops)...${NC}"
+        local _ms_counts=()
+        for i in $(seq 1 "$n_operators"); do
+            _ms_counts+=("${OP_MS[$i]}")
+        done
+        sms_routing_generate_all "$n_operators" "$SMS_ROUTING_DIR" "${_ms_counts[@]}"
+        sms_routing_summary "$n_operators" "${_ms_counts[@]}"
+    fi
 
-    # Génération des configs
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    apply_config_templates "$tmpdir" \
-        "$container_ip" "$gateway" \
-        "$op_id" "1.${op_id}.1" "1.${op_id}.2" "1.${op_id}.3" \
-        "$mcc" "$mnc" "$op_name" \
-        "$INTER_STP_IP" "no shutdown" \
-        "$n_operators"
+    # ── Inter-STP ──────────────────────────────────────────────────────────
+    start_inter_stp "$n_operators"
+    wait_inter_stp_ready "$n_operators"
 
-    local vol_args
-    vol_args=$(build_vol_args "$tmpdir")
-    local alsa_args
-    alsa_args=$(build_alsa_args)
+    # ── Préparation des données pour HLR feed (tous les opérateurs) ────────
+    local all_subscribers_file
+    all_subscribers_file=$(mktemp)
+    
+    echo "# Format: op_id:ms_idx:imsi:msisdn:ki" > "$all_subscribers_file"
+    for op_id in $(seq 1 "$n_operators"); do
+        mcc="${OP_MCC[$op_id]}"
+        mnc="${OP_MNC[$op_id]}"
+        n_ms="${OP_MS[$op_id]}"
+        for ms_idx in $(seq 1 "$n_ms"); do
+            msin=$(printf '%04d%06d' "${op_id}" "${ms_idx}")
+            imsi="${mcc}${mnc}${msin}"
+            msisdn=$(( op_id * 10000 + ms_idx ))
+            ki=$(printf '00112233445566778899aabbccdd%02x%02x' "${ms_idx}" "${op_id}")
+            echo "${op_id}:${ms_idx}:${imsi}:${msisdn}:${ki}" >> "$all_subscribers_file"
+        done
+    done
+    
+    total_subs=$(wc -l < "$all_subscribers_file")
+    total_subs=$((total_subs - 1))
+    echo -e "${GREEN}Total abonnés à injecter dans chaque HLR : ${total_subs}${NC}"
+    echo ""
 
-    docker rm -f "$container_name" &>/dev/null || true
+    # ── Démarrage séquentiel des opérateurs ────────────────────────────────
+    for i in $(seq 1 "$n_operators"); do
+        local container_name net_name subnet gateway container_ip inter_local_ip rctx_inter
+        local n_groups last_group_ip
 
-    # shellcheck disable=SC2086
-    docker run -d \
-        --name "$container_name" \
-        --network "$INTER_NET" \
-        --ip "$inter_local_ip" \
-        --cap-add NET_ADMIN \
-        --cap-add SYS_ADMIN \
-        --cgroupns host \
-        --device /dev/net/tun:/dev/net/tun \
-        $alsa_args \
-        -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-        -e OPERATOR_ID="$op_id" \
-        -e N_MS="$n_ms" \
-        -e CONTAINER_IP="$container_ip" \
-        -e GATEWAY_IP="$gateway" \
-        -e INTER_STP_IP="$INTER_STP_IP" \
-        $vol_args \
-        "$IMAGE_RUN" \
-        /etc/osmocom/run.sh > /dev/null
+        container_name=$(op_container "$i")
+        net_name="gsm-net-op${i}"
+        subnet=$(op_private_net "$i")
+        gateway=$(op_private_gw "$i")
+        container_ip=$(op_private_ip "$i")
+        inter_local_ip=$(op_backbone_ip "$i")
+        rctx_inter=$(op_rctx_inter "$i")
+        
+        # Calcul du nombre de groupes et IP du dernier groupe
+        n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
+        last_group_ip="127.0.0.${n_groups}"
 
-    # Attacher le réseau privé (après démarrage — évite la race condition)
-    docker network connect --ip "$container_ip" "$net_name" "$container_name"
-    echo -e "  ${GREEN}✓${NC} ${container_name} démarré  (${n_ms} MS)"
+        echo -e "${CYAN}── Opérateur ${i} : ${OP_NAME[$i]} (MCC=${OP_MCC[$i]} MNC=${OP_MNC[$i]}) ──${NC}"
+        echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Privé : ${CYAN}${container_ip}${NC}"
+        echo -e "  STP PC     : 1.${i}.2  RCTX inter : ${rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
+        echo -e "  Groupes    : ${n_groups}  Dernier groupe IP : ${last_group_ip}:4247"
 
-    # Lancer l'orchestrateur tmux en background avec délai.
-    #
-    # /etc/osmocom/run.sh (CMD docker run) = boot systemd + services Osmocom.
-    # /root/run.sh                         = orchestrateur tmux (notre script).
-    # On attend 8s que systemd ait stabilisé les services Osmocom avant tmux.
-    local _cname="$container_name"
-    local _opid="$op_id"
-    local _nms="$n_ms"
-    (
-        sleep 8
-        docker exec -d "$_cname" bash -c \
-            "OPERATOR_ID=${_opid} N_MS=${_nms} /root/run.sh \
-             >> /var/log/osmocom/run-orchestrator.log 2>&1"
-    ) &
+        # Réseau privé
+        docker network inspect "$net_name" &>/dev/null || \
+            docker network create --subnet="$subnet" --gateway="$gateway" "$net_name" &>/dev/null
+
+        # Génération des configs
+        local tmpdir
+        tmpdir=$(mktemp -d)
+        apply_config_templates "$tmpdir" \
+            "$container_ip" "$gateway" \
+            "$i" "1.${i}.1" "1.${i}.2" "1.${i}.3" \
+            "${OP_MCC[$i]}" "${OP_MNC[$i]}" "${OP_NAME[$i]}" \
+            "$INTER_STP_IP" "no shutdown" \
+            "$n_operators"
+
+        local vol_args
+        vol_args=$(build_vol_args "$tmpdir")
+        local alsa_args
+        alsa_args=$(build_alsa_args)
+
+        docker rm -f "$container_name" &>/dev/null || true
+
+        # Dossier de logs séparé par opérateur
+        mkdir -p /tmp/osmocom-logs/op${i}
+
+        # Lancement du container
+        # shellcheck disable=SC2086
+        docker run -d \
+            --name "$container_name" \
+            --network "$INTER_NET" \
+            --ip "$inter_local_ip" \
+            --cap-add NET_ADMIN \
+            --cap-add SYS_ADMIN \
+            --cgroupns host \
+            --device /dev/net/tun:/dev/net/tun \
+            $alsa_args \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v /tmp/osmocom-logs/op${i}:/var/log/osmocom \
+            --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+            -e OPERATOR_ID="$i" \
+            -e N_MS="${OP_MS[$i]}" \
+            -e CONTAINER_IP="$container_ip" \
+            -e GATEWAY_IP="$gateway" \
+            -e INTER_STP_IP="$INTER_STP_IP" \
+            $vol_args \
+            "$IMAGE_RUN" \
+            sleep infinity
+
+        # Attacher réseau privé
+        docker network connect --ip "$container_ip" "$net_name" "$container_name"
+        echo -e "  ${GREEN}[*] Réseau privé attaché${NC}"
+
+        # Lancer run.sh
+        echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
+        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && /etc/osmocom/run.sh > /var/log/osmocom/run.sh.log 2>&1"
+
+        # Attendre que le HLR soit prêt
+        echo -ne "  ${GREEN}[*] Attente HLR (port 4258)${NC}"
+        local retry=0
+        while ! docker exec "$container_name" bash -c "echo >/dev/tcp/127.0.0.1/4258" 2>/dev/null; do
+            sleep 2
+            echo -n "."
+            retry=$((retry + 1))
+            if [ $retry -ge 45 ]; then
+                echo -e " ${RED}TIMEOUT${NC}"
+                docker logs "$container_name" --tail 20
+                return 1
+            fi
+        done
+        echo -e " ${GREEN}✓${NC}"
+
+        # Alimenter le HLR avec TOUS les abonnés (pré-calculés)
+        echo -e "  ${GREEN}[*] Alimentation HLR Op${i} avec tous les abonnés (${total_subs})...${NC}"
+
+        # Utiliser la même méthode que hlr-feed-subscribers.sh (via stdin)
+        {
+            echo "#!/bin/bash"
+            echo "cat > /tmp/hlr_feed.vty << 'VTYCMDS'"
+            echo "enable"
+            while IFS=: read -r op_id ms_idx imsi msisdn ki; do
+                # Ignorer l'en-tête
+                [[ "$op_id" =~ ^#.*$ ]] && continue
+                echo "subscriber imsi ${imsi} create"
+                echo "subscriber imsi ${imsi} update msisdn ${msisdn}"
+                echo "subscriber imsi ${imsi} update aud2g comp128v1 ki ${ki}"
+            done < "$all_subscribers_file"
+            echo "end"
+            echo "VTYCMDS"
+        } | docker exec -i "$container_name" bash
+
+        # Exécuter les commandes VTY
+        docker exec "$container_name" bash -c '
+            if command -v nc >/dev/null 2>&1; then
+                (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) \
+                    | nc -q2 127.0.0.1 4258 2>/dev/null \
+                    | grep -vE "^(OsmoHLR|Welcome|VTY|\s*$)" \
+                    | sed "s/^/  /" || true
+            else
+                (sleep 1; cat /tmp/hlr_feed.vty; sleep 3) \
+                    | telnet 127.0.0.1 4258 2>/dev/null \
+                    | grep -vE "^(Trying|Connected|Escape|OsmoHLR|Welcome)" \
+                    | sed "s/^/  /" || true
+            fi
+            rm -f /tmp/hlr_feed.vty
+        '
+
+        echo -e "  ${GREEN}✓ HLR Op${i} alimenté${NC}"
+        # Attendre le dernier groupe uniquement
+        echo -ne "  ${GREEN}[*] Attente dernier groupe (${last_group_ip}:4247)${NC}"
+        retry=0
+        max_retries=90
+        while ! docker exec "$container_name" bash -c "echo >/dev/tcp/${last_group_ip}/4247" 2>/dev/null; do
+            sleep 2
+            echo -n "."
+            retry=$((retry + 1))
+            if [ $retry -ge $max_retries ]; then
+                echo -e " ${RED}TIMEOUT${NC}"
+                docker logs "$container_name" --tail 20
+                # On continue quand même pour l'opérateur suivant
+                break
+            fi
+        done
+        echo -e " ${GREEN}OK${NC}"        
+        # Stabilisation
+        echo -e "  ${GREEN}[*] Stabilisation (3s)...${NC}"
+        sleep 3
+
+        echo -e "  ${GREEN}✓${NC} ${container_name} complètement prêt (${OP_MS[$i]} MS, dernier groupe ${last_group_ip})"
+        echo ""
+    done
+
+    # Nettoyer le fichier temporaire
+    rm -f "$all_subscribers_file"
+
+    # ── Attente relays SMS ─────────────────────────────────────────────────
+    if declare -f sms_routing_wait_ready > /dev/null 2>&1; then
+        echo -e "${GREEN}Vérification relays SMS (port 7890)...${NC}"
+        for i in $(seq 1 "$n_operators"); do
+            sms_routing_wait_ready "$(op_container "$i")" 90 || true
+        done
+    fi
+
+    # ── Résumé ────────────────────────────────────────────────────────────
+    echo ""
+    echo -e "${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
+    echo ""
+    echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC}  PC=0.0.0"
+    for i in $(seq 1 "$n_operators"); do
+        local rctx bb_ip n_groups
+        rctx=$(op_rctx_inter "$i")
+        bb_ip=$(op_backbone_ip "$i")
+        n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
+        echo -e "  Op${i} ${OP_NAME[$i]}  STP 1.${i}.2 @ ${bb_ip}  ──RCTX ${rctx}──►  inter-STP  [MS: ${OP_MS[$i]}, groupes: ${n_groups}]"
+    done
+    echo ""
+
+    # ── Wireshark ─────────────────────────────────────────────────────────
+    local bridge_if
+    bridge_if=$(docker network inspect "$INTER_NET" -f '{{.Id}}' 2>/dev/null | cut -c1-12)
+    if [ -n "$bridge_if" ] && command -v wireshark &>/dev/null; then
+        TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+        DISPLAY="${DISPLAY:-:0}"
+        XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
+        DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+            wireshark -k -i "br-${bridge_if}" -f "sctp or udp port 4729" \
+            >/dev/null 2>&1 & true
+        echo -e "  Wireshark lancé sur ${CYAN}br-${bridge_if}${NC}"
+    fi
+
+    # ── Terminaux xterm ───────────────────────────────────────────────────
+    TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+    DISPLAY="${DISPLAY:-:0}"
+    XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
+
+    _open_term_script() {
+        local title="$1" script_file="$2"
+        chmod +x "$script_file"
+        DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+        xterm -title "$title" \
+              -fa 'Monospace' -fs 10 \
+              -bg '#1e1e1e' -fg '#d4d4d4' \
+              -e bash "$script_file" \
+        2>/dev/null &
+        sleep 0.3
+    }
+
+    # ── Consoles opérateurs (une seule par opérateur) ─────────────────────
+    for i in $(seq 1 "$n_operators"); do
+        cname=$(op_container "$i")
+        
+        echo -ne "${YELLOW}Attente du socket tmux pour ${cname}...${NC}"
+        while ! sudo docker exec "${cname}" [ -S /tmp/osmocom_tmux ] 2>/dev/null; do
+            sleep 1
+            echo -n "."
+        done
+        echo -e " ${GREEN}OK${NC}"
+
+        tmpscript="/tmp/osmo-xterm-op${i}.sh"
+        cat > "$tmpscript" <<EOF
+#!/usr/bin/env bash
+echo "=== Op${i} — ${OP_NAME[$i]} (${OP_MS[$i]} MS, $((${OP_MS[$i]})) groupes) ==="
+exec sudo docker exec -ti ${cname} tmux -S /tmp/osmocom_tmux attach
+EOF
+        _open_term_script "Op${i} — ${OP_NAME[$i]}" "$tmpscript"
+    done
+
+    # ── Console Inter-STP ─────────────────────────────────────────────────
+    echo ""
+    echo "=== ${INTER_STP_CONTAINER} ==="
+    wait_stp_vty "$INTER_STP_CONTAINER"
+
+    while ! sudo docker exec "${INTER_STP_CONTAINER}" [ -S /tmp/osmocom_tmux ] 2>/dev/null; do
+        sleep 1
+    done
+
+    tmpscript_stp="/tmp/osmo-xterm-stp.sh"
+    cat > "$tmpscript_stp" <<EOF
+#!/usr/bin/env bash
+echo "=== Inter-STP 0.0.0 @ ${INTER_STP_IP}:2908 ==="
+exec sudo docker exec -it ${INTER_STP_CONTAINER} tmux -S /tmp/osmocom_tmux attach -t stp
+EOF
+
+    _open_term_script "Inter-STP (PC 0.0.0)" "$tmpscript_stp"
 }
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Mode net-host (1 opérateur, SDR physique)
@@ -571,7 +910,7 @@ start_host_mode() {
     local n_ms
     read -rp "Nombre de MS [1] : " n_ms
     n_ms=${n_ms:-1}
-    if ! [[ "$n_ms" =~ ^[0-9]+$ ]] || [ "$n_ms" -lt 1 ] || [ "$n_ms" -gt 9 ]; then
+    if ! [[ "$n_ms" =~ ^[0-9]+$ ]] || [ "$n_ms" -lt 1 ] || [ "$n_ms" -gt 64 ]; then
         echo -e "${YELLOW}Valeur invalide, forcée à 1${NC}"
         n_ms=1
     fi
@@ -620,188 +959,15 @@ start_host_mode() {
         -e INTER_STP_IP="127.0.0.1" \
         $vol_args \
         "$IMAGE_RUN" \
-        /etc/osmocom/run.sh > /dev/null
+        /root/run.sh
 
-    echo -e "${GREEN}[*] Attente démarrage (5 s)...${NC}"
-    sleep 5
+    wait_bb_vty "egprs"
+    echo -e "  ${GREEN}[*] Stabilisation (3s)...${NC}"
+    sleep 3
+    
     docker exec -it egprs /bin/bash -c "/root/run.sh"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Mode bridge (N opérateurs avec inter-STP central)
-# ══════════════════════════════════════════════════════════════════════════════
-start_bridge_mode() {
-    # ── Saisie du nombre d'opérateurs ──────────────────────────────────────
-    local n_operators
-    read -rp "Nombre d'opérateurs [2] : " n_operators
-    n_operators=${n_operators:-2}
-    if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 9 ]; then
-        echo -e "${RED}Nombre invalide (1–9).${NC}"; exit 1
-    fi
-
-    # ── Saisie des paramètres par opérateur (MCC / MNC / Nom / MS count) ──
-    declare -A OP_MCC OP_MNC OP_NAME OP_MS
-    for i in $(seq 1 "$n_operators"); do
-        echo -e "${CYAN}── Opérateur ${i} ──${NC}"
-        read -rp "  MCC   [001]      : " mcc;  OP_MCC[$i]=${mcc:-001}
-        read -rp "  MNC   [0${i}]     : " mnc;  OP_MNC[$i]=${mnc:-"0${i}"}
-        read -rp "  Nom   [OsmoOP${i}]: " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
-        read -rp "  MS    [1]         : " n_ms; OP_MS[$i]=${n_ms:-1}
-        if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || \
-           [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 9 ]; then
-            echo -e "  ${YELLOW}Nombre de MS invalide, forcé à 1${NC}"
-            OP_MS[$i]=1
-        fi
-        echo -e "  → MCC=${OP_MCC[$i]}  MNC=${OP_MNC[$i]}  Nom=${OP_NAME[$i]}  MS=${CYAN}${OP_MS[$i]}${NC}"
-    done
-
-    # ── Réseau backbone partagé ────────────────────────────────────────────
-    echo -e "${GREEN}Création du réseau backbone ${INTER_NET}...${NC}"
-    docker network inspect "$INTER_NET" &>/dev/null || \
-        docker network create \
-            --subnet="$INTER_NET_SUBNET" \
-            --gateway="$INTER_NET_GATEWAY" \
-            "$INTER_NET" &>/dev/null
-
-    # ── Génération des configs SMS routing (avant le démarrage des containers)
-    # Construit un sms-routing-op<N>.conf par opérateur avec les routes exactes
-    # par MSISDN (pas seulement des préfixes courts) et les méta-données relay.
-    SMS_ROUTING_DIR=$(mktemp -d)
-    if declare -f sms_routing_generate_all > /dev/null 2>&1; then
-        echo -e "${GREEN}Génération tables SMS routing (${n_operators} ops)...${NC}"
-        # Construire le tableau des MS counts dans l'ordre op1..opN
-        local _ms_counts=()
-        for i in $(seq 1 "$n_operators"); do
-            _ms_counts+=("${OP_MS[$i]}")
-        done
-        sms_routing_generate_all "$n_operators" "$SMS_ROUTING_DIR" "${_ms_counts[@]}"
-        #sms_routing_validate "${SMS_ROUTING_DIR}/sms-routing-op1.conf"
-        sms_routing_summary  "$n_operators" "${_ms_counts[@]}"
-    else
-        echo -e "  ${YELLOW}[SMS] sms-routing-setup.sh non chargé — fallback basique${NC}"
-    fi
-
-    # ── Inter-STP — doit être UP avant les opérateurs ─────────────────────
-    start_inter_stp "$n_operators"
-
-    # [PATCH] Vérifier que l'inter-STP est vraiment prêt avant les opérateurs
-    wait_inter_stp_ready "$n_operators"
-
-    # ── Opérateurs ────────────────────────────────────────────────────────
-    for i in $(seq 1 "$n_operators"); do
-        start_operator "$i" \
-            "${OP_MCC[$i]}" "${OP_MNC[$i]}" "${OP_NAME[$i]}" \
-            "$n_operators" "${OP_MS[$i]}"
-    done
-    sudo bash hlr-feed-subscribers.sh
-
-    # ── Attente relays SMS ─────────────────────────────────────────────────
-    if declare -f sms_routing_wait_ready > /dev/null 2>&1; then
-        echo -e "${GREEN}Vérification relays SMS (port 7890)...${NC}"
-        for i in $(seq 1 "$n_operators"); do
-            sms_routing_wait_ready "$(op_container "$i")" 90 || true
-        done
-    fi
-
-    # ── Résumé ────────────────────────────────────────────────────────────
-    echo ""
-    echo -e "${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
-    echo ""
-    echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC}  PC=0.0.0"
-    for i in $(seq 1 "$n_operators"); do
-        local rctx
-        rctx=$(op_rctx_inter "$i")
-        local bb_ip
-        bb_ip=$(op_backbone_ip "$i")
-        echo -e "  Op${i} ${OP_NAME[$i]}  STP 1.${i}.2 @ ${bb_ip}  ──RCTX ${rctx}──►  inter-STP  [MS: ${OP_MS[$i]}]"
-    done
-    echo ""
-
-    # ── Wireshark ─────────────────────────────────────────────────────────
-    local bridge_if
-    bridge_if=$(docker network inspect "$INTER_NET" -f '{{.Id}}' 2>/dev/null | cut -c1-12)
-    if [ -n "$bridge_if" ] && command -v wireshark &>/dev/null; then
-        TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
-        DISPLAY="${DISPLAY:-:0}"
-        XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
-        DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-            wireshark -k -i "br-${bridge_if}" -f "sctp or udp port 4729" \
-            >/dev/null 2>&1 & true
-        echo -e "  Wireshark lancé sur ${CYAN}br-${bridge_if}${NC}"
-    fi
-
-    # ── Terminaux xterm ───────────────────────────────────────────────────
-    TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
-    DISPLAY="${DISPLAY:-:0}"
-    XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
-
-    # Ouvre un xterm à partir d'un script tmp → évite tout problème de quoting/
-    # évaluation prématurée des variables (WAIT, etc.) dans les chaînes inline.
-    _open_term_script() {
-        local title="$1" script_file="$2"
-        chmod +x "$script_file"
-        DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-        xterm -title "$title" \
-              -fa 'Monospace' -fs 10 \
-              -bg '#1e1e1e' -fg '#d4d4d4' \
-              -e bash "$script_file" \
-        2>/dev/null &
-        sleep 0.3
-    }
-
-    for i in $(seq 1 "$n_operators"); do
-        local cname
-        cname=$(op_container "$i")
-        local tmpscript="/tmp/osmo-xterm-op${i}.sh"
-
-        # Le heredoc écrit le script tel quel ; les variables du shell courant
-        # (cname, OP_NAME, etc.) sont interpolées maintenant (sans $).
-        # Les variables exécutées DANS xterm (WAIT) sont échappées avec \$.
-        cat > "$tmpscript" << XTERM_SCRIPT
-
-#!/bin/bash
-echo "=== Op${i} — ${OP_NAME[$i]} (${OP_MS[$i]} MS) ==="
-echo ""
-echo "  STP  : sudo docker exec -it ${cname} telnet 127.0.0.1 4239"
-echo "  MSC  : sudo docker exec -it ${cname} telnet 127.0.0.1 4254"
-echo "  BSC  : sudo docker exec -it ${cname} telnet 127.0.0.1 4242"
-echo "  HLR  : sudo docker exec -it ${cname} telnet 127.0.0.1 4258"
-echo ""
-echo "En attente de la session tmux (max 120s)..."
-WAIT=0
-until sudo docker exec ${cname} tmux has-session 2>/dev/null; do
-    sleep 2
-    WAIT=\$((WAIT + 2))
-    if [ "\$WAIT" -ge 120 ]; then
-        echo "TIMEOUT : tmux non disponible apres 120s."
-        echo "Verifier : sudo docker logs ${cname}"
-        break
-    fi
-    echo "  ... \${WAIT}s"
-done
-exec sudo docker exec -ti ${cname} tmux attach
-
-XTERM_SCRIPT
-
-        _open_term_script "Op${i} — ${OP_NAME[$i]}  [${OP_MS[$i]} MS]" "$tmpscript"
-    done
-
-    # Inter-STP
-    local tmpscript_stp="/tmp/osmo-xterm-stp.sh"
-    cat > "$tmpscript_stp" << XTERM_STP
-#!/bin/bash
-echo "=== Inter-STP 0.0.0 @ ${INTER_STP_IP}:2908 ==="
-echo "  VTY : sudo docker exec -it ${INTER_STP_CONTAINER} telnet 127.0.0.1 4239"
-echo ""
-sleep 3
-exec sudo docker exec -ti ${INTER_STP_CONTAINER} tmux attach -t stp
-XTERM_STP
-
-    _open_term_script "Inter-STP (PC 0.0.0)" "$tmpscript_stp"
-}
-
-
-# Arrêt
 # ══════════════════════════════════════════════════════════════════════════════
 stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"

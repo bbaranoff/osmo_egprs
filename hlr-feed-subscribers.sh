@@ -2,24 +2,6 @@
 # hlr-feed-subscribers.sh
 #
 # Injecte les abonnés de TOUS les opérateurs dans le HLR de CHAQUE opérateur.
-#
-# Formules communes (identiques à run.sh et start.sh) :
-#   MSIN        = printf('%04d%06d', op_id, ms_idx)        → 10 chiffres
-#   IMSI        = MCC(3) + MNC(2) + MSIN(10)               → 15 chiffres
-#   MSISDN      = op_id * 10000 + ms_idx
-#   KI HLR VTY  = 00112233445566778899aabbccdd<ms_hex><op_hex>  (sans espaces)
-#                 Octet 15 = ms_idx | Octet 16 = op_id
-#   KI mobile   = "00 11 22 33 44 55 66 77 88 99 aa bb cc dd <ms_hex> <op_hex>"
-#                 (même valeur, avec espaces — format mobile.cfg)
-#
-# Commandes VTY osmo-hlr par abonné :
-#   subscriber imsi IMSI create
-#   subscriber imsi IMSI update msisdn MSISDN
-#   subscriber imsi IMSI update aud2g comp128v1 ki KI
-#
-# Usage :
-#   sudo ./hlr-feed-subscribers.sh              (après start.sh bridge mode)
-#   sudo ./hlr-feed-subscribers.sh --dry-run
 
 set -euo pipefail
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -46,16 +28,12 @@ N_OPS=${#OP_CONTAINERS[@]}
 echo -e "${GREEN}=== HLR Feed — ${N_OPS} opérateur(s) ===${NC}"
 
 # ── N_MS et MNC par opérateur ────────────────────────────────────────────────
-# MNC lu depuis la variable d'env du container (injectée par start.sh via -e MNC=).
-# Fallback : lire dans le mobile.cfg résolu (ligne "rplmn MCC MNC").
 declare -A OP_MS OP_MNC
 for i in $(seq 1 "${N_OPS}"); do
     cname="osmo-operator-${i}"
     n=$(docker exec "$cname" bash -c 'echo "${N_MS:-1}"' 2>/dev/null || echo 1)
     mnc=$(docker exec "$cname" bash -c '
-        # Priorité 1 : variable env MNC injectée par start.sh
         if [ -n "${MNC:-}" ]; then echo "$MNC"; exit 0; fi
-        # Priorité 2 : lire dans le mobile.cfg résolu (rplmn MCC MNC)
         for f in /root/.osmocom/bb/mobile_ms1.cfg \
                  /root/.osmocom/bb/mobile.cfg; do
             [ -f "$f" ] || continue
@@ -72,12 +50,6 @@ done
 echo ""
 
 # ── Liste globale des abonnés ─────────────────────────────────────────────────
-# Format interne : "op_id:ms_idx:imsi:msisdn:ki_nospaces"
-#
-# KI sans espaces pour le VTY osmo-hlr (aud2g comp128v1 ki) :
-#   00112233445566778899aabbccdd<ms_hex><op_hex>
-#   → 32 caractères hex, pas d'espaces
-#   → octet 15 = ms_idx, octet 16 = op_id
 SUBSCRIBERS=()
 for op_id in $(seq 1 "${N_OPS}"); do
     mnc="${OP_MNC[$op_id]}"
@@ -86,9 +58,8 @@ for op_id in $(seq 1 "${N_OPS}"); do
         msin=$(printf '%04d%06d' "${op_id}" "${ms_idx}")
         imsi="${MCC}${mnc}${msin}"
         msisdn=$(( op_id * 10000 + ms_idx ))
-        # KI sans espaces : octet 15=ms_idx  octet 16=op_id
-        ki=$(printf '00112233445566778899aabbccdd%02xff' \
-                    "${ms_idx}")
+        # KI sans espaces : octet 15=ms_idx, octet 16=op_id
+        ki=$(printf '00112233445566778899aabbccdd%02x%02x' "${ms_idx}" "${op_id}")
         SUBSCRIBERS+=("${op_id}:${ms_idx}:${imsi}:${msisdn}:${ki}")
     done
 done
@@ -97,7 +68,6 @@ total=${#SUBSCRIBERS[@]}
 echo -e "${GREEN}${total} abonnés à injecter dans chaque HLR :${NC}"
 for s in "${SUBSCRIBERS[@]}"; do
     IFS=':' read -r op ms imsi msisdn ki <<< "$s"
-    # Afficher le KI avec espaces pour lisibilité du log (2 chars = 1 octet)
     ki_display=$(echo "$ki" | sed 's/../& /g' | sed 's/[[:space:]]*$//')
     echo -e "  Op${op}/MS${ms}  IMSI=${imsi}  MSISDN=${msisdn}  KI=${ki_display}"
 done
@@ -112,35 +82,28 @@ wait_hlr_vty() {
 
     while ! docker exec "$container" bash -c \
         "echo >/dev/tcp/127.0.0.1/4258" 2>/dev/null; do
-
         sleep 2
         elapsed=$((elapsed + 2))
         echo -n "."
-
         if [ "$elapsed" -ge "$timeout" ]; then
             echo -e " ${RED}TIMEOUT${NC}"
             return 1
         fi
     done
-
     echo -e " ${GREEN}OK${NC}"
     return 0
 }
-# ── Injection dans un HLR ─────────────────────────────────────────────────────
-# Stratégie :
-#   1. Vérifier que le VTY HLR (port 4258) est accessible
-#   2. Écrire toutes les commandes VTY dans /tmp/hlr_feed.vty dans le container
-#   3. Piper ce fichier vers osmo-hlr via netcat (ou telnet en fallback)
+
 inject_to_hlr() {
     local container="$1"
 
     echo -e "${CYAN}=== ${container} ===${NC}"
 
-    # Vérifier VTY HLR
     if ! wait_hlr_vty "$container"; then
         echo -e "${RED}  HLR VTY indisponible — skip${NC}"
         return 1
     fi
+
     if [ "$DRY_RUN" -eq 1 ]; then
         echo -e "${YELLOW}  [DRY-RUN] commandes VTY :${NC}"
         for s in "${SUBSCRIBERS[@]}"; do
@@ -159,17 +122,15 @@ inject_to_hlr() {
         echo "enable"
         for s in "${SUBSCRIBERS[@]}"; do
             IFS=':' read -r _ _ imsi msisdn ki <<< "$s"
-            # 3 commandes par abonné :
             echo "subscriber imsi ${imsi} create"
             echo "subscriber imsi ${imsi} update msisdn ${msisdn}"
-            # aud2g (pas aug2g) — ki sans espaces, 32 hex chars
             echo "subscriber imsi ${imsi} update aud2g comp128v1 ki ${ki}"
         done
         echo "end"
         echo "VTYCMDS"
     } | docker exec -i "$container" bash
 
-    # Envoyer le script VTY via netcat (ou telnet en fallback)
+    # Envoyer le script VTY via netcat
     docker exec "$container" bash -c '
         if command -v nc >/dev/null 2>&1; then
             (sleep 1; cat /tmp/hlr_feed.vty; sleep 1) \
@@ -177,7 +138,6 @@ inject_to_hlr() {
                 | grep -vE "^(OsmoHLR|Welcome|VTY|\s*$)" \
                 | sed "s/^/  /" || true
         else
-            # Fallback telnet
             (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) \
                 | telnet 127.0.0.1 4258 2>/dev/null \
                 | grep -vE "^(Trying|Connected|Escape|OsmoHLR|Welcome)" \
