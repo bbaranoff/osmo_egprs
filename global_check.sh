@@ -312,76 +312,72 @@ for container in "${OP_CONTAINERS[@]}"; do
     fi
 
     # =========================================================================
-    # 5. BTS (Station de base) — via BSC
+    # 5. BTS (Station de base)
     # =========================================================================
     section "BTS (Station de base)"
 
     if ! vty_available "$container" 4242; then
         skip "BSC VTY (4242) inaccessible — impossible de vérifier les BTS"
     else
-        # Récupérer les informations des BTS depuis le BSC
-        bts_all=$(vty_cmd "$container" 4242 "show bts all")
-        n_bts_total=$(echo "$bts_all" | grep -c '^bts' || true)
+        # Vérifier BTS 0 directement
+        bts0_out=$(vty_cmd "$container" 4242 "show bts 0")
         
-        if [ "$n_bts_total" -eq 0 ]; then
-            warn "Aucune BTS configurée dans le BSC"
+        if [ -z "$bts0_out" ]; then
+            fail "Impossible d'obtenir les informations de BTS 0"
         else
-            ok "BTS configurées : ${n_bts_total}"
-            
-            # Vérifier BTS 0 en détail
-            bts0_out=$(vty_cmd "$container" 4242 "show bts 0")
-            
-            # État opérationnel
-            if echo "$bts0_out" | grep -qE "Oper 'Enabled'.*Avail 'OK'"; then
-                ok "BTS 0 : opérationnelle (Enabled/OK)"
-            elif echo "$bts0_out" | grep -qE "Oper 'Enabled'"; then
-                warn "BTS 0 : Enabled mais Avail != OK"
-            else
-                fail "BTS 0 : pas Enabled"
-            fi
-            
-            # OML
-            oml_up=$(echo "$bts0_out" | grep -c 'OML Link state: connected' || true)
-            [ "$oml_up" -gt 0 ] && ok "OML : connecté" || fail "OML : déconnecté"
-            
-            # RSL (via TRX)
-            trx0_out=$(vty_cmd "$container" 4242 "show trx 0 0")
-            rsl_up=$(echo "$trx0_out" | grep -c 'RSL State: connected' || true)
-            [ "$rsl_up" -gt 0 ] && ok "RSL : connecté" || fail "RSL : déconnecté"
-            
-            # Statistiques BTS
-            ch_load=$(echo "$bts0_out" | grep "Channel load" | head -1)
-            [ -n "$ch_load" ] && info "$ch_load"
-            
-            # ARFCN
-            arfcn=$(echo "$bts0_out" | grep -oE 'ARFCN[s:]+ [0-9]+' | head -1)
-            [ -n "$arfcn" ] && info "$arfcn"
-        fi
-        
-        # Compter les TRX totaux
-        n_trx=0
-        for bts_idx in $(seq 0 $((n_bts_total - 1)) 2>/dev/null); do
-            trx_count=$(vty_cmd "$container" 4242 "show bts ${bts_idx}" | grep -c '^  trx' || true)
-            n_trx=$((n_trx + trx_count))
-        done
-        info "TRX totaux : ${n_trx}"
-        
-        # Vérifier rapidement les autres BTS (si plus d'une)
-        if [ "$n_bts_total" -gt 1 ]; then
-            ok "BTS multiples : ${n_bts_total} (vérification détaillée avec --verbose)"
-            if [ "$VERBOSE" -eq 1 ]; then
-                for bts_idx in $(seq 1 $((n_bts_total - 1))); do
-                    bts_out=$(vty_cmd "$container" 4242 "show bts ${bts_idx}")
-                    if echo "$bts_out" | grep -qE "Oper 'Enabled'.*Avail 'OK'"; then
-                        info "BTS ${bts_idx} : OK"
+            # Vérifier que la BTS existe (présence du nom)
+            if echo "$bts0_out" | grep -q "BTS 0 is of osmo-bts type"; then
+                ok "BTS 0 : configurée"
+                
+                # État opérationnel
+                if echo "$bts0_out" | grep -q "Oper 'Enabled'.*Avail 'OK'"; then
+                    ok "BTS 0 : opérationnelle (Enabled/OK)"
+                elif echo "$bts0_out" | grep -q "Oper 'Enabled'"; then
+                    warn "BTS 0 : Enabled mais Avail != OK"
+                else
+                    fail "BTS 0 : pas Enabled"
+                fi
+                
+                # OML
+                if echo "$bts0_out" | grep -q "OML Link state: connected"; then
+                    ok "OML : connecté"
+                else
+                    fail "OML : déconnecté"
+                fi
+                
+                # RSL (présent dans les statistiques en bas)
+                if echo "$bts0_out" | grep -q "Number of RSL links connected.* 1"; then
+                    ok "RSL : connecté"
+                elif echo "$bts0_out" | grep -q "Number of RSL links connected.* [1-9]"; then
+                    ok "RSL : connecté (${BASH_REMATCH[1]})"
+                else
+                    # Vérifier via TRX
+                    trx0_out=$(vty_cmd "$container" 4242 "show trx 0 0" 2>/dev/null)
+                    if echo "$trx0_out" | grep -q "RSL State: connected"; then
+                        ok "RSL : connecté (TRX 0)"
                     else
-                        warn "BTS ${bts_idx} : problème détecté"
+                        fail "RSL : déconnecté"
                     fi
-                done
+                fi
+                
+                # ARFCN
+                arfcn=$(echo "$bts0_out" | grep -oE 'ARFCNs: [0-9]+' | head -1)
+                [ -n "$arfcn" ] && info "$arfcn"
+                
+                # Uptime
+                uptime=$(echo "$bts0_out" | grep "Seconds of uptime" | grep -oE '[0-9]+ s')
+                [ -n "$uptime" ] && info "Uptime : ${uptime}"
+                
+                # Vérifier s'il y a d'autres BTS
+                n_bts=$(vty_cmd "$container" 4242 "show bts all" | grep -c '^bts' || true)
+                if [ "$n_bts" -gt 1 ]; then
+                    ok "BTS multiples : ${n_bts} (BTS 0 OK)"
+                fi
+            else
+                fail "BTS 0 non trouvée dans la configuration"
             fi
         fi
     fi
-    
     # =========================================================================
     # 6. PCU (port 4240) — GPRS
     # =========================================================================
