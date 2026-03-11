@@ -12,7 +12,9 @@ echo "--- Préparation complète de l'hôte (SDR & Docker) ---"
 if ! command -v docker &> /dev/null; then
     echo "[*] Docker n'est pas installé. Installation en cours..."
     apt-get update
-    apt-get install -y docker.io docker-compose-v2 wireshark linphone-desktop xterm 
+    apt-get install -y docker.io docker-compose-v2 wireshark 
+    linphone-desktop xterm whiptail expect netcat-openbsd telnet 
+    iproute2
 fi
 
 # 3. Installation des dépendances critiques sur l'hôte

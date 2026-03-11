@@ -404,7 +404,7 @@ prepare_host_tun() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Inter-STP — hub SS7 central
+# Inter-STP — hub S7 central
 # ══════════════════════════════════════════════════════════════════════════════
 start_inter_stp() {
     local n_operators=$1
@@ -419,11 +419,10 @@ start_inter_stp() {
         echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
     fi
 
-    echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.0.0)...${NC}"
+    echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.23.0)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
 
     docker run -d \
-        --rm \
         --name "$INTER_STP_CONTAINER" \
         --network "$INTER_NET" \
         --ip "$INTER_STP_IP" \
@@ -431,7 +430,7 @@ start_inter_stp() {
         -v "${inter_cfg}:/etc/osmocom/osmo-stp-interop.cfg:ro" \
         --entrypoint bash \
         "$IMAGE_RUN" \
-        -c "exec sleep infinity" > /dev/null
+        -c "sleep infinity" > /dev/null
 
     docker exec "$INTER_STP_CONTAINER" \
         tmux new-session -d -s stp \
@@ -454,6 +453,7 @@ start_inter_stp() {
         sleep 1
         ((retries--)) || true
     done
+    # Timeout non fatal : l'inter-STP est peut-être prêt mais sans log attendu
     echo -e " ${YELLOW}(timeout log, on continue)${NC}"
 }
 
@@ -887,23 +887,35 @@ EOF
         _open_term_script "Op${i} — ${OP_NAME[$i]}" "$tmpscript"
     done
 
-    # ── Console Inter-STP ─────────────────────────────────────────────────
+# ── Console Journal Inter-STP ─────────────────────────────────────────
     echo ""
     echo "=== ${INTER_STP_CONTAINER} ==="
     wait_stp_vty "$INTER_STP_CONTAINER"
 
-    while ! sudo docker exec "${INTER_STP_CONTAINER}" [ -S /tmp/osmocom_tmux ] 2>/dev/null; do
-        sleep 1
-    done
-
+    # Création du script pour simuler journalctl -u osmo-stp -f
     tmpscript_stp="/tmp/osmo-xterm-stp.sh"
     cat > "$tmpscript_stp" <<EOF
 #!/usr/bin/env bash
-echo "=== Inter-STP 0.0.0 @ ${INTER_STP_IP}:2908 ==="
-exec sudo docker exec -it ${INTER_STP_CONTAINER} tmux -S /tmp/osmocom_tmux attach -t stp
+echo "--- Journal systemd: osmo-stp.service (Inter-STP) ---"
+# On utilise docker logs avec un formatage 'journalctl' (timestamp + flux)
+exec sudo docker logs -f --tail 50 "${INTER_STP_CONTAINER}"
 EOF
+    chmod +x "$tmpscript_stp"
 
-    _open_term_script "Inter-STP (PC 0.0.0)" "$tmpscript_stp"
+    # Lancement du terminal de logs en arrière-plan (&) pour ne pas bloquer
+    _open_term_script "Journal Inter-STP" "$tmpscript_stp" &
+
+    # ── LANCEMENT DU GESTIONNAIRE VTY SDR ──────────────────────────────────
+    echo -e "\n${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
+    echo -e "${CYAN}Lancement du gestionnaire de consoles...${NC}"
+
+    if [ -f "./vty-menu.sh" ]; then
+        chmod +x ./vty-menu.sh
+        # exec remplace le script actuel par le menu pour éviter le hang
+        exec ./vty-menu.sh
+    else
+        echo -e "${RED}[!] Erreur : vty-menu.sh introuvable.${NC}"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
