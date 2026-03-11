@@ -412,6 +412,7 @@ start_inter_stp() {
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
 
     docker run -d \
+        --rm \
         --name "$INTER_STP_CONTAINER" \
         --network "$INTER_NET" \
         --ip "$INTER_STP_IP" \
@@ -690,14 +691,13 @@ start_bridge_mode() {
         local alsa_args
         alsa_args=$(build_alsa_args)
 
-        docker rm -f "$container_name" &>/dev/null || true
-
         # Dossier de logs séparé par opérateur
         mkdir -p /tmp/osmocom-logs/op${i}
 
         # Lancement du container
         # shellcheck disable=SC2086
         docker run -d \
+            --rm \
             --name "$container_name" \
             --network "$INTER_NET" \
             --ip "$inter_local_ip" \

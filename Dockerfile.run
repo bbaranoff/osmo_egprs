@@ -19,7 +19,7 @@ RUN mkdir -p \
     /var/run/asterisk \
     /var/log/osmocom
 
-RUN apt-get install -y --no-install-recommends telnet iproute2 tmux && \
+RUN apt-get install -y --no-install-recommends telnet nano iproute2 tmux && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Patch fake_trx : forcer TRXD v0 ─────────────────────────────────────────

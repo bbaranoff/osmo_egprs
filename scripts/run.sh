@@ -446,10 +446,39 @@ wait_group_vty() {
 # ══════════════════════════════════════════════════════════════════════════════
 SESSION="osmocom"
 TMUX_SOCKET="/tmp/osmocom_tmux"
+init_tmux() {
+    echo -e "  ${CYAN}Initialisation tmux pour Op${OPERATOR_ID}...${NC}"
+    
+    if ! command -v tmux >/dev/null 2>&1; then
+        echo -e "  ${RED}✗ tmux n'est pas installé${NC}"
+        return 1
+    fi
+    
+    if [ ! -d "/tmp" ] || [ ! -w "/tmp" ]; then
+        echo -e "  ${RED}✗ /tmp n'est pas accessible en écriture${NC}"
+        return 1
+    fi
+    
+    # Nettoyer l'ancien socket s'il existe
+    rm -f "$TMUX_SOCKET"
+    
+    # Démarrer le serveur tmux
+    tmux -S "$TMUX_SOCKET" start-server
+    
+    # Créer une session main
+    tmux -S "$TMUX_SOCKET" new-session -d -s "$SESSION" -n main 2>/dev/null || true
+    
+    echo -e "  ${GREEN}✓ Socket tmux: ${TMUX_SOCKET}${NC}"
+    echo -e "  ${GREEN}✓ Session: ${SESSION}${NC}"
+    
+    return 0
+}
 
-rm -f "$TMUX_SOCKET"
-tmux -S "$TMUX_SOCKET" start-server
-tmux -S "$TMUX_SOCKET" new-session -d -s "$SESSION" -n main
+
+# Initialisation tmux
+echo -e "${GREEN}=== Initialisation tmux ===${NC}"
+init_tmux
+echo ""
 
 # ── 2. Génération config MS ──────────────────────────────────────────────────
 echo -e "${GREEN}=== [2/10] Génération config MS (${MOBILE_MODE}, N=${N_MS}) ===${NC}"
