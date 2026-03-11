@@ -51,6 +51,8 @@ connect_vty() {
     [[ $? -ne 0 ]] && { echo -e "\n[!] Service hors ligne."; sleep 1; }
 }
 
+# ... (garder le début du fichier identique) ...
+
 menu_services() {
     local OP=$1
     while true; do
@@ -58,7 +60,7 @@ menu_services() {
         CHOICE=$(whiptail --title " OPERATOR CONTROL : $OP " --menu "" 18 60 8 \
             "1" "MSC (4254)" "2" "BSC (4242)" "3" "HLR (4258)" \
             "4" "MGW (4243)" "5" "GGSN (4260)" "6" "SGSN (4245)" \
-            "7" "BASEBAND (4247)" \
+            "7" "STP (4239)" "8" "BASEBAND (4247)" \
             "R" "<< BACK" 3>&1 1>&2 2>&3)
 
         [[ -z "$CHOICE" || "$CHOICE" == "R" ]] && break
@@ -70,7 +72,8 @@ menu_services() {
             4) connect_vty "$OP" "MGW" 4243 "mgw" ;;
             5) connect_vty "$OP" "GGSN" 4260 "gg" ;;
             6) connect_vty "$OP" "SGSN" 4245 "sg" ;;
-            7) 
+            7) connect_vty "$OP" "STP" 4239 "stp" ;;
+            8) 
                 # Gestion multi-groupes Baseband (127.0.0.1, 127.0.0.2, etc.)
                 local GRP_IP
                 GRP_IP=$(whiptail --title " BASEBAND GROUP SELECT " --inputbox "Target IP (127.0.0.X) :" 10 40 "127.0.0.1" 3>&1 1>&2 2>&3)
@@ -84,15 +87,39 @@ menu_services() {
     done
 }
 
+# --- BOUCLE PRINCIPALE SÉCURISÉE ---
 while true; do
-    OPS=$(docker ps --format "{{.Names}}" | grep "osmo-operator" | sort)
-    MENU_LIST=()
-    while read -r line; do MENU_LIST+=("$line" "Status: Active"); done <<< "$OPS"
+    MAIN_TYPE=$(whiptail --title " OSMO-SDR STACK MANAGER " --menu "Select Category :" 15 60 3 \
+        "CORE" "Global Infrastructure (Inter-STP)" \
+        "OPS"  "Network Operators (MSC/BSC/STP...)" \
+        "EXIT" "Quit Manager" 3>&1 1>&2 2>&3)
 
-    OP_CHOICE=$(whiptail --title " OSMO-SDR STACK MANAGER " --menu "Select Infrastructure Node :" 20 70 10 \
-        "${MENU_LIST[@]}" 3>&1 1>&2 2>&3)
+    [[ -z "$MAIN_TYPE" || "$MAIN_TYPE" == "EXIT" ]] && break
 
-    [[ -z "$OP_CHOICE" ]] && break || menu_services "$OP_CHOICE"
+    if [[ "$MAIN_TYPE" == "CORE" ]]; then
+        # Vérification si l'inter-stp est en vie
+        if docker ps --format '{{.Names}}' | grep -q "osmo-inter-stp"; then
+            docker exec -ti osmo-inter-stp telnet 127.0.0.1 4239
+        else
+            whiptail --msgbox "Erreur : osmo-inter-stp n'est pas lancé." 10 50
+        fi
+    else
+        # On récupère les opérateurs actifs
+        OPS=$(docker ps --format "{{.Names}}" | grep "osmo-operator" | sort)
+        
+        if [[ -z "$OPS" ]]; then
+            whiptail --msgbox "Aucun opérateur détecté ! Vérifiez start.sh" 10 50
+            continue
+        fi
+
+        MENU_LIST=()
+        while read -r line; do MENU_LIST+=("$line" "Status: Active"); done <<< "$OPS"
+
+        OP_CHOICE=$(whiptail --title " OPERATOR SELECTION " --menu "Select Operator Node :" 20 70 10 \
+            "${MENU_LIST[@]}" 3>&1 1>&2 2>&3)
+
+        [[ -n "$OP_CHOICE" ]] && menu_services "$OP_CHOICE"
+    fi
 done
 
 reset_terminal_profile
