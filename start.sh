@@ -413,7 +413,7 @@ start_inter_stp() {
     local inter_cfg="${tmpdir}/osmo-stp-interop.cfg"
 
     echo -e "${GREEN}Génération config inter-STP (${n_operators} opérateurs)...${NC}"
-    bash ./create_interop.sh "$n_operators" "$inter_cfg" > /dev/null
+    bash ./helpers/create_interop.sh "$n_operators" "$inter_cfg" > /dev/null
 
     if [ ! -f "$inter_cfg" ]; then
         echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
@@ -1017,7 +1017,7 @@ fi
 build_run_image
 check_image
 choose_network_mode
-./prepare_host.sh
+./helpers/prepare_host.sh
 
 case "$NETWORK_MODE" in
     host)   start_host_mode ;;

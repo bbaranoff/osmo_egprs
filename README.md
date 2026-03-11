@@ -1,16 +1,5 @@
 # osmo_egprs — Architecture Multi-PLMN SS7/IP
 
-Installation :
-```bash
-sudo ./build.sh
-```
-
-Run :
-```bash
-sudo ./start.sh
-```
-
-
 Documentation d'architecture du projet **osmo_egprs** : simulation multi-opérateur GSM complète avec interconnexion SS7 sur IP, entièrement conteneurisée via Docker.
 
 Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisation complète d'une configuration SS7 inter-opérateurs habituellement réalisée à la main, reproductible d'un simple `build.sh && start.sh`.
