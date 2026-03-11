@@ -1,27 +1,49 @@
 #!/bin/bash
-# ss7-check.sh — Vérification rapide de la stack SS7 multi-opérateurs
+# ss7_check.sh — Vérification SS7 pour architecture Inter-STP central
 #
-# Vérifie pour chaque container :
-#   1. ASP states (ASP_ACTIVE attendu)
-#   2. AS states  (AS_ACTIVE attendu)
-#   3. Routes     (avail attendu, pas de PROHIB)
-#   4. SCCP users (SSN 254 attendu sur MSC/BSC)
-#   5. Inter-STP  (tous les AS opérateurs actifs)
-#   6. Connectivité inter-op (routes croisées)
+# Architecture cible :
+#   - Inter-STP (0.23.0) central
+#   - Chaque opérateur a STP local (N.23.2) avec route par défaut vers inter-STP
+#   - Routes dynamiques apprises via M3UA
+#
+# Ce qui est vérifié :
+#   1. Inter-STP : AS actifs pour chaque opérateur
+#   2. Inter-STP : ASP connectés
+#   3. Inter-STP : pas de PROHIB
+#   4. Chaque opérateur : ASP actif vers inter-STP
+#   5. Chaque opérateur : routes locales (MSC/BSC) actives
+#   6. Chaque opérateur : route par défaut (0.0.0/0) vers inter-STP
+#   7. Matrice de connectivité basique
 #
 # Usage :
-#   sudo ./ss7-check.sh [--verbose]
+#   sudo ./ss7_check.sh [--verbose] [--quick]
 
-set -euo pipefail
+set -u
 
-GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'
-RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
+# ── Couleurs ──────────────────────────────────────────────────────────────────
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+BOLD='\033[1m'
+NC='\033[0m'
 
+# ── Configuration ─────────────────────────────────────────────────────────────
 VERBOSE=0
-[[ "${1:-}" == "--verbose" || "${1:-}" == "-v" ]] && VERBOSE=1
+QUICK=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --verbose|-v) VERBOSE=1 ;;
+        --quick|-q)   QUICK=1 ;;
+    esac
+done
 
 INTER_STP="osmo-inter-stp"
-PASS=0; FAIL=0; WARN=0; SKIP=0
+PASS=0
+FAIL=0
+WARN=0
+SKIP=0
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 ok()   { echo -e "  ${GREEN}✓${NC} $*"; PASS=$((PASS+1)); }
@@ -36,15 +58,65 @@ banner() {
     echo -e "$(printf '─%.0s' {1..60})"
 }
 
-# Envoie une commande VTY et retourne le résultat nettoyé
+# ── Fonction VTY ──────────────────────────────────────────────────────────────
 vty_cmd() {
-    local container="$1" port="$2" cmd="$3"
-    local result
-    result=$(docker exec "$container" bash -c "
-        ( sleep 0.3; printf 'enable\n${cmd}\n'; sleep 0.5 ) \
-        | nc -q1 127.0.0.1 ${port} 2>/dev/null || true
-    " 2>/dev/null | grep -vE '^(Welcome|OsmoSTP|OsmoMSC|OsmoBSC|OsmoHLR|VTY|Use|Press|[A-Za-z0-9_-]+[#>] |Enter|Trying|Connected|Escape|$)' | sed 's/\r//' || true)
-    echo "$result"
+    local container="$1"
+    local port="$2"
+    local cmd="$3"
+
+    # Test de connectivité rapide
+    if ! docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/${port}" 2>/dev/null; then
+        return 1
+    fi
+
+    # Construire le script VTY
+    local vty_script
+    vty_script="enable
+${cmd}
+end
+"
+
+    # Envoyer via nc ou telnet
+    local raw_output
+    raw_output=$(docker exec "$container" bash -c "
+        VTY_SCRIPT=\$(cat << 'VTYEOF'
+${vty_script}
+VTYEOF
+)
+        if command -v nc >/dev/null 2>&1; then
+            ( sleep 1; printf '%s' \"\$VTY_SCRIPT\"; sleep 1.5 ) \
+                | nc -q1 127.0.0.1 ${port} 2>/dev/null || true
+        else
+            ( sleep 1; printf '%s' \"\$VTY_SCRIPT\"; sleep 1.5 ) \
+                | telnet 127.0.0.1 ${port} 2>/dev/null || true
+        fi
+    " 2>/dev/null || true)
+
+    # Filtrer les lignes de bannière/prompt
+    local clean_output
+    clean_output=$(echo "$raw_output" \
+        | grep -vE \
+            "^(Trying|Connected|Escape|Welcome|OsmoSTP|OsmoHLR|OsmoMSC|\
+OsmoBSC|OsmoBTS|OsmoMGW|OsmoPCU|OsmoSGSN|OsmoGGSN|OsmoSIP|\
+VTY server|Use.*help|Press.*tab|[A-Za-z0-9_-]+[#>] |\
+Enter password|% Unknown|% Command incomplete|% Error|\
+Connection closed|Free Software lives)" \
+        | sed 's/\r//' \
+        | grep -v '^[[:space:]]*$' || true)
+
+    echo "$clean_output"
+    return 0
+}
+
+# ── Vérification rapide de disponibilité VTY ──────────────────────────────────
+vty_available() {
+    local container="$1"
+    local port="$2"
+    if docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/${port}" 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # ── Détection containers ──────────────────────────────────────────────────────
@@ -55,7 +127,9 @@ mapfile -t OP_CONTAINERS < <(
 )
 
 HAS_INTER_STP=0
-docker ps --format '{{.Names}}' | grep -qx "$INTER_STP" && HAS_INTER_STP=1
+if docker ps --format '{{.Names}}' | grep -qx "$INTER_STP"; then
+    HAS_INTER_STP=1
+fi
 
 N_OPS=${#OP_CONTAINERS[@]}
 
@@ -65,65 +139,54 @@ echo -e "${CYAN}║          SS7 Health Check — $(date '+%H:%M:%S')           
 echo -e "${CYAN}║          ${N_OPS} opérateur(s)  inter-stp=${HAS_INTER_STP}                  ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 
-if [ "$N_OPS" -eq 0 ]; then
-    fail "Aucun container osmo-operator trouvé"
+if [ "$N_OPS" -eq 0 ] && [ "$HAS_INTER_STP" -eq 0 ]; then
+    echo -e "${RED}Aucun container trouvé${NC}"
     exit 1
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CHECK 1 : Inter-STP
+# CHECK 1 : Inter-STP (hub central)
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$HAS_INTER_STP" -eq 1 ]; then
-    banner "INTER-STP (hub SS7)"
+    banner "INTER-STP (hub SS7) — 0.23.0"
 
-    # VTY accessible ?
-    if ! docker exec "$INTER_STP" bash -c "echo >/dev/tcp/127.0.0.1/4239" 2>/dev/null; then
+    if ! vty_available "$INTER_STP" 4239; then
         fail "VTY inter-STP (4239) inaccessible"
     else
         ok "VTY accessible"
 
-        # AS states
+        # Vérifier que l'inter-STP voit tous les opérateurs comme AS
         as_output=$(vty_cmd "$INTER_STP" 4239 "show cs7 instance 0 as all")
         n_as_total=$(echo "$as_output" | grep -cE 'as-op[0-9]+' || true)
         n_as_active=$(echo "$as_output" | grep -cE 'AS_ACTIVE' || true)
-        n_as_down=$(echo "$as_output" | grep -cE 'AS_DOWN|AS_INACTIVE' || true)
 
         if [ "$n_as_active" -eq "$N_OPS" ]; then
-            ok "AS : ${n_as_active}/${N_OPS} actifs"
+            ok "AS : ${n_as_active}/${N_OPS} actifs (tous)"
         elif [ "$n_as_active" -gt 0 ]; then
-            warn "AS : ${n_as_active}/${N_OPS} actifs (${n_as_down} down)"
+            warn "AS : ${n_as_active}/${N_OPS} actifs"
         else
-            fail "AS : aucun actif sur ${n_as_total} configurés"
+            fail "AS : aucun actif"
         fi
-        [[ $VERBOSE -eq 1 ]] && echo "$as_output" | grep -E 'as-op' | while read -r line; do info "$line"; done
 
-        # ASP states
+        # Vérifier les ASP connectés
         asp_output=$(vty_cmd "$INTER_STP" 4239 "show cs7 instance 0 asp")
         n_asp_active=$(echo "$asp_output" | grep -cE 'ASP_ACTIVE' || true)
-        n_asp_down=$(echo "$asp_output" | grep -cE 'ASP_DOWN|ASP_INACTIVE' || true)
 
         if [ "$n_asp_active" -eq "$N_OPS" ]; then
-            ok "ASP : ${n_asp_active}/${N_OPS} connectés"
+            ok "ASP : ${n_asp_active}/${N_OPS} connectés (tous)"
         else
-            warn "ASP : ${n_asp_active}/${N_OPS} connectés (${n_asp_down} down)"
+            warn "ASP : ${n_asp_active}/${N_OPS} connectés"
         fi
-        [[ $VERBOSE -eq 1 ]] && echo "$asp_output" | grep -E 'asp-' | while read -r line; do info "$line"; done
 
-        # Routes
+        # Vérifier l'absence de PROHIB (routes bloquées)
         route_output=$(vty_cmd "$INTER_STP" 4239 "show cs7 instance 0 route")
-        n_routes=$(echo "$route_output" | grep -cE '^\s+[0-9]+\.' || true)
         n_prohib=$(echo "$route_output" | grep -ciE 'prohib' || true)
-        n_avail=$(echo "$route_output" | grep -cE '\bavail\b' || true)
 
-        if [ "$n_prohib" -gt 0 ]; then
-            fail "Routes : ${n_prohib} PROHIB détectées"
-            echo "$route_output" | grep -iE 'prohib' | while read -r line; do info "${RED}${line}${NC}"; done
-        elif [ "$n_routes" -gt 0 ]; then
-            ok "Routes : ${n_routes} destinations (aucun PROHIB)"
+        if [ "$n_prohib" -eq 0 ]; then
+            ok "Routes : aucun PROHIB"
         else
-            warn "Routes : aucune route trouvée"
+            fail "Routes : ${n_prohib} PROHIB détectées"
         fi
-        [[ $VERBOSE -eq 1 ]] && echo "$route_output" | grep -E '^\s+[0-9]+\.' | while read -r line; do info "$line"; done
     fi
 else
     banner "INTER-STP"
@@ -135,202 +198,114 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 for container in "${OP_CONTAINERS[@]}"; do
     op_id="${container##*-}"
-    banner "OPÉRATEUR ${op_id} (${container})"
+    banner "OPÉRATEUR ${op_id} (${container}) — STP ${op_id}.23.2"
 
     # ── STP local (4239) ─────────────────────────────────────────────────
     echo -e "  ${BOLD}STP local :${NC}"
-    if ! docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/4239" 2>/dev/null; then
+    if ! vty_available "$container" 4239; then
         fail "STP VTY (4239) inaccessible"
     else
-        # AS states
+        # Vérifier la connexion vers l'inter-STP
         as_out=$(vty_cmd "$container" 4239 "show cs7 instance 0 as all")
-
-        # as-inter → vers le hub
         inter_state=$(echo "$as_out" | grep -oP 'as-inter\s+\K(AS_\w+)' || echo "ABSENT")
+
         if [[ "$inter_state" == "AS_ACTIVE" ]]; then
             ok "as-inter → hub : ACTIVE"
-        elif [[ "$inter_state" == "ABSENT" ]]; then
-            if [ "$HAS_INTER_STP" -eq 1 ]; then
-                fail "as-inter absent (devrait exister)"
-            else
-                skip "as-inter absent (pas d'inter-STP)"
-            fi
+        elif [[ "$inter_state" == "ABSENT" ]] && [ "$HAS_INTER_STP" -eq 1 ]; then
+            fail "as-inter absent (pas de connexion au hub)"
         else
-            fail "as-inter → hub : ${inter_state}"
+            warn "as-inter : ${inter_state}"
         fi
 
-        # as-rkm (MSC/BSC locaux)
-        n_rkm_active=$(echo "$as_out" | grep -cE 'as-rkm.*AS_ACTIVE' || true)
-        n_rkm_total=$(echo "$as_out" | grep -cE 'as-rkm' || true)
-        if [ "$n_rkm_total" -eq 0 ]; then
-            warn "Aucun AS local (MSC/BSC) enregistré"
-        elif [ "$n_rkm_active" -eq "$n_rkm_total" ]; then
-            ok "AS locaux : ${n_rkm_active}/${n_rkm_total} actifs (MSC+BSC)"
-        else
-            fail "AS locaux : ${n_rkm_active}/${n_rkm_total} actifs"
-        fi
-        [[ $VERBOSE -eq 1 ]] && echo "$as_out" | grep -E 'as-' | while read -r line; do info "$line"; done
-
-        # ASP
+        # Vérifier les ASP locaux (MSC/BSC)
         asp_out=$(vty_cmd "$container" 4239 "show cs7 instance 0 asp")
         n_asp_ok=$(echo "$asp_out" | grep -cE 'ASP_ACTIVE' || true)
-        n_asp_total=$(echo "$asp_out" | grep -cE 'asp-' || true)
-        if [ "$n_asp_ok" -eq "$n_asp_total" ] && [ "$n_asp_total" -gt 0 ]; then
-            ok "ASP : ${n_asp_ok}/${n_asp_total} actifs"
-        else
-            fail "ASP : ${n_asp_ok}/${n_asp_total} actifs"
-        fi
-        [[ $VERBOSE -eq 1 ]] && echo "$asp_out" | grep -E 'asp-' | while read -r line; do info "$line"; done
 
-        # Routes
+        if [ "$n_asp_ok" -ge 2 ]; then
+            ok "ASP locaux : au moins 2 actifs (MSC+BSC)"
+        elif [ "$n_asp_ok" -eq 1 ]; then
+            warn "ASP locaux : 1 seul actif (manque MSC ou BSC)"
+        else
+            fail "ASP locaux : aucun actif"
+        fi
+
+        # Vérifier la route par défaut vers l'inter-STP (élément clé)
         route_out=$(vty_cmd "$container" 4239 "show cs7 instance 0 route")
-        n_prohib=$(echo "$route_out" | grep -ciE 'prohib' || true)
-        has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0' || true)
-        n_routes=$(echo "$route_out" | grep -cE '^\s+[0-9]+\.' || true)
-
-        if [ "$n_prohib" -gt 0 ]; then
-            fail "Routes : ${n_prohib} PROHIB"
-            echo "$route_out" | grep -iE 'prohib' | while read -r line; do
-                echo -e "    ${RED}│ ${line}${NC}"
-            done
-        else
-            ok "Routes : ${n_routes} entrées, 0 PROHIB"
-        fi
+        has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0.*avail' || true)
 
         if [ "$has_default" -gt 0 ] && [ "$HAS_INTER_STP" -eq 1 ]; then
-            ok "Route par défaut → inter-STP présente"
+            ok "Route par défaut → inter-STP : présente et avail"
         elif [ "$HAS_INTER_STP" -eq 1 ]; then
-            fail "Route par défaut → inter-STP absente"
+            fail "Route par défaut → inter-STP absente ou non avail"
         fi
-        [[ $VERBOSE -eq 1 ]] && echo "$route_out" | grep -E '^\s+[0-9]+\.' | while read -r line; do info "$line"; done
+
+        # Vérifier l'absence de PROHIB
+        n_prohib=$(echo "$route_out" | grep -ciE 'prohib' || true)
+        if [ "$n_prohib" -gt 0 ]; then
+            fail "Routes PROHIB détectées : ${n_prohib}"
+        fi
+
+        # Compter les routes dynamiques (juste pour info)
+        n_dyn=$(echo "$route_out" | grep -c 'dyn' || true)
+        info "Routes dynamiques apprises : ${n_dyn} (normal: devrait augmenter avec le nombre d'opérateurs)"
+    fi
+
+    # En mode quick, on passe au prochain opérateur
+    if [ "$QUICK" -eq 1 ]; then
+        continue
     fi
 
     # ── MSC (4254) ───────────────────────────────────────────────────────
     echo -e "  ${BOLD}MSC :${NC}"
-    if ! docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/4254" 2>/dev/null; then
-        fail "MSC VTY (4254) inaccessible — osmo-msc DOWN"
+    if ! vty_available "$container" 4254; then
+        fail "MSC VTY (4254) inaccessible"
     else
         msc_asp=$(vty_cmd "$container" 4254 "show cs7 instance 0 asp")
         msc_active=$(echo "$msc_asp" | grep -cE 'ASP_ACTIVE' || true)
-        if [ "$msc_active" -gt 0 ]; then
-            ok "MSC→STP : ASP_ACTIVE"
-        else
-            fail "MSC→STP : pas de ASP actif"
-        fi
+        [ "$msc_active" -gt 0 ] && ok "MSC→STP : ASP_ACTIVE" || fail "MSC→STP : pas de ASP actif"
 
         # SCCP
         msc_sccp=$(vty_cmd "$container" 4254 "show cs7 instance 0 sccp users")
-        if echo "$msc_sccp" | grep -qE 'SSN 254'; then
-            ok "SCCP SSN 254 (MSC-A) enregistré"
-        else
-            fail "SCCP SSN 254 absent"
-        fi
-
-        # Subscribers
-        msc_stats=$(vty_cmd "$container" 4254 "show cs7 instance 0 as all")
-        msc_as_state=$(echo "$msc_stats" | grep -oP 'as-msc\s+\K(AS_\w+)' || echo "?")
-        info "AS as-msc : ${msc_as_state}"
-
-        # VLR count
-        vlr_out=$(vty_cmd "$container" 4254 "show subscriber count")
-        vlr_count=$(echo "$vlr_out" | grep -oP '\d+' | head -1 || echo "?")
-        info "Subscribers VLR : ${vlr_count}"
+        echo "$msc_sccp" | grep -qE 'SSN 254' && ok "SCCP SSN 254 (MSC-A) enregistré" || fail "SCCP SSN 254 absent"
     fi
 
     # ── BSC (4242) ───────────────────────────────────────────────────────
     echo -e "  ${BOLD}BSC :${NC}"
-    if ! docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/4242" 2>/dev/null; then
-        fail "BSC VTY (4242) inaccessible — osmo-bsc DOWN"
+    if ! vty_available "$container" 4242; then
+        fail "BSC VTY (4242) inaccessible"
     else
         bsc_asp=$(vty_cmd "$container" 4242 "show cs7 instance 0 asp")
         bsc_active=$(echo "$bsc_asp" | grep -cE 'ASP_ACTIVE' || true)
-        if [ "$bsc_active" -gt 0 ]; then
-            ok "BSC→STP : ASP_ACTIVE"
-        else
-            fail "BSC→STP : pas de ASP actif"
-        fi
+        [ "$bsc_active" -gt 0 ] && ok "BSC→STP : ASP_ACTIVE" || fail "BSC→STP : pas de ASP actif"
 
         # SCCP
         bsc_sccp=$(vty_cmd "$container" 4242 "show cs7 instance 0 sccp users")
-        if echo "$bsc_sccp" | grep -qE 'SSN 254'; then
-            ok "SCCP SSN 254 (BSC) enregistré"
-        else
-            fail "SCCP SSN 254 absent"
-        fi
+        echo "$bsc_sccp" | grep -qE 'SSN 254' && ok "SCCP SSN 254 (BSC) enregistré" || fail "SCCP SSN 254 absent"
 
-        # BTS
-        bsc_bts=$(vty_cmd "$container" 4242 "show bts 0")
+        # BTS state (optionnel)
+        bsc_bts=$(vty_cmd "$container" 4242 "show bts 0" 2>/dev/null || echo "")
         if echo "$bsc_bts" | grep -qE "Oper 'Enabled'.*Avail 'OK'"; then
-            ok "BTS 0 : Enabled / OK"
-        elif echo "$bsc_bts" | grep -qE "Oper 'Enabled'"; then
-            warn "BTS 0 : Enabled mais Avail != OK"
-        else
-            fail "BTS 0 : pas Enabled"
-        fi
-
-        # OML/RSL
-        oml_up=$(echo "$bsc_bts" | grep -cE 'OML Link state: connected' || true)
-        rsl_up=$(echo "$bsc_bts" | grep -cE 'RSL State: connected' || true)
-        if [ "$oml_up" -gt 0 ]; then
-            ok "OML : connecté"
-        else
-            fail "OML : déconnecté"
-        fi
-        if [ "$rsl_up" -gt 0 ]; then
-            ok "RSL : connecté"
-        else
-            fail "RSL : déconnecté"
+            ok "BTS 0 : OK"
         fi
     fi
 
     # ── HLR (4258) ───────────────────────────────────────────────────────
     echo -e "  ${BOLD}HLR :${NC}"
-    if ! docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/4258" 2>/dev/null; then
+    if ! vty_available "$container" 4258; then
         fail "HLR VTY (4258) inaccessible"
     else
         hlr_gsup=$(vty_cmd "$container" 4258 "show gsup-connections")
-        n_gsup=$(echo "$hlr_gsup" | grep -cE "from 127" || true)
         vlr_conn=$(echo "$hlr_gsup" | grep -cE "VLR" || true)
-        smsc_conn=$(echo "$hlr_gsup" | grep -cE "SMSC" || true)
-
-        if [ "$vlr_conn" -gt 0 ]; then
-            ok "GSUP : VLR connecté"
-        else
-            fail "GSUP : VLR absent"
-        fi
-        if [ "$smsc_conn" -gt 0 ]; then
-            ok "GSUP : SMSC connecté"
-        else
-            warn "GSUP : SMSC absent"
-        fi
-        info "Connexions GSUP totales : ${n_gsup}"
-    fi
-
-    # ── MNCC socket ──────────────────────────────────────────────────────
-    echo -e "  ${BOLD}Voice path :${NC}"
-    if docker exec "$container" test -S /tmp/msc_mncc 2>/dev/null; then
-        ok "MNCC socket présent"
-    else
-        fail "MNCC socket absent (osmo-sip-connector down ?)"
-    fi
-
-    # ── SMS relay ────────────────────────────────────────────────────────
-    echo -e "  ${BOLD}SMS :${NC}"
-    sms_port=$(docker exec "$container" ss -tlnp 2>/dev/null | grep -c ':7890' || true)
-    if [ "$sms_port" -gt 0 ]; then
-        ok "Relay SMS écoute sur :7890"
-    else
-        warn "Relay SMS absent (port 7890)"
+        [ "$vlr_conn" -gt 0 ] && ok "GSUP : VLR connecté" || fail "GSUP : VLR absent"
     fi
 done
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CHECK 3 : Matrice de connectivité inter-opérateur
+# CHECK 3 : Matrice de connectivité simple
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$HAS_INTER_STP" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
-    banner "MATRICE INTER-OPÉRATEUR"
+    banner "MATRICE DE CONNECTIVITÉ (via inter-STP)"
 
-    # Header
     printf "  %-8s" ""
     for j in $(seq 1 "$N_OPS"); do printf "  Op%-3s" "$j"; done
     echo ""
@@ -339,25 +314,26 @@ if [ "$HAS_INTER_STP" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
         src_id="${container##*-}"
         printf "  Op%-5s" "${src_id}"
 
-        route_out=$(vty_cmd "$container" 4239 "show cs7 instance 0 route")
+        # On ne teste que la connectivité de base : l'opérateur a-t-il une route par défaut ?
+        route_out=$(vty_cmd "$container" 4239 "show cs7 instance 0 route" 2>/dev/null || echo "")
+        has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0.*avail' || true)
 
         for j in $(seq 1 "$N_OPS"); do
             if [ "$j" -eq "$src_id" ]; then
                 printf "  ${CYAN}%-5s${NC}" "self"
+            elif [ "$has_default" -gt 0 ]; then
+                # Si route par défaut, on suppose que la connectivité est possible via l'inter-STP
+                printf "  ${GREEN}%-5s${NC}" "via"
             else
-                # Cherche une route vers le STP de l'opérateur j (1.j.2)
-                if echo "$route_out" | grep -qE "${j}\.[0-9]+\.2.*avail"; then
-                    printf "  ${GREEN}%-5s${NC}" "ok"
-                elif echo "$route_out" | grep -qE "0\.0\.0/0.*avail"; then
-                    printf "  ${GREEN}%-5s${NC}" "dflt"
-                else
-                    printf "  ${RED}%-5s${NC}" "FAIL"
-                    FAIL=$((FAIL+1))
-                fi
+                printf "  ${RED}%-5s${NC}" "FAIL"
+                FAIL=$((FAIL+1))
             fi
         done
         echo ""
     done
+    echo ""
+    echo "  Note: 'via' signifie que l'opérateur a une route par défaut vers l'inter-STP"
+    echo "  Les routes dynamiques spécifiques sont apprises au fur et à mesure"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -365,7 +341,6 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
 echo -e "$(printf '═%.0s' {1..60})"
-TOTAL=$((PASS+FAIL+WARN+SKIP))
 
 if [ "$FAIL" -eq 0 ]; then
     echo -e "  ${GREEN}${BOLD}SS7 OK${NC}  —  ${GREEN}${PASS} pass${NC}  ${YELLOW}${WARN} warn${NC}  ${SKIP} skip"

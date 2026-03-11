@@ -104,7 +104,7 @@ echo -e "${CYAN}[4/4] Data (GGSN → SGSN → PCU)${NC}"
 start_svc osmo-ggsn 4260 "OsmoGGSN" 20 || true
 start_svc osmo-sgsn 4245 "OsmoSGSN" 20 || true
 start_svc osmo-pcu  ""   "OsmoPCU"  0  || true
-start_svc osmo-sip-connector  ""   "OsmoPCU"  0  || true
+start_svc osmo-sip-connector  ""   "OsmoSIPConnector"  0  || true
 sleep 1
 chmod 777 /tmp/pcu_bts 2>/dev/null || true
 

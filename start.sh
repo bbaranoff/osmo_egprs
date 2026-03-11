@@ -157,8 +157,6 @@ aors=interop_trunk_op${remote_op}
 direct_media=no
 rtp_symmetric=yes
 force_rport=yes
-rewrite_contact=yes
-from_user=interop_op${op_id}
 
 [interop_trunk_op${remote_op}]
 type=aor
@@ -186,9 +184,23 @@ EOF
 
     for remote_op in $(seq 1 "$n_operators"); do
         [ "$remote_op" -eq "$op_id" ] && continue
+        # Déterminer la longueur du préfixe (1 ou 2 chiffres)
+        if [ $remote_op -lt 10 ]; then
+            pattern="_${remote_op}XXXX"
+            pattern2="_${remote_op}XXXXX"
+        else
+            pattern="_${remote_op}XXXX"
+            pattern2="_${remote_op}XXXXX"
+        fi
         cat <<EOF
 ; → Opérateur ${remote_op}
-exten => _${remote_op}XXXX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
+exten => ${pattern},1,NoOp(=== INTEROP OUT Op${remote_op} (4 chiffres): \${EXTEN} ===)
+ same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
+ same => n,NoOp(Échec inter-op: \${DIALSTATUS})
+ same => n,Congestion()
+ same => n,Hangup()
+
+exten => ${pattern2},1,NoOp(=== INTEROP OUT Op${remote_op} (5 chiffres): \${EXTEN} ===)
  same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
  same => n,NoOp(Échec inter-op: \${DIALSTATUS})
  same => n,Congestion()
@@ -204,7 +216,6 @@ exten => _X.,1,NoOp(=== INTEROP OUT: destination inconnue ${EXTEN} ===)
  same => n,Hangup()
 EOF
 }
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Génération dynamique — sms-routing.conf
 #
