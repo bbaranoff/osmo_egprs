@@ -57,6 +57,17 @@ fi
 # start_host_mode, utilisé par build_vol_args)
 SMS_ROUTING_DIR=""
 
+# ══════════════════════════════════════════════════════════════════════════════
+# WAN Interop — constantes et état global
+# ══════════════════════════════════════════════════════════════════════════════
+WAN_ENABLED="false"
+WAN_LOCAL_IP=""
+WAN_REMOTE_IP=""
+WAN_PREFIX="66"
+WAN_SIP_BASE=5080
+WAN_RTP_BASE=20000
+WAN_RTP_PER_OP=500
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 op_private_ip()   { echo "172.20.$1.10"; }
@@ -67,6 +78,11 @@ op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
 op_rctx_bsc()     { echo $(( $1 * 100 + 30 )); }
 op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
+
+# WAN helpers
+wan_sip_port()    { echo $(( WAN_SIP_BASE + ($1 - 1) * 2 )); }
+wan_rtp_start()   { echo $(( WAN_RTP_BASE + ($1 - 1) * WAN_RTP_PER_OP )); }
+wan_rtp_end()     { echo $(( WAN_RTP_BASE + $1 * WAN_RTP_PER_OP - 1 )); }
 
 banner() {
     echo -e "${CYAN}"
@@ -354,10 +370,6 @@ apply_config_templates() {
         >> "$dest/asterisk/extensions.conf"
 
     # ── SMS Routing ─────────────────────────────────────────────────────────
-    # Si sms_routing_generate (module externe) est disponible ET que
-    # SMS_ROUTING_DIR est défini, la config a déjà été générée globalement :
-    # on la copie simplement dans le tmpdir de cet opérateur.
-    # Sinon : fallback inline basique.
     if declare -f sms_routing_generate > /dev/null 2>&1 && \
        [ -n "${SMS_ROUTING_DIR:-}" ] && \
        [ -f "${SMS_ROUTING_DIR}/sms-routing-op${op_id}.conf" ]; then
@@ -418,6 +430,7 @@ start_inter_stp() {
     if [ ! -f "$inter_cfg" ]; then
         echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
     fi
+    # Construction des arguments de ports WAN si activé
 
     echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.23.0)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
@@ -453,22 +466,14 @@ start_inter_stp() {
         sleep 1
         ((retries--)) || true
     done
-    # Timeout non fatal : l'inter-STP est peut-être prêt mais sans log attendu
     echo -e " ${YELLOW}(timeout log, on continue)${NC}"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# [PATCH] wait_inter_stp_ready — Attendre que l'inter-STP soit prêt
-#
-# osmo-stp démarre rapidement (~1-2s). On attend 15s pour être sûr.
-# ══════════════════════════════════════════════════════════════════════════════
 wait_inter_stp_ready() {
     local n_operators=$1
     
     echo -ne "${GREEN}[*] Vérification stabilisation inter-STP (routes SS7)${NC}"
     
-    # osmo-stp crée les routes rapidement
-    # Attendre 15s pour stabilisation complète
     for i in {1..15}; do
         sleep 1
         echo -n "."
@@ -521,16 +526,27 @@ wait_stp_vty() {
 
     echo -e " ${GREEN}OK${NC}"
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WAN Interop — délègue à setup-wan-interop.sh
+# ══════════════════════════════════════════════════════════════════════════════
+setup_wan_interop() {
+    local n_operators=$1
+    local script_path
+    script_path="$(dirname "$0")/setup-wan-interop.sh"
+
+    if [ ! -f "$script_path" ]; then
+        echo -e "${RED}[WAN] setup-wan-interop.sh introuvable : ${script_path}${NC}"
+        echo -e "${YELLOW}[WAN] Placer le script à côté de start.sh${NC}"
+        return 1
+    fi
+
+    chmod +x "$script_path"
+    bash "$script_path" "$WAN_LOCAL_IP" "$WAN_REMOTE_IP" "$n_operators"
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Démarrage d'un opérateur
-#
-# Paramètres :
-#   $1  op_id
-#   $2  mcc
-#   $3  mnc
-#   $4  op_name
-#   $5  n_operators   Nombre total d'opérateurs
-#   $6  n_ms          Nombre de Mobile Stations pour cet opérateur (défaut: 1)
 # ══════════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
 # Mode bridge (N opérateurs avec inter-STP central)
@@ -559,8 +575,6 @@ start_bridge_mode() {
     declare -A OP_MCC OP_MNC OP_NAME OP_MS
     
     if [[ "$use_defaults" =~ ^[OoYy]$ ]]; then
-        # Mode valeurs par défaut pour tous
-        # Demander le nombre de MS même en mode défaut
         local common_ms
         read -rp "  Nombre de MS pour chaque opérateur [8] : " common_ms
         common_ms=${common_ms:-8}
@@ -579,9 +593,7 @@ start_bridge_mode() {
             echo -e "  → MCC=001  MNC=${OP_MNC[$i]}  Nom=OsmoOP${i}  MS=${CYAN}${OP_MS[$i]}${NC}"
         done
     else
-        # Mode saisie manuelle
         if [[ "$same_ms_all" =~ ^[OoYy]$ ]]; then
-            # MS identique pour tous
             local common_ms
             read -rp "  Nombre de MS pour chaque opérateur [8] : " common_ms
             common_ms=${common_ms:-8}
@@ -601,7 +613,6 @@ start_bridge_mode() {
                 echo -e "  → MCC=${OP_MCC[$i]}  MNC=${OP_MNC[$i]}  Nom=${OP_NAME[$i]}  MS=${CYAN}${OP_MS[$i]}${NC}"
             done
         else
-            # MS différents par opérateur (saisie complète)
             for i in $(seq 1 "$n_operators"); do
                 echo -e "${CYAN}── Opérateur ${i} ──${NC}"
                 read -rp "  MCC   [001]      : " mcc;  OP_MCC[$i]=${mcc:-001}
@@ -617,6 +628,58 @@ start_bridge_mode() {
             done
         fi
     fi
+
+    # ── WAN Interop — saisie optionnelle ──────────────────────────────────
+    echo ""
+    echo -e "${CYAN}${BOLD}── WAN Interop (appels inter-serveur) ──${NC}"
+    local wan_choice
+    read -rp "Activer l'interconnexion WAN vers un serveur distant ? [o/N] : " wan_choice
+    if [[ "$wan_choice" =~ ^[OoYy]$ ]]; then
+        WAN_ENABLED="true"
+
+        # Détection automatique de l'IP publique locale
+        local auto_ip=""
+        auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
+        if [ -z "$auto_ip" ]; then
+            auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+        fi
+
+        read -rp "  IP publique locale  [${auto_ip}] : " wan_local
+        WAN_LOCAL_IP="${wan_local:-$auto_ip}"
+        if [ -z "$WAN_LOCAL_IP" ]; then
+            echo -e "  ${RED}IP locale requise.${NC}"
+            WAN_ENABLED="false"
+        fi
+
+        if [ "$WAN_ENABLED" = "true" ]; then
+            read -rp "  IP publique distante            : " wan_remote
+            WAN_REMOTE_IP="$wan_remote"
+            if [ -z "$WAN_REMOTE_IP" ]; then
+                echo -e "  ${RED}IP distante requise.${NC}"
+                WAN_ENABLED="false"
+            fi
+        fi
+
+        if [ "$WAN_ENABLED" = "true" ]; then
+            read -rp "  Préfixe d'appel WAN [${WAN_PREFIX}] : " wan_pfx
+            WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
+
+            echo -e ""
+            echo -e "  ${GREEN}WAN Interop activé :${NC}"
+            echo -e "    Local  : ${CYAN}${WAN_LOCAL_IP}${NC}"
+            echo -e "    Remote : ${CYAN}${WAN_REMOTE_IP}${NC}"
+            echo -e "    Préfixe: ${CYAN}${WAN_PREFIX}${NC}"
+            for i in $(seq 1 "$n_operators"); do
+                local sp rps rpe
+                sp=$(wan_sip_port "$i")
+                rps=$(wan_rtp_start "$i")
+                rpe=$(wan_rtp_end "$i")
+                echo -e "    Op${i}: SIP :${CYAN}${sp}${NC}  RTP ${CYAN}${rps}-${rpe}${NC}"
+            done
+            echo ""
+        fi
+    fi
+
     # ── Réseau backbone ────────────────────────────────────────────────────
     echo -e "${GREEN}Création du réseau backbone ${INTER_NET}...${NC}"
     docker network inspect "$INTER_NET" &>/dev/null || \
@@ -674,7 +737,6 @@ start_bridge_mode() {
         inter_local_ip=$(op_backbone_ip "$i")
         rctx_inter=$(op_rctx_inter "$i")
         
-        # Calcul du nombre de groupes et IP du dernier groupe
         n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
         last_group_ip="127.0.0.${n_groups}"
 
@@ -683,11 +745,9 @@ start_bridge_mode() {
         echo -e "  STP PC     : 1.${i}.2  RCTX inter : ${rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
         echo -e "  Groupes    : ${n_groups}  Dernier groupe IP : ${last_group_ip}:4247"
 
-        # Réseau privé
         docker network inspect "$net_name" &>/dev/null || \
             docker network create --subnet="$subnet" --gateway="$gateway" "$net_name" &>/dev/null
 
-        # Génération des configs
         local tmpdir
         tmpdir=$(mktemp -d)
         apply_config_templates "$tmpdir" \
@@ -702,10 +762,20 @@ start_bridge_mode() {
         local alsa_args
         alsa_args=$(build_alsa_args)
 
-        # Dossier de logs séparé par opérateur
         mkdir -p /tmp/osmocom-logs/op${i}
-
-        # Lancement du container
+        # Construction des arguments de ports WAN si activé
+        local port_args=""
+        if [ "$WAN_ENABLED" = "true" ]; then
+            local sip_port
+            local rtp_start
+            local rtp_end
+            sip_port=$(wan_sip_port "$i")
+            rtp_start=$(wan_rtp_start "$i")
+            rtp_end=$(wan_rtp_end "$i")
+            port_args="-p ${sip_port}:5060/udp -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
+            echo -e "  WAN ports exposés : SIP ${sip_port} (udp/tcp), RTP ${rtp_start}-${rtp_end}"
+        fi
+        # shellcheck disable=SC2086
         # shellcheck disable=SC2086
         docker run -d \
             --rm \
@@ -717,6 +787,7 @@ start_bridge_mode() {
             --cgroupns host \
             --device /dev/net/tun:/dev/net/tun \
             $alsa_args \
+            $port_args \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             -v /tmp/osmocom-logs/op${i}:/var/log/osmocom \
             --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
@@ -728,16 +799,12 @@ start_bridge_mode() {
             $vol_args \
             "$IMAGE_RUN" \
             sleep infinity
-
-        # Attacher réseau privé
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
         echo -e "  ${GREEN}[*] Réseau privé attaché${NC}"
 
-        # Lancer run.sh
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
         docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && /etc/osmocom/run.sh > /var/log/osmocom/run.sh.log 2>&1"
 
-        # Attendre que le HLR soit prêt
         echo -ne "  ${GREEN}[*] Attente HLR (port 4258)${NC}"
         local retry=0
         while ! docker exec "$container_name" bash -c "echo >/dev/tcp/127.0.0.1/4258" 2>/dev/null; do
@@ -752,16 +819,13 @@ start_bridge_mode() {
         done
         echo -e " ${GREEN}✓${NC}"
 
-        # Alimenter le HLR avec TOUS les abonnés (pré-calculés)
         echo -e "  ${GREEN}[*] Alimentation HLR Op${i} avec tous les abonnés (${total_subs})...${NC}"
 
-        # Utiliser la même méthode que hlr-feed-subscribers.sh (via stdin)
         {
             echo "#!/bin/bash"
             echo "cat > /tmp/hlr_feed.vty << 'VTYCMDS'"
             echo "enable"
             while IFS=: read -r op_id ms_idx imsi msisdn ki; do
-                # Ignorer l'en-tête
                 [[ "$op_id" =~ ^#.*$ ]] && continue
                 echo "subscriber imsi ${imsi} create"
                 echo "subscriber imsi ${imsi} update msisdn ${msisdn}"
@@ -771,7 +835,6 @@ start_bridge_mode() {
             echo "VTYCMDS"
         } | docker exec -i "$container_name" bash
 
-        # Exécuter les commandes VTY
         docker exec "$container_name" bash -c '
             if command -v nc >/dev/null 2>&1; then
                 (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) \
@@ -788,7 +851,6 @@ start_bridge_mode() {
         '
 
         echo -e "  ${GREEN}✓ HLR Op${i} alimenté${NC}"
-        # Attendre le dernier groupe uniquement
         echo -ne "  ${GREEN}[*] Attente dernier groupe (${last_group_ip}:4247)${NC}"
         retry=0
         max_retries=90
@@ -799,12 +861,10 @@ start_bridge_mode() {
             if [ $retry -ge $max_retries ]; then
                 echo -e " ${RED}TIMEOUT${NC}"
                 docker logs "$container_name" --tail 20
-                # On continue quand même pour l'opérateur suivant
                 break
             fi
         done
         echo -e " ${GREEN}OK${NC}"        
-        # Stabilisation
         echo -e "  ${GREEN}[*] Stabilisation (3s)...${NC}"
         sleep 3
 
@@ -812,7 +872,6 @@ start_bridge_mode() {
         echo ""
     done
 
-    # Nettoyer le fichier temporaire
     rm -f "$all_subscribers_file"
 
     # ── Attente relays SMS ─────────────────────────────────────────────────
@@ -821,6 +880,11 @@ start_bridge_mode() {
         for i in $(seq 1 "$n_operators"); do
             sms_routing_wait_ready "$(op_container "$i")" 90 || true
         done
+    fi
+
+    # ── WAN Interop — setup post-démarrage ─────────────────────────────────
+    if [ "$WAN_ENABLED" = "true" ]; then
+        setup_wan_interop "$n_operators"
     fi
 
     # ── Résumé ────────────────────────────────────────────────────────────
@@ -835,6 +899,20 @@ start_bridge_mode() {
         n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
         echo -e "  Op${i} ${OP_NAME[$i]}  STP 1.${i}.2 @ ${bb_ip}  ──RCTX ${rctx}──►  inter-STP  [MS: ${OP_MS[$i]}, groupes: ${n_groups}]"
     done
+
+    if [ "$WAN_ENABLED" = "true" ]; then
+        echo ""
+        echo -e "  ${BOLD}WAN Interop :${NC} ${CYAN}${WAN_LOCAL_IP}${NC} ↔ ${CYAN}${WAN_REMOTE_IP}${NC}"
+        echo -e "  Préfixe    : ${CYAN}${WAN_PREFIX}${NC}  (ex: ${WAN_PREFIX}10001 → MS distant)"
+        for i in $(seq 1 "$n_operators"); do
+            local sp rps rpe
+            sp=$(wan_sip_port "$i")
+            rps=$(wan_rtp_start "$i")
+            rpe=$(wan_rtp_end "$i")
+            echo -e "  Op${i}: SIP :${CYAN}${sp}${NC}  RTP ${CYAN}${rps}-${rpe}${NC}"
+        done
+    fi
+
     echo ""
 
     # ── Wireshark ─────────────────────────────────────────────────────────
@@ -867,7 +945,6 @@ start_bridge_mode() {
         sleep 0.3
     }
 
-    # ── Consoles opérateurs (une seule par opérateur) ─────────────────────
     for i in $(seq 1 "$n_operators"); do
         cname=$(op_container "$i")
         
@@ -887,31 +964,25 @@ EOF
         _open_term_script "Op${i} — ${OP_NAME[$i]}" "$tmpscript"
     done
 
-# ── Console Journal Inter-STP ─────────────────────────────────────────
     echo ""
     echo "=== ${INTER_STP_CONTAINER} ==="
     wait_stp_vty "$INTER_STP_CONTAINER"
 
-    # Création du script pour simuler journalctl -u osmo-stp -f
     tmpscript_stp="/tmp/osmo-xterm-stp.sh"
     cat > "$tmpscript_stp" <<EOF
 #!/usr/bin/env bash
 echo "--- Journal systemd: osmo-stp.service (Inter-STP) ---"
-# On utilise docker logs avec un formatage 'journalctl' (timestamp + flux)
 exec sudo docker logs -f --tail 50 "${INTER_STP_CONTAINER}"
 EOF
     chmod +x "$tmpscript_stp"
 
-    # Lancement du terminal de logs en arrière-plan (&) pour ne pas bloquer
     _open_term_script "Journal Inter-STP" "$tmpscript_stp" &
 
-    # ── LANCEMENT DU GESTIONNAIRE VTY SDR ──────────────────────────────────
     echo -e "\n${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
     echo -e "${CYAN}Lancement du gestionnaire de consoles...${NC}"
 
     if [ -f "./vty-menu.sh" ]; then
         chmod +x ./vty-menu.sh
-        # exec remplace le script actuel par le menu pour éviter le hang
         exec ./vty-menu.sh
     else
         echo -e "${RED}[!] Erreur : vty-menu.sh introuvable.${NC}"
@@ -941,7 +1012,6 @@ start_host_mode() {
     prepare_host_tun
     docker rm -f egprs &>/dev/null || true
 
-    # ── Génération config SMS routing (mode host, 1 opérateur) ────────────
     SMS_ROUTING_DIR=$(mktemp -d)
     if declare -f sms_routing_generate > /dev/null 2>&1; then
         echo -e "${GREEN}Génération table SMS routing (1 op, ${n_ms} MS)...${NC}"
@@ -996,6 +1066,12 @@ stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
     docker ps -a --filter "name=egprs"  --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
+
+    # Nettoyage iptables WAN
+    iptables -t nat -D PREROUTING -j OSMO_WAN_INTEROP 2>/dev/null || true
+    iptables -t nat -F OSMO_WAN_INTEROP 2>/dev/null || true
+    iptables -t nat -X OSMO_WAN_INTEROP 2>/dev/null || true
+
     echo -e "${GREEN}Arrêté.${NC}"
 }
 
