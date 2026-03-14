@@ -58,8 +58,8 @@ CONTAINER_PREFIX="osmo-operator-"
 if [ -z "$LOCAL_IP" ] || [ -z "$REMOTE_IP" ]; then
     echo -e "${RED}Usage: sudo $0 <local_public_ip> <remote_public_ip> [n_operators]${NC}"
     echo ""
-    echo "  Serveur A : sudo $0 82.66.231.141 37.59.111.84 2"
-    echo "  Serveur B : sudo $0 37.59.111.84 82.66.231.141 2"
+    echo "  Serveur A : sudo $0 82.66.231.142 37.59.111.84 2"
+    echo "  Serveur B : sudo $0 37.59.111.84 82.66.231.142 2"
     exit 1
 fi
 
