@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2-dev libasound2 alsa-utils \
     # libgsm — codec GSM-FR natif (accélère gapk en mode gsmfr)
     libgsm1-dev libgsm1 \
-    iptables iproute2 asterisk
+    iptables iproute2 asterisk ffmpeg
 
 SHELL ["/bin/bash", "-c"]
 COPY configs/*conf /etc/asterisk/

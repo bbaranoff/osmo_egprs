@@ -1,7 +1,8 @@
 #!/bin/bash
 # pulse-gsm-setup.sh — Sink PulseAudio virtuel pour mobile (OsmocomBB)
 #
-# Crée gsm_audio (null-sink 8kHz mono) + loopback vers les HP.
+# Crée gsm_audio (null-sink 8kHz mono) SANS loopback vers les HP.
+# L'audio est streamé aux clients via server.js /audio endpoint (ffmpeg → MP3).
 # Patche les mobile_group*.cfg pour utiliser gsm_out / gsm_in.
 # Appelé par run.sh APRÈS generate_ms_configs, AVANT mobile.
 
@@ -11,7 +12,6 @@ GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'
 RED='\033[0;31m'; NC='\033[0m'
 
 GSM_SINK_NAME="gsm_audio"
-LOOPBACK_LATENCY_MS=50
 
 _check_pulse() {
     command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1
@@ -30,13 +30,13 @@ pulse_gsm_setup() {
         return 0
     fi
 
-    # 1. Nettoyer les anciens sinks gsm_audio (évite les doublons)
+    # 1. Nettoyer les anciens sinks/loopbacks gsm_audio
     pactl list short modules 2>/dev/null \
         | grep -E "null-sink.*${GSM_SINK_NAME}|loopback.*${GSM_SINK_NAME}" \
         | awk '{print $1}' \
         | xargs -rn1 pactl unload-module 2>/dev/null || true
 
-    # 2. Créer UN SEUL null-sink
+    # 2. Créer UN SEUL null-sink (pas de loopback → pas de son sur les HP hôte)
     local mod_sink
     mod_sink=$(pactl load-module module-null-sink \
         sink_name="${GSM_SINK_NAME}" \
@@ -51,29 +51,21 @@ pulse_gsm_setup() {
         return 0
     fi
 
-    # 3. Loopback → HP (son GSM audible)
-    local mod_lb
-    mod_lb=$(pactl load-module module-loopback \
-        source="${GSM_SINK_NAME}.monitor" \
-        latency_msec="${LOOPBACK_LATENCY_MS}" 2>/dev/null) || true
+    # PAS de loopback : l'audio est streamé via server.js /audio endpoint
+    # Le monitor gsm_audio.monitor est lu par ffmpeg quand un client se connecte
+    echo -e "  ${GREEN}✓${NC} Pas de loopback HP — audio via web console /audio"
 
-    if [ -n "$mod_lb" ]; then
-        echo -e "  ${GREEN}✓${NC} Loopback → HP (${LOOPBACK_LATENCY_MS}ms, module ${mod_lb})"
-    else
-        echo -e "  ${YELLOW}⚠${NC} Loopback échoué — GSM audible via Linphone uniquement"
-    fi
-
-    # 4. Vérification : exactement 1 sink
+    # 3. Vérification : exactement 1 sink
     local n_sinks
     n_sinks=$(pactl list short sinks 2>/dev/null | grep -c "${GSM_SINK_NAME}" || echo 0)
     if [ "$n_sinks" -ne 1 ]; then
         echo -e "  ${YELLOW}⚠${NC} ${n_sinks} sinks détectés (attendu: 1)"
     fi
 
-    # 5. Patcher mobile configs
+    # 4. Patcher mobile configs
     _patch_mobile_configs "gsm_out" "gsm_in"
 
-    echo -e "${GREEN}[pulse-gsm] Audio isolée — desktop libre${NC}"
+    echo -e "${GREEN}[pulse-gsm] Audio isolée — stream via /audio${NC}"
 }
 
 _patch_mobile_configs() {
@@ -86,11 +78,10 @@ _patch_mobile_configs() {
         [ -f "$cfg" ] || continue
         grep -q "alsa-output-dev" "$cfg" 2>/dev/null || continue
 
-        # sed -i échoue sur bind mounts Docker → cp/sed/cp
-        cp "$cfg" /tmp/_mob_patch.tmp
-        sed "s|alsa-output-dev .*|alsa-output-dev ${out_dev}|;s|alsa-input-dev .*|alsa-input-dev ${in_dev}|" \
-            /tmp/_mob_patch.tmp > "$cfg"
-        rm -f /tmp/_mob_patch.tmp
+        # sed -i interdit sur bind mount → cp + sed > fichier
+        cp "$cfg" /tmp/_sedtmp
+        sed "s|alsa-output-dev .*|alsa-output-dev ${out_dev}|;s|alsa-input-dev .*|alsa-input-dev ${in_dev}|" /tmp/_sedtmp > "$cfg"
+        rm -f /tmp/_sedtmp
         patched=$((patched + 1))
     done
 
@@ -104,7 +95,7 @@ pulse_gsm_status() {
         echo -e "  PulseAudio : ${GREEN}OK${NC}"
         pactl list short sinks 2>/dev/null | grep "${GSM_SINK_NAME}" | sed 's/^/    /'
         local lb; lb=$(pactl list short modules 2>/dev/null | grep -c "loopback.*${GSM_SINK_NAME}" || echo 0)
-        echo -e "  Loopback : ${lb}"
+        echo -e "  Loopback : ${lb} (should be 0 — audio via web)"
     else
         echo -e "  PulseAudio : ${RED}inaccessible${NC}"
     fi
