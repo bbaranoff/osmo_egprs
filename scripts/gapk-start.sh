@@ -1,41 +1,34 @@
 #!/bin/bash
 # gapk-start.sh — Gestionnaire audio GSM (osmo-gapk ↔ ALSA/RTP)
 #
-# Intégration native dans la stack osmo_egprs :
-#   • Mode `auto`  : se greffe sur OsmoMGW pour détecter les appels actifs
-#                    et démarre/arrête gapk automatiquement via hook MGCP.
-#   • Mode `call`  : appel bidirectionnel ALSA ↔ RTP (RX + TX en background).
-#   • Mode `monitor`: écoute passive RTP → ALSA (foreground).
-#   • Mode `record` : enregistre flux RTP → fichier .gsm (foreground).
-#   • Mode `playback`: injecte fichier .gsm → RTP (foreground).
-#   • Mode `loopback`: boucle codec ALSA micro → GSM → HP (test).
-#   • Mode `mgw-ports`: liste les endpoints/ports RTP OsmoMGW actifs.
-#   • Mode `stop`  : arrête toutes les instances en background.
-#   • Mode `status`: état des instances en cours.
-#
 # ══════════════════════════════════════════════════════════════════════════════
-# ARCHITECTURE AUDIO
+# ARCHITECTURE AUDIO DOUBLE CHEMIN (osmo_egprs v2)
 # ══════════════════════════════════════════════════════════════════════════════
 #
-#   Micro ALSA ──[PCM 8kHz]──► gapk-TX ──[GSM FR]──► RTP ──► OsmoMGW
-#   OsmoMGW  ──► RTP ──[GSM FR]──► gapk-RX ──[PCM 8kHz]──► HP ALSA
+# CHEMIN 1 — Baseband (mobile l1phy) :
+#   mobile process ← TCH frames → trxcon → fake_trx → osmo-bts-trx
+#                  ↓ io-handler l1phy
+#                  ALSA device (décodage GSM-FR direct, zéro latence réseau)
 #
-#   OsmoMGW alloue les ports RTP dynamiquement (plage 4002–16001).
-#   Les endpoints actifs sont visibles via :
-#     echo "show mgcp" | telnet 127.0.0.1 4243
+#   → Activé par tch-voice { io-handler l1phy } dans mobile.cfg
+#   → Pas besoin de gapk pour ce chemin
+#   → Simule un combiné GSM physique
 #
-# ══════════════════════════════════════════════════════════════════════════════
-# INTÉGRATION NATIVE (mode auto)
-# ══════════════════════════════════════════════════════════════════════════════
+# CHEMIN 2 — Réseau (MGW RTP) :
+#   BTS → BSC → MSC → MNCC → Asterisk → SIP → Linphone
+#                           → MGCP → OsmoMGW → RTP
+#                                                ↓
+#                                           osmo-gapk (monitor/record/bridge)
 #
-#   gapk-start.sh auto [FORMAT] [ALSA_DEV]
+#   → osmo-gapk se greffe sur les ports RTP du MGW
+#   → Utile pour : monitoring, enregistrement, injection audio, tests
+#   → Linphone reçoit l'audio directement via SIP (pas besoin de gapk)
 #
-#   Surveille OsmoMGW toutes les 2 secondes.
-#   Dès qu'un endpoint passe en état "active" (connexion RTP ouverte),
-#   démarre gapk RX+TX sur les ports détectés.
-#   Dès que l'endpoint redevient idle, arrête les instances gapk.
-#
-#   Ce mode tourne en foreground — idéal pour la fenêtre tmux [4].
+# RÉSUMÉ :
+#   • Appel MS → MS (même opérateur) : audio via l1phy ALSA (chemin 1)
+#   • Appel MS → Linphone            : audio via Asterisk SIP (chemin 2)
+#   • Monitoring réseau              : gapk mode auto/monitor (chemin 2)
+#   • Enregistrement appel           : gapk mode record (chemin 2)
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -76,11 +69,22 @@ check_gapk() {
 check_alsa() {
     local dev="${1:-default}"
     if [ ! -d /dev/snd ]; then
-        log_warn "/dev/snd absent — container lancé sans --device /dev/snd"
+        log_warn "/dev/snd absent — container sans --device /dev/snd"
         log_warn "Modes record/playback fonctionnent sans ALSA."
         return 1
     fi
     return 0
+}
+
+# ── Détection du mode audio mobile ────────────────────────────────────────────
+detect_audio_mode() {
+    # Vérifie si le mobile.cfg utilise l1phy
+    local cfg="/root/.osmocom/bb/mobile.cfg"
+    if [ -f "$cfg" ] && grep -q "io-handler l1phy" "$cfg" 2>/dev/null; then
+        echo "l1phy"
+    else
+        echo "gapk"
+    fi
 }
 
 # ── Cycle de vie background ────────────────────────────────────────────────────
@@ -108,47 +112,103 @@ is_running() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# mgw-ports — interroge OsmoMGW VTY et retourne les ports RTP actifs
-#
-# Sortie : une ligne par endpoint actif "RX_PORT TX_IP:TX_PORT"
-# (RX = port local MGW pour downlink ; TX = destination uplink MGW)
+# info — affiche l'architecture audio actuelle
+# ══════════════════════════════════════════════════════════════════════════════
+mode_info() {
+    local audio_mode
+    audio_mode=$(detect_audio_mode)
+
+    echo -e "${CYAN}${BOLD}"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║        Architecture audio osmo_egprs                 ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    echo -e "  Mode mobile.cfg : ${BOLD}${audio_mode}${NC}"
+    echo ""
+
+    if [ "$audio_mode" = "l1phy" ]; then
+        echo -e "  ${YELLOW}● Chemin 1 — Baseband (l1phy)${NC}"
+        echo -e "    mobile.cfg a tch-voice l1phy mais fake_trx ne transporte"
+        echo -e "    PAS le payload audio TCH (bursts downlink = zéros)."
+        echo -e "    → Pas de son direct sur les MS virtuels."
+        echo ""
+        echo -e "  ${GREEN}● Chemin 2 — Réseau (SIP/RTP) — SEUL CHEMIN AUDIO${NC}"
+        echo -e "    MS appelle → Asterisk → SIP → Linphone (audio natif)"
+        echo -e "    Linphone appelle → Asterisk → MNCC → MSC → MS (signalisation)"
+        echo -e "    → L'audio du lab passe par Linphone."
+    else
+        echo -e "  ${GREEN}● Mode gapk classique${NC}"
+        echo -e "    osmo-gapk bridge RTP ↔ ALSA"
+        echo -e "    → Requis pour l'audio des appels MS"
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}Linphone :${NC}"
+    local inter_ip
+    inter_ip=$(ip -4 addr show | grep '172\.20\.0\.' | awk '{print $2}' | cut -d/ -f1 | head -1 || echo "172.20.0.X")
+    echo -e "    SIP server : ${CYAN}${inter_ip}:5060${NC}"
+    echo -e "    linphone_A : user=${CYAN}linphone_A${NC}  pass=${CYAN}tester${NC}   → 100"
+    echo -e "    linphone_B : user=${CYAN}linphone_B${NC}  pass=${CYAN}testerB${NC}  → 200"
+    echo ""
+
+    # MGW ports
+    mode_mgw_ports "" 2>/dev/null || true
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# mgw-ports
 # ══════════════════════════════════════════════════════════════════════════════
 mode_mgw_ports() {
     local quiet="${1:-}"
     local mgw_out
 
-    mgw_out=$(echo "show mgcp" | telnet "$MGW_VTY_HOST" "$MGW_VTY_PORT" 2>/dev/null \
-        | grep -v "^Trying\|^Connected\|^Escape\|Welcome\|OsmoMGW[>#]") || true
+    mgw_out=$( (echo "show mgcp"; sleep 1; echo "exit") | telnet "$MGW_VTY_HOST" "$MGW_VTY_PORT" 2>/dev/null \
+        | grep -v "^Trying\|^Connected\|^Escape\|Welcome\|OsmoMGW[>#]\|Copyright\|License\|Contributions\|free software\|NO WARRANTY\|Based on") || true
 
     if [ -z "$mgw_out" ]; then
         [ -z "$quiet" ] && echo "(MGW non disponible ou aucun endpoint)"
         return 1
     fi
 
-    # Extrait les endpoints actifs avec leur port RTP local
-    # Format VTY OsmoMGW :
-    #   Endpoint: rtpbridge/*@mgw
-    #     Conn: 0x... (RHCF)  port: 4002  ...
-    #     Conn: 0x... (LCLS)  port: 4004  RTP-IP: 127.0.0.1 RTP-Port: 4006
+    # Format réel OsmoMGW :
+    #   Virtual trunk 0 endpoint rtpbridge/1@mgw:
+    #      CONN: (9/rtp C:51E1AF8F r=127.0.0.1:4072<->l=127.0.0.1:4068)
+    #      CONN: (9/rtp C:96FA1465 r=127.0.0.1:30004<->l=127.0.0.1:4066)
+
     if [ -z "$quiet" ]; then
         echo -e "${CYAN}── Endpoints OsmoMGW actifs ──${NC}"
-        echo "$mgw_out" | grep -E "Endpoint:|port:|RTP" | sed 's/^/  /' || true
+        local has_conn=false
+        echo "$mgw_out" | while IFS= read -r line; do
+            if echo "$line" | grep -q "endpoint.*@mgw"; then
+                local ep; ep=$(echo "$line" | grep -oP 'rtpbridge/\S+')
+                # Peek if next lines have CONN
+                continue
+            fi
+            if echo "$line" | grep -q "CONN:.*r="; then
+                has_conn=true
+                local remote local_p
+                remote=$(echo "$line" | grep -oP 'r=\K[0-9.]+:[0-9]+')
+                local_p=$(echo "$line" | grep -oP 'l=\K[0-9.]+:[0-9]+')
+                echo -e "  ${GREEN}●${NC} local=${CYAN}${local_p}${NC}  remote=${CYAN}${remote}${NC}"
+            fi
+        done
+        if [ "$has_conn" = false ]; then
+            echo "  (aucune connexion active)"
+        fi
     else
-        # Mode machine : sortie parsée "RX_PORT TX_IP:TX_PORT"
-        echo "$mgw_out" | awk '
-            /Endpoint:/ { ep=$0 }
-            /port:/ {
-                match($0, /port: ([0-9]+)/, p)
-                match($0, /RTP-IP: ([0-9.]+) RTP-Port: ([0-9]+)/, r)
-                if (p[1] != "" && r[1] != "")
-                    print p[1], r[1]":"r[2]
-            }
-        '
+        # Mode machine : "LOCAL_PORT REMOTE_IP:REMOTE_PORT" par connexion active
+        echo "$mgw_out" | grep "CONN:.*r=" | while IFS= read -r line; do
+            local remote local_p
+            remote=$(echo "$line" | grep -oP 'r=\K[0-9.]+:[0-9]+')
+            local_p=$(echo "$line" | grep -oP 'l=\K[0-9]+:[0-9]+' | cut -d: -f2)
+            [ -n "$local_p" ] && [ -n "$remote" ] && echo "$local_p $remote"
+        done
     fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# call — appel bidirectionnel ALSA ↔ RTP
+# call — appel bidirectionnel ALSA ↔ RTP (chemin 2 uniquement)
 # ══════════════════════════════════════════════════════════════════════════════
 mode_call() {
     local rx_port="${1:?RTP_RX_PORT requis (port MGW downlink)}"
@@ -162,15 +222,24 @@ mode_call() {
     stop_pid "$GAPK_PID_RX"
     stop_pid "$GAPK_PID_TX"
 
+    local audio_mode; audio_mode=$(detect_audio_mode)
+    if [ "$audio_mode" = "l1phy" ]; then
+        echo -e "${YELLOW}${BOLD}NOTE: mobile.cfg utilise io-handler l1phy${NC}"
+        echo -e "${YELLOW}L'audio MS passe directement via ALSA (pas via gapk).${NC}"
+        echo -e "${YELLOW}Ce mode gapk bridge le RTP réseau (MGW) ↔ ALSA.${NC}"
+        echo -e "${YELLOW}Pour les appels MS↔MS, l'audio est déjà géré par mobile.${NC}"
+        echo ""
+    fi
+
     echo -e "${CYAN}${BOLD}"
     echo "╔══════════════════════════════════════════╗"
-    echo "║   gapk — Appel bidirectionnel ALSA↔RTP  ║"
+    echo "║   gapk — Bridge RTP réseau ↔ ALSA       ║"
     echo "╚══════════════════════════════════════════╝"
     echo -e "${NC}"
     printf "  Codec     : ${CYAN}%s${NC}\n" "$fmt"
     printf "  Périph.   : ${CYAN}%s${NC}\n" "$dev"
-    printf "  RX écoute : ${CYAN}0.0.0.0:%s${NC}  (downlink MGW → HP)\n" "$rx_port"
-    printf "  TX envoi  : ${CYAN}%s${NC}  (micro → uplink MGW)\n" "$tx_dest"
+    printf "  RX écoute : ${CYAN}0.0.0.0:%s${NC}  (MGW downlink → HP)\n" "$rx_port"
+    printf "  TX envoi  : ${CYAN}%s${NC}  (micro → MGW uplink)\n" "$tx_dest"
     echo ""
 
     local log_rx="${GAPK_LOG_DIR}/gapk-rx.log"
@@ -191,31 +260,34 @@ mode_call() {
         -o "rtp://${tx_dest}/${GAPK_FRAME_MS}"
 
     echo ""
-    log_info "Appel actif. Arrêter : gapk-start.sh stop"
-    log_info "Logs RX : tail -f $log_rx"
-    log_info "Logs TX : tail -f $log_tx"
+    log_info "Bridge actif. Arrêter : gapk-start.sh stop"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# auto — intégration native : surveille MGW et gère gapk automatiquement
-#
-# Démarre gapk dès qu'un endpoint MGW passe actif (connexion RTP ouverte).
-# Arrête gapk quand l'endpoint redevient idle.
-# Tourne en foreground dans la fenêtre tmux [4].
+# auto — surveille MGW, bridge gapk auto
 # ══════════════════════════════════════════════════════════════════════════════
 mode_auto() {
     local fmt="${1:-$GAPK_DEFAULT_FORMAT}"
     local dev="${2:-$GAPK_DEFAULT_DEVICE}"
 
     check_gapk
-    check_alsa "$dev" || log_warn "ALSA absent — mode RTP-only si appel détecté"
+    check_alsa "$dev" || log_warn "ALSA absent — mode RTP-only"
+
+    local audio_mode; audio_mode=$(detect_audio_mode)
 
     echo -e "${CYAN}${BOLD}"
-    echo "╔══════════════════════════════════════════════════╗"
-    echo "║   gapk-auto — Intégration native OsmoMGW        ║"
-    echo "║   Surveille les endpoints RTP actifs             ║"
-    echo "╚══════════════════════════════════════════════════╝"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║   gapk-auto — Intégration OsmoMGW (chemin réseau)   ║"
+    echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
+
+    if [ "$audio_mode" = "l1phy" ]; then
+        log_auto "Mode l1phy détecté → audio MS via mobile process"
+        log_auto "gapk surveille le chemin réseau (MGW RTP) uniquement"
+        log_auto "Pour les appels MS↔MS, l'audio est géré nativement"
+        echo ""
+    fi
+
     log_auto "Codec=${fmt}  Périph=${dev}  Poll=${AUTO_POLL_INTERVAL}s"
     log_auto "Ctrl+C pour arrêter"
     echo ""
@@ -233,7 +305,6 @@ mode_auto() {
     trap cleanup_auto SIGINT SIGTERM
 
     while [ -f "$GAPK_AUTO_LOCK" ]; do
-        # Lire le premier endpoint actif (port RX + TX dest)
         local first_active
         first_active=$(mode_mgw_ports "quiet" 2>/dev/null | head -1) || first_active=""
 
@@ -244,26 +315,21 @@ mode_auto() {
 
             if [ "$rx_port" != "$prev_rx_port" ]; then
                 if [ -n "$prev_rx_port" ]; then
-                    log_auto "Changement d'endpoint (${prev_rx_port} → ${rx_port}) — restart gapk"
+                    log_auto "Changement endpoint (${prev_rx_port} → ${rx_port})"
                     stop_pid "$GAPK_PID_RX"
                     stop_pid "$GAPK_PID_TX"
                 fi
 
-                log_auto "Endpoint actif détecté : RX=${rx_port}  TX=${tx_dest}"
-                log_auto "Démarrage gapk (${fmt}) ..."
+                log_auto "Endpoint actif : RX=${rx_port}  TX=${tx_dest}"
 
                 local log_rx="${GAPK_LOG_DIR}/gapk-rx.log"
                 local log_tx="${GAPK_LOG_DIR}/gapk-tx.log"
 
-                # RX : MGW → ALSA (downlink)
                 run_bg "$GAPK_PID_RX" "$log_rx" \
                     -f "$fmt" \
                     -i "rtp://0.0.0.0:${rx_port}/${GAPK_FRAME_MS}" \
                     -o "alsa://${dev}/${GAPK_FRAME_MS}"
-
                 sleep 0.3
-
-                # TX : ALSA → MGW (uplink)
                 run_bg "$GAPK_PID_TX" "$log_tx" \
                     -f "$fmt" \
                     -i "alsa://${dev}/${GAPK_FRAME_MS}" \
@@ -273,71 +339,57 @@ mode_auto() {
                 log_auto "Audio actif (PID RX=$(cat $GAPK_PID_RX 2>/dev/null) TX=$(cat $GAPK_PID_TX 2>/dev/null))"
             fi
 
-            # Vérifier que les processus sont toujours vivants
             if ! is_running "$GAPK_PID_RX" || ! is_running "$GAPK_PID_TX"; then
-                log_warn "Processus gapk mort de façon inattendue — restart"
-                stop_pid "$GAPK_PID_RX"
-                stop_pid "$GAPK_PID_TX"
+                log_warn "Processus gapk mort — restart"
+                stop_pid "$GAPK_PID_RX"; stop_pid "$GAPK_PID_TX"
                 prev_rx_port=""
             fi
         else
-            # Pas d'endpoint actif
             if [ -n "$prev_rx_port" ]; then
-                log_auto "Endpoint disparu (port ${prev_rx_port}) — arrêt gapk"
-                stop_pid "$GAPK_PID_RX"
-                stop_pid "$GAPK_PID_TX"
+                log_auto "Endpoint disparu — arrêt gapk"
+                stop_pid "$GAPK_PID_RX"; stop_pid "$GAPK_PID_TX"
                 prev_rx_port=""
             fi
         fi
-
         sleep "$AUTO_POLL_INTERVAL"
     done
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# monitor — écoute passive RTP → ALSA (foreground)
+# monitor — écoute passive RTP → ALSA
 # ══════════════════════════════════════════════════════════════════════════════
 mode_monitor() {
     local rx_port="${1:?RTP_RX_PORT requis}"
     local fmt="${2:-$GAPK_DEFAULT_FORMAT}"
     local dev="${3:-$GAPK_DEFAULT_DEVICE}"
 
-    check_gapk
-    check_alsa "$dev" || true
+    check_gapk; check_alsa "$dev" || true
     stop_pid "$GAPK_PID_RX"
 
     log_info "Monitor : rtp://0.0.0.0:${rx_port} → alsa://${dev}  [${fmt}]"
-    log_info "Ctrl+C pour arrêter"
-
-    exec osmo-gapk \
-        -f "$fmt" \
+    exec osmo-gapk -f "$fmt" \
         -i "rtp://0.0.0.0:${rx_port}/${GAPK_FRAME_MS}" \
         -o "alsa://${dev}/${GAPK_FRAME_MS}"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# record — enregistre flux RTP → fichier .gsm brut
+# record — RTP → fichier .gsm
 # ══════════════════════════════════════════════════════════════════════════════
 mode_record() {
     local rx_port="${1:?RTP_RX_PORT requis}"
     local outfile="${2:-${GAPK_REC_DIR}/record_$(date '+%Y%m%d_%H%M%S').gsm}"
     local fmt="${3:-$GAPK_DEFAULT_FORMAT}"
 
-    check_gapk
-    stop_pid "$GAPK_PID_RX"
+    check_gapk; stop_pid "$GAPK_PID_RX"
 
     log_info "Record : rtp://0.0.0.0:${rx_port} → ${outfile}  [${fmt}]"
-    log_info "Ctrl+C pour arrêter"
-    log_info "Relire : gapk-start.sh playback ${outfile} <DEST:PORT>"
-
-    exec osmo-gapk \
-        -f "$fmt" \
+    exec osmo-gapk -f "$fmt" \
         -i "rtp://0.0.0.0:${rx_port}/${GAPK_FRAME_MS}" \
         -o "rawfile://${outfile}"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# playback — injecte fichier .gsm dans un flux RTP
+# playback — fichier .gsm → RTP
 # ══════════════════════════════════════════════════════════════════════════════
 mode_playback() {
     local infile="${1:?INPUT_FILE requis}"
@@ -348,38 +400,30 @@ mode_playback() {
     [ -f "$infile" ] || { log_error "Fichier introuvable : $infile"; exit 1; }
 
     log_info "Playback : ${infile} → rtp://${tx_dest}  [${fmt}]"
-    log_info "Ctrl+C pour arrêter"
-
-    exec osmo-gapk \
-        -f "$fmt" \
+    exec osmo-gapk -f "$fmt" \
         -i "rawfile://${infile}" \
         -o "rtp://${tx_dest}/${GAPK_FRAME_MS}"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# loopback — ALSA micro → encode → décode → ALSA HP (test codec)
+# loopback — ALSA micro → codec → ALSA HP
 # ══════════════════════════════════════════════════════════════════════════════
 mode_loopback() {
     local fmt="${1:-$GAPK_DEFAULT_FORMAT}"
     local dev="${2:-$GAPK_DEFAULT_DEVICE}"
 
     check_gapk
-    check_alsa "$dev" || { log_error "ALSA requis pour le loopback."; exit 1; }
+    check_alsa "$dev" || { log_error "ALSA requis."; exit 1; }
 
     echo -e "${YELLOW}${BOLD}⚠  UTILISEZ DES ÉCOUTEURS — risque de larsen !${NC}"
-    echo ""
     log_info "Loopback : alsa://${dev} → [${fmt}] → alsa://${dev}"
-    log_info "Ctrl+C pour arrêter"
-    echo ""
-
-    exec osmo-gapk \
-        -f "$fmt" \
+    exec osmo-gapk -f "$fmt" \
         -i "alsa://${dev}/${GAPK_FRAME_MS}" \
         -o "alsa://${dev}/${GAPK_FRAME_MS}"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# stop / status / list
+# stop / status
 # ══════════════════════════════════════════════════════════════════════════════
 mode_stop() {
     stop_pid "$GAPK_PID_RX"
@@ -390,7 +434,11 @@ mode_stop() {
 }
 
 mode_status() {
-    echo -e "${CYAN}── État osmo-gapk ──${NC}"
+    local audio_mode; audio_mode=$(detect_audio_mode)
+    echo -e "${CYAN}── État audio ──${NC}"
+    echo -e "  Mode mobile.cfg : ${BOLD}${audio_mode}${NC}"
+    echo ""
+
     local any=0
     for f in "$GAPK_PID_RX" "$GAPK_PID_TX"; do
         [ -f "$f" ] || continue
@@ -405,10 +453,20 @@ mode_status() {
         fi
     done
     [ -f "$GAPK_AUTO_LOCK" ] && echo -e "  ${CYAN}●${NC} mode AUTO actif" && any=1
-    [ $any -eq 0 ] && echo -e "  ${YELLOW}Aucune instance active${NC}"
-    if pgrep -x osmo-gapk >/dev/null 2>&1; then
+    [ $any -eq 0 ] && echo -e "  ${YELLOW}Aucune instance gapk active${NC}"
+
+    if [ "$audio_mode" = "l1phy" ]; then
         echo ""
-        echo -e "${CYAN}Processus détectés :${NC}"
+        echo -e "  ${GREEN}●${NC} Audio MS via l1phy (natif dans mobile process)"
+        if pgrep -f "mobile.*mobile" >/dev/null 2>&1; then
+            echo -e "  ${GREEN}●${NC} Processus mobile actif"
+        else
+            echo -e "  ${YELLOW}○${NC} Processus mobile non détecté"
+        fi
+    fi
+
+    if pgrep -x osmo-gapk >/dev/null 2>&1; then
+        echo ""; echo -e "${CYAN}Processus gapk :${NC}"
         ps -o pid,args --no-headers -C osmo-gapk 2>/dev/null | sed 's/^/  /' || true
     fi
 }
@@ -424,62 +482,65 @@ mode_list_devices() {
     echo -e "${CYAN}── Périphériques ALSA ──${NC}"
     echo "Lecture (HP) :"
     aplay -L 2>/dev/null | head -20 || echo "  (aplay indisponible)"
-    echo ""
-    echo "Capture (micro) :"
+    echo ""; echo "Capture (micro) :"
     arecord -L 2>/dev/null | head -20 || echo "  (arecord indisponible)"
-    echo ""
-    echo "Cartes son :"
+    echo ""; echo "Cartes son :"
     cat /proc/asound/cards 2>/dev/null || echo "  (relancer avec --device /dev/snd)"
+
+    local audio_mode; audio_mode=$(detect_audio_mode)
+    if [ "$audio_mode" = "l1phy" ]; then
+        echo ""
+        echo -e "${CYAN}── Config l1phy (mobile.cfg) ──${NC}"
+        grep -A3 "tch-voice" /root/.osmocom/bb/mobile.cfg 2>/dev/null | sed 's/^/  /' || true
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Usage
 # ══════════════════════════════════════════════════════════════════════════════
 usage() {
-    cat <<'EOF'
+    local audio_mode; audio_mode=$(detect_audio_mode)
+    cat <<EOF
 Usage: gapk-start.sh <mode> [options]
 
+  Mode audio mobile.cfg : ${audio_mode}
+  $([ "$audio_mode" = "l1phy" ] && echo "  → Audio MS natif via l1phy. gapk = monitoring réseau uniquement." || echo "  → Audio MS via gapk (mode classique).")
+
+  info                    Affiche l'architecture audio et les IPs Linphone
+
   auto     [FORMAT] [ALSA_DEV]
-               Intégration native : surveille MGW, démarre/arrête gapk auto.
-               Tourne en foreground (idéal fenêtre tmux).
-               ex: gapk-start.sh auto gsmfr default
+               Surveille MGW, bridge RTP↔ALSA auto (chemin réseau).
 
   call     <RX_PORT> <TX_DEST:PORT> [FORMAT] [ALSA_DEV]
-               Appel bidirectionnel ALSA ↔ RTP (background).
-               ex: gapk-start.sh call 4002 127.0.0.1:4004 gsmfr
+               Bridge bidirectionnel RTP réseau ↔ ALSA.
 
   monitor  <RX_PORT> [FORMAT] [ALSA_DEV]
-               Écoute passive RTP → ALSA (foreground).
-               ex: gapk-start.sh monitor 4002
+               Écoute passive RTP → ALSA.
 
   record   <RX_PORT> [FICHIER] [FORMAT]
                Enregistre flux RTP → fichier .gsm.
-               ex: gapk-start.sh record 4002 /var/lib/gapk/appel.gsm
 
   playback <FICHIER> <TX_DEST:PORT> [FORMAT]
                Injecte fichier .gsm → RTP.
-               ex: gapk-start.sh playback /var/lib/gapk/appel.gsm 127.0.0.1:4002
 
   loopback [FORMAT] [ALSA_DEV]
                Loopback codec ALSA (ÉCOUTEURS OBLIGATOIRES).
 
-  mgw-ports     Liste les endpoints/ports RTP OsmoMGW actifs.
-  stop          Arrête toutes les instances.
-  status        État des instances.
+  mgw-ports     Endpoints RTP OsmoMGW actifs.
+  stop          Arrête les instances gapk.
+  status        État audio complet (l1phy + gapk).
   list-codecs   Codecs disponibles.
-  list-devices  Périphériques ALSA.
+  list-devices  Périphériques ALSA + config l1phy.
 
 Formats : gsmfr (défaut) | gsmefr | gsmhr | pcm8 | pcm16
 Variables : GAPK_FORMAT, GAPK_ALSA_DEV, ALSA_CARD, GAPK_POLL_INTERVAL
-
-Ports RTP OsmoMGW (manuel) :
-  echo "show mgcp" | telnet 127.0.0.1 4243
 EOF
 }
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 MODE="${1:-help}"; shift 2>/dev/null || true
 case "$MODE" in
+    info)          mode_info ;;
     auto)          mode_auto "$@" ;;
     call)          mode_call "$@" ;;
     monitor)       mode_monitor "$@" ;;

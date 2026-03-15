@@ -2,34 +2,13 @@
 # start.sh — Lance la stack Osmocom GSM multi-opérateurs
 #
 # Modes : net-host (1 opérateur, SDR physique) | bridge (N opérateurs SS7 inter-op)
-#
-# Topologie SS7 en mode bridge (exemple 3 opérateurs) :
-#
-#         ┌──────────── Inter-STP (PC 0.0.0) ───────────────┐
-#         │  172.20.0.10:2908 (dynamic-permitted)            │
-#         └─────────────────────────────────────────────────┘
-#              ▲ RCTX 150    ▲ RCTX 250    ▲ RCTX 350
-#   ┌──────────┴───┐  ┌──────┴───────┐  ┌──┴────────────┐
-#   │ Op1:172.20.0.11│  │Op2:172.20.0.12│  │Op3:172.20.0.13│
-#   │ STP 1.1.2    │  │ STP 1.2.2    │  │ STP 1.3.2    │
-#   │ MSC 1.1.1    │  │ MSC 1.2.1    │  │ MSC 1.3.1    │
-#   │ BSC 1.1.3    │  │ BSC 1.2.3    │  │ BSC 1.3.3    │
-#   └───────────────┘  └──────────────┘  └──────────────┘
-#
-# Réseau backbone : gsm-inter (172.20.0.0/24)
-# Réseau privé   : gsm-net-opN (172.20.N.0/24)
-# Intra-container : 127.0.0.1 (MSC/BSC → STP local)
-# Inter-container : 172.20.0.X (STP → inter-STP)
 
 set -e
-# DEBUG mode
 if [[ -n "$DEBUG" ]]; then
     set -x
     PS4='[DEBUG] + ${BASH_SOURCE}:${LINENO}: '
     echo "=== MODE DEBUG ACTIVÉ ==="
-    echo ""
 fi
-
 
 IMAGE_BASE="osmocom-nitb"
 IMAGE_RUN="osmocom-run"
@@ -44,25 +23,20 @@ INTER_STP_IP="172.20.0.10"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
 
-# ── SMS Routing — chargement du module dédié ───────────────────────────────────
+# ── SMS Routing ────────────────────────────────────────────────────────────────
 SMS_ROUTING_SCRIPT="$(dirname "$0")/scripts/sms-routing-setup.sh"
 if [ -f "$SMS_ROUTING_SCRIPT" ]; then
-    # shellcheck source=scripts/sms-routing-setup.sh
     source "$SMS_ROUTING_SCRIPT"
-else
-    echo -e "${YELLOW}[WARN] sms-routing-setup.sh introuvable — routing SMS basique${NC}" >&2
 fi
-
-# Répertoire global pour les configs SMS (initialisé dans start_bridge_mode /
-# start_host_mode, utilisé par build_vol_args)
 SMS_ROUTING_DIR=""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WAN Interop — constantes et état global
+# WAN Interop
 # ══════════════════════════════════════════════════════════════════════════════
 WAN_ENABLED="false"
 WAN_LOCAL_IP=""
 WAN_REMOTE_IP=""
+WAN_N_REMOTE=""
 WAN_PREFIX="66"
 WAN_SIP_BASE=5080
 WAN_RTP_BASE=20000
@@ -84,6 +58,16 @@ wan_sip_port()    { echo $(( WAN_SIP_BASE + ($1 - 1) * 2 )); }
 wan_rtp_start()   { echo $(( WAN_RTP_BASE + ($1 - 1) * WAN_RTP_PER_OP )); }
 wan_rtp_end()     { echo $(( WAN_RTP_BASE + $1 * WAN_RTP_PER_OP - 1 )); }
 
+# Linphone helpers — port SIP/RTP exposé sur le host
+linphone_sip_port()  { echo $(( 5060 + ($1 - 1) )); }
+linphone_rtp_start() { echo $(( 30000 + ($1 - 1) * 200 )); }
+linphone_rtp_end()   { echo $(( 30000 + $1 * 200 - 1 )); }
+
+# Global — détecté avant la boucle opérateurs
+HOST_IP="127.0.0.1"
+ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
+ALSA_INPUT="${ALSA_INPUT:-default}"
+
 banner() {
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════╗"
@@ -94,33 +78,64 @@ banner() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ALSA — construit les arguments Docker pour le passthrough audio
+# ALSA + PulseAudio passthrough
 # ══════════════════════════════════════════════════════════════════════════════
 build_alsa_args() {
     local alsa_args=""
     local alsa_card="${ALSA_CARD:-default}"
     local target_user="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
+    local target_uid
+    target_uid=$(id -u "${target_user}" 2>/dev/null || echo 1000)
 
+    # /dev/snd — accès direct aux devices ALSA
     if [ -d /dev/snd ]; then
         alsa_args="--device /dev/snd"
         if getent group audio &>/dev/null; then
             alsa_args="${alsa_args} --group-add $(getent group audio | cut -d: -f3)"
         fi
-        echo -e "  ALSA      : ${GREEN}/dev/snd passthrough${NC}  (carte: ${CYAN}${alsa_card}${NC})" >&2
+        echo -e "  ALSA      : ${GREEN}/dev/snd${NC}" >&2
     else
-        echo -e "  ALSA      : ${YELLOW}absent${NC} (gapk en mode RTP/fichier uniquement)" >&2
+        echo -e "  ALSA      : ${YELLOW}/dev/snd absent${NC}" >&2
     fi
 
+    # .asoundrc — config ALSA utilisateur
     local asoundrc="/home/${target_user}/.asoundrc"
     if [ -f "$asoundrc" ]; then
         alsa_args="${alsa_args} -v ${asoundrc}:/root/.asoundrc:ro"
     fi
 
-    local pulse_socket="/run/user/$(id -u "${target_user}" 2>/dev/null || echo 1000)/pulse/native"
+    # PulseAudio — nécessaire sur les desktops modernes (ALSA 'default' → PulseAudio)
+    local pulse_dir="/run/user/${target_uid}/pulse"
+    local pulse_socket="${pulse_dir}/native"
+    local pulse_cookie="/home/${target_user}/.config/pulse/cookie"
+
     if [ -S "$pulse_socket" ]; then
-        alsa_args="${alsa_args} -v ${pulse_socket}:${pulse_socket}"
+        # Monter le répertoire pulse complet (socket + pid + fichiers runtime)
+        alsa_args="${alsa_args} -v ${pulse_dir}:${pulse_dir}"
         alsa_args="${alsa_args} -e PULSE_SERVER=unix:${pulse_socket}"
-        echo -e "  PulseAudio: ${GREEN}socket disponible${NC}" >&2
+
+        # Cookie PulseAudio (authentification)
+        if [ -f "$pulse_cookie" ]; then
+            alsa_args="${alsa_args} -v ${pulse_cookie}:/root/.config/pulse/cookie:ro"
+            alsa_args="${alsa_args} -e PULSE_COOKIE=/root/.config/pulse/cookie"
+        fi
+
+        # XDG_RUNTIME_DIR pour que les libs trouvent le socket
+        alsa_args="${alsa_args} -e XDG_RUNTIME_DIR=/run/user/${target_uid}"
+
+        echo -e "  PulseAudio: ${GREEN}socket ${pulse_socket}${NC}" >&2
+    else
+        # Pas de PulseAudio — utiliser hw: direct si dispo
+        if [ -d /dev/snd ] && command -v aplay >/dev/null 2>&1; then
+            local hw_dev
+            hw_dev=$(aplay -l 2>/dev/null | grep -m1 "^card" | sed 's/card \([0-9]*\):.*device \([0-9]*\):.*/hw:\1,\2/' || true)
+            if [ -n "$hw_dev" ]; then
+                alsa_card="$hw_dev"
+                echo -e "  PulseAudio: ${YELLOW}absent — ALSA direct ${hw_dev}${NC}" >&2
+            fi
+        else
+            echo -e "  PulseAudio: ${YELLOW}absent${NC}" >&2
+        fi
     fi
 
     alsa_args="${alsa_args} -e ALSA_CARD=${alsa_card} -e GAPK_ALSA_DEV=${alsa_card}"
@@ -156,7 +171,6 @@ generate_pjsip_interop_trunks() {
         remote_ip=$(op_backbone_ip "$remote_op")
         cat <<EOF
 
-; ── Trunk inter-op → Opérateur ${remote_op} (${remote_ip}) ──────────────────────────────
 [interop-identify-op${remote_op}]
 type=identify
 endpoint=interop_trunk_op${remote_op}
@@ -173,6 +187,7 @@ aors=interop_trunk_op${remote_op}
 direct_media=no
 rtp_symmetric=yes
 force_rport=yes
+media_encryption=no
 
 [interop_trunk_op${remote_op}]
 type=aor
@@ -184,41 +199,27 @@ EOF
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Génération dynamique — contexte [interop_out] du dialplan Asterisk
+# Génération dynamique — dialplan [interop_out]
 # ══════════════════════════════════════════════════════════════════════════════
 generate_extensions_interop_out() {
     local op_id=$1
     local n_operators=$2
 
     cat <<'EOF'
-; =============================================================================
-; [interop_out] — Sortie vers un opérateur distant (SIP trunk inter-op)
-; =============================================================================
 [interop_out]
 
 EOF
 
     for remote_op in $(seq 1 "$n_operators"); do
         [ "$remote_op" -eq "$op_id" ] && continue
-        # Déterminer la longueur du préfixe (1 ou 2 chiffres)
-        if [ $remote_op -lt 10 ]; then
-            pattern="_${remote_op}XXXX"
-            pattern2="_${remote_op}XXXXX"
-        else
-            pattern="_${remote_op}XXXX"
-            pattern2="_${remote_op}XXXXX"
-        fi
         cat <<EOF
-; → Opérateur ${remote_op}
-exten => ${pattern},1,NoOp(=== INTEROP OUT Op${remote_op} (4 chiffres): \${EXTEN} ===)
+exten => _${remote_op}XXXX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
  same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
- same => n,NoOp(Échec inter-op: \${DIALSTATUS})
  same => n,Congestion()
  same => n,Hangup()
 
-exten => ${pattern2},1,NoOp(=== INTEROP OUT Op${remote_op} (5 chiffres): \${EXTEN} ===)
+exten => _${remote_op}XXXXX,1,NoOp(=== INTEROP OUT Op${remote_op} 5d: \${EXTEN} ===)
  same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
- same => n,NoOp(Échec inter-op: \${DIALSTATUS})
  same => n,Congestion()
  same => n,Hangup()
 
@@ -226,23 +227,18 @@ EOF
     done
 
     cat <<'EOF'
-; Destination inconnue → congestion
-exten => _X.,1,NoOp(=== INTEROP OUT: destination inconnue ${EXTEN} ===)
+exten => _X.,1,NoOp(=== INTEROP OUT: inconnu ${EXTEN} ===)
  same => n,Congestion()
  same => n,Hangup()
 EOF
 }
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Génération dynamique — sms-routing.conf
-#
-# Délégué à scripts/sms-routing-setup.sh (sms_routing_generate_all).
-# Cette fonction de secours est utilisée uniquement si le module est absent.
+# SMS routing fallback
 # ══════════════════════════════════════════════════════════════════════════════
 _generate_sms_routing_conf_fallback() {
     local op_id=$1 n_operators=$2
-    echo -e "  ${YELLOW}[SMS] Fallback basique op${op_id} (sms-routing-setup.sh absent)${NC}" >&2
-    printf '# sms-routing.conf — Fallback (routes courtes)\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' \
-        "$op_id" "$op_id"
+    printf '# sms-routing.conf — Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
     for i in $(seq 1 "$n_operators"); do
         printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"
     done
@@ -250,28 +246,12 @@ _generate_sms_routing_conf_fallback() {
     for i in $(seq 1 "$n_operators"); do
         printf '%s0000 = %s\n' "$i" "$i"
         for j in 001 002 003 004 005; do printf '%s%s = %s\n' "$i" "$j" "$i"; done
-        printf '336%s0 = %s\n\n' "$i" "$i"
     done
-    printf '[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
+    printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Substitution des placeholders
-#
-# Paramètres :
-#   $1  dest           Répertoire de sortie temporaire
-#   $2  container_ip   IP privée (172.20.N.10)
-#   $3  gateway_ip     Passerelle réseau privé (172.20.N.1)
-#   $4  op_id          Identifiant opérateur (1…N)
-#   $5  pc_msc         Point code MSC (1.N.1)
-#   $6  pc_stp         Point code STP (1.N.2)
-#   $7  pc_bsc         Point code BSC (1.N.3)
-#   $8  mcc            Mobile Country Code (ex: 001)
-#   $9  mnc            Mobile Network Code (ex: 01)
-#   $10 op_name        Nom opérateur
-#   $11 inter_stp      IP inter-STP (172.20.0.10 en bridge)
-#   $12 inter_stp_shutdown  "no shutdown" ou "shutdown"
-#   $13 n_operators    Nombre total d'opérateurs
+# apply_config_templates — substitution des placeholders
 # ══════════════════════════════════════════════════════════════════════════════
 apply_config_templates() {
     local dest=$1
@@ -286,11 +266,13 @@ apply_config_templates() {
 
     mkdir -p "$dest/osmocom" "$dest/asterisk" "$dest/bb"
 
+    # Copie configs Osmocom
     for f in configs/*.cfg; do
         [ "$(basename "$f")" = "osmo-stp-interop.cfg" ] && continue
         cp "$f" "$dest/osmocom/"
     done
 
+    # Copie configs Asterisk (y compris rtp.conf)
     for f in configs/*.conf; do
         local bn
         bn=$(basename "$f")
@@ -298,16 +280,19 @@ apply_config_templates() {
         cp "$f" "$dest/asterisk/"
     done
 
+    # Scripts
     for s in entrypoint.sh osmo-start.sh status.sh run.sh gapk-start.sh; do
         [ -f "scripts/$s" ] && cp "scripts/$s" "$dest/osmocom/$s" && chmod +x "$dest/osmocom/$s"
     done
 
+    # mobile.cfg
     if [ -f "configs/mobile.cfg.template" ]; then
         cp "configs/mobile.cfg.template" "$dest/bb/mobile.cfg"
     elif [ -f "configs/mobile.cfg" ]; then
         cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
     fi
 
+    # Calculs dérivés
     local rctx_msc rctx_stp rctx_bsc rctx_inter
     rctx_msc=$(op_rctx_msc "$op_id")
     rctx_stp=$(op_rctx_stp "$op_id")
@@ -328,6 +313,13 @@ apply_config_templates() {
     local inter_local_ip
     inter_local_ip=$(op_backbone_ip "$op_id")
 
+    # Plage RTP Linphone pour cet opérateur
+    local rtp_start rtp_end sip_host_port
+    rtp_start=$(linphone_rtp_start "$op_id")
+    rtp_end=$(linphone_rtp_end "$op_id")
+    sip_host_port=$(linphone_sip_port "$op_id")
+
+    # ── Substitution sed — TOUTES les valeurs en un seul passage ──────────
     for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
         [ -f "$f" ] || continue
         sed -i \
@@ -360,16 +352,23 @@ apply_config_templates() {
             -e "s|__IMEI__|${imei}|g" \
             -e "s|__KI__|${ki}|g" \
             -e "s|__SMS_SC__|${sms_sc}|g" \
+            -e "s|__HOST_IP__|${HOST_IP}|g" \
+            -e "s|__SIP_HOST_PORT__|${sip_host_port}|g" \
+            -e "s|__ALSA_OUTPUT__|${ALSA_OUTPUT}|g" \
+            -e "s|__ALSA_INPUT__|${ALSA_INPUT}|g" \
+            -e "s|__RTP_START__|${rtp_start}|g" \
+            -e "s|__RTP_END__|${rtp_end}|g" \
             "$f"
     done
 
+    # Append pjsip trunks + dialplan interop
     generate_pjsip_interop_trunks "$op_id" "$n_operators" \
         >> "$dest/asterisk/pjsip.conf"
 
     generate_extensions_interop_out "$op_id" "$n_operators" \
         >> "$dest/asterisk/extensions.conf"
 
-    # ── SMS Routing ─────────────────────────────────────────────────────────
+    # SMS Routing
     if declare -f sms_routing_generate > /dev/null 2>&1 && \
        [ -n "${SMS_ROUTING_DIR:-}" ] && \
        [ -f "${SMS_ROUTING_DIR}/sms-routing-op${op_id}.conf" ]; then
@@ -416,7 +415,7 @@ prepare_host_tun() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Inter-STP — hub S7 central
+# Inter-STP
 # ══════════════════════════════════════════════════════════════════════════════
 start_inter_stp() {
     local n_operators=$1
@@ -430,7 +429,6 @@ start_inter_stp() {
     if [ ! -f "$inter_cfg" ]; then
         echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
     fi
-    # Construction des arguments de ports WAN si activé
 
     echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.23.0)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
@@ -471,88 +469,56 @@ start_inter_stp() {
 
 wait_inter_stp_ready() {
     local n_operators=$1
-    
     echo -ne "${GREEN}[*] Vérification stabilisation inter-STP (routes SS7)${NC}"
-    
-    for i in {1..15}; do
-        sleep 1
-        echo -n "."
-    done
-    
+    for i in {1..15}; do sleep 1; echo -n "."; done
     echo -e " ${GREEN}✓${NC}"
     return 0
 }
-# ── Attente BB VTY ──────────────────────────────────────────────────────────
+
 wait_bb_vty() {
     local container="$1"
     local timeout=120
     local elapsed=0
-
     echo -ne "  Attente BB VTY 4247 "
-
-    while ! docker exec "$container" bash -c \
-        "echo >/dev/tcp/127.0.0.1/4247" 2>/dev/null; do
-        sleep 2
-        elapsed=$((elapsed + 2))
-        echo -n "."
-
-        if [ "$elapsed" -ge "$timeout" ]; then
-            echo -e " ${RED}TIMEOUT${NC}"
-            echo "Verifier : docker logs $container"
-            return 1
-        fi
+    while ! docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/4247" 2>/dev/null; do
+        sleep 2; elapsed=$((elapsed + 2)); echo -n "."
+        if [ "$elapsed" -ge "$timeout" ]; then echo -e " ${RED}TIMEOUT${NC}"; return 1; fi
     done
-
     echo -e " ${GREEN}OK${NC}"
 }
+
 wait_stp_vty() {
     local container="$1"
     local timeout=60
     local elapsed=0
-
     echo -ne "  Attente STP VTY 4239 "
-
-    while ! docker exec "$container" bash -c \
-        "echo >/dev/tcp/127.0.0.1/4239" 2>/dev/null; do
-        sleep 2
-        elapsed=$((elapsed + 2))
-        echo -n "."
-
-        if [ "$elapsed" -ge "$timeout" ]; then
-            echo -e " ${RED}TIMEOUT${NC}"
-            return 1
-        fi
+    while ! docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/4239" 2>/dev/null; do
+        sleep 2; elapsed=$((elapsed + 2)); echo -n "."
+        if [ "$elapsed" -ge "$timeout" ]; then echo -e " ${RED}TIMEOUT${NC}"; return 1; fi
     done
-
     echo -e " ${GREEN}OK${NC}"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WAN Interop — délègue à setup-wan-interop.sh
+# WAN Interop
 # ══════════════════════════════════════════════════════════════════════════════
 setup_wan_interop() {
-    local n_operators=$1
+    local n_local=$1
+    local n_remote=$2
     local script_path
     script_path="$(dirname "$0")/setup-wan-interop.sh"
-
     if [ ! -f "$script_path" ]; then
-        echo -e "${RED}[WAN] setup-wan-interop.sh introuvable : ${script_path}${NC}"
-        echo -e "${YELLOW}[WAN] Placer le script à côté de start.sh${NC}"
+        echo -e "${RED}[WAN] setup-wan-interop.sh introuvable${NC}"
         return 1
     fi
-
     chmod +x "$script_path"
-    bash "$script_path" "$WAN_LOCAL_IP" "$WAN_REMOTE_IP" "$n_operators"
+    bash "$script_path" "$WAN_LOCAL_IP" "$WAN_REMOTE_IP" "$n_local" "$n_remote"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Démarrage d'un opérateur
-# ══════════════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════════════
-# Mode bridge (N opérateurs avec inter-STP central)
+# Mode bridge
 # ══════════════════════════════════════════════════════════════════════════════
 start_bridge_mode() {
-    # ── Saisie du nombre d'opérateurs ──────────────────────────────────────
     local n_operators
     read -rp "Nombre d'opérateurs [2] : " n_operators
     n_operators=${n_operators:-2}
@@ -560,139 +526,93 @@ start_bridge_mode() {
         echo -e "${RED}Nombre invalide (1–36).${NC}"; exit 1
     fi
 
-    # ── Option pour utiliser les valeurs par défaut pour tous ───────────────
     local use_defaults
-    read -rp "Utiliser les valeurs par défaut pour tous (MCC=001, MNC=01/02/..., Nom=OsmoOPx) ? [o/N] : " use_defaults
+    read -rp "Valeurs par défaut pour tous (MCC=001, MNC=01/02/…) ? [o/N] : " use_defaults
 
-    # ── Option pour définir le même nombre de MS pour tous les opérateurs ──
-    local same_ms_all="N"  # Initialisation par défaut
+    local same_ms_all="N"
     if [[ ! "$use_defaults" =~ ^[OoYy]$ ]]; then
-        read -rp "Même nombre de MS pour tous les opérateurs ? [o/N] : " same_ms_all
-        same_ms_all=${same_ms_all:-N}
+        read -rp "Même nombre de MS pour tous ? [o/N] : " same_ms_all
     fi
-    
-    # ── Saisie des paramètres par opérateur ────────────────────────────────
+
     declare -A OP_MCC OP_MNC OP_NAME OP_MS
-    
+
     if [[ "$use_defaults" =~ ^[OoYy]$ ]]; then
         local common_ms
-        read -rp "  Nombre de MS pour chaque opérateur [8] : " common_ms
+        read -rp "  MS par opérateur [8] : " common_ms
         common_ms=${common_ms:-8}
-        if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then
-            echo -e "${YELLOW}  Valeur invalide, forcée à 8${NC}"
-            common_ms=8
-        fi
-        echo -e "${GREEN}  → Tous les opérateurs auront ${common_ms} MS${NC}"
-        
+        if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
         for i in $(seq 1 "$n_operators"); do
-            OP_MCC[$i]="001"
-            OP_MNC[$i]=$(printf '%02d' "$i")
-            OP_NAME[$i]="OsmoOP${i}"
-            OP_MS[$i]=$common_ms
-            echo -e "${CYAN}── Opérateur ${i} ──${NC}"
-            echo -e "  → MCC=001  MNC=${OP_MNC[$i]}  Nom=OsmoOP${i}  MS=${CYAN}${OP_MS[$i]}${NC}"
+            OP_MCC[$i]="001"; OP_MNC[$i]=$(printf '%02d' "$i")
+            OP_NAME[$i]="OsmoOP${i}"; OP_MS[$i]=$common_ms
         done
     else
         if [[ "$same_ms_all" =~ ^[OoYy]$ ]]; then
             local common_ms
-            read -rp "  Nombre de MS pour chaque opérateur [8] : " common_ms
+            read -rp "  MS par opérateur [8] : " common_ms
             common_ms=${common_ms:-8}
-            if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then
-                echo -e "${YELLOW}  Valeur invalide, forcée à 8${NC}"
-                common_ms=8
-            fi
-            echo -e "${GREEN}  → Tous les opérateurs auront ${common_ms} MS${NC}"
-            
+            if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
             for i in $(seq 1 "$n_operators"); do
                 echo -e "${CYAN}── Opérateur ${i} ──${NC}"
-                read -rp "  MCC   [001]      : " mcc;  OP_MCC[$i]=${mcc:-001}
-                read -rp "  MNC   [$(printf '%02d' "$i")]     : " mnc
-                OP_MNC[$i]=${mnc:-$(printf '%02d' "$i")}
-                read -rp "  Nom   [OsmoOP${i}]: " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                read -rp "  MCC [001] : " mcc; OP_MCC[$i]=${mcc:-001}
+                read -rp "  MNC [$(printf '%02d' "$i")] : " mnc; OP_MNC[$i]=${mnc:-$(printf '%02d' "$i")}
+                read -rp "  Nom [OsmoOP${i}] : " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
                 OP_MS[$i]=$common_ms
-                echo -e "  → MCC=${OP_MCC[$i]}  MNC=${OP_MNC[$i]}  Nom=${OP_NAME[$i]}  MS=${CYAN}${OP_MS[$i]}${NC}"
             done
         else
             for i in $(seq 1 "$n_operators"); do
                 echo -e "${CYAN}── Opérateur ${i} ──${NC}"
-                read -rp "  MCC   [001]      : " mcc;  OP_MCC[$i]=${mcc:-001}
-                read -rp "  MNC   [$(printf '%02d' "$i")]     : " mnc
-                OP_MNC[$i]=${mnc:-$(printf '%02d' "$i")}
-                read -rp "  Nom   [OsmoOP${i}]: " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
-                read -rp "  MS    [1]         : " n_ms; OP_MS[$i]=${n_ms:-1}
-                if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then
-                    echo -e "  ${YELLOW}Nombre de MS invalide, forcé à 1${NC}"
-                    OP_MS[$i]=1
-                fi
-                echo -e "  → MCC=${OP_MCC[$i]}  MNC=${OP_MNC[$i]}  Nom=${OP_NAME[$i]}  MS=${CYAN}${OP_MS[$i]}${NC}"
+                read -rp "  MCC [001] : " mcc; OP_MCC[$i]=${mcc:-001}
+                read -rp "  MNC [$(printf '%02d' "$i")] : " mnc; OP_MNC[$i]=${mnc:-$(printf '%02d' "$i")}
+                read -rp "  Nom [OsmoOP${i}] : " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                read -rp "  MS  [1] : " n_ms; OP_MS[$i]=${n_ms:-1}
+                if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then OP_MS[$i]=1; fi
             done
         fi
     fi
 
-    # ── WAN Interop — saisie optionnelle ──────────────────────────────────
+    # ── WAN Interop ──
     echo ""
-    echo -e "${CYAN}${BOLD}── WAN Interop (appels inter-serveur) ──${NC}"
+    echo -e "${CYAN}${BOLD}── WAN Interop ──${NC}"
     local wan_choice
-    read -rp "Activer l'interconnexion WAN vers un serveur distant ? [o/N] : " wan_choice
+    read -rp "Activer WAN vers un serveur distant ? [o/N] : " wan_choice
     if [[ "$wan_choice" =~ ^[OoYy]$ ]]; then
         WAN_ENABLED="true"
-
-        # Détection automatique de l'IP publique locale
         local auto_ip=""
         auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
-        if [ -z "$auto_ip" ]; then
-            auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
-        fi
-
-        read -rp "  IP publique locale  [${auto_ip}] : " wan_local
-        WAN_LOCAL_IP="${wan_local:-$auto_ip}"
-        if [ -z "$WAN_LOCAL_IP" ]; then
-            echo -e "  ${RED}IP locale requise.${NC}"
-            WAN_ENABLED="false"
-        fi
-
+        [ -z "$auto_ip" ] && auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+        read -rp "  IP publique locale [${auto_ip}] : " wan_local; WAN_LOCAL_IP="${wan_local:-$auto_ip}"
+        [ -z "$WAN_LOCAL_IP" ] && WAN_ENABLED="false"
         if [ "$WAN_ENABLED" = "true" ]; then
-            read -rp "  IP publique distante            : " wan_remote
-            WAN_REMOTE_IP="$wan_remote"
-            if [ -z "$WAN_REMOTE_IP" ]; then
-                echo -e "  ${RED}IP distante requise.${NC}"
-                WAN_ENABLED="false"
-            fi
+            read -rp "  IP publique distante : " wan_remote; WAN_REMOTE_IP="$wan_remote"
+            [ -z "$WAN_REMOTE_IP" ] && WAN_ENABLED="false"
         fi
-
         if [ "$WAN_ENABLED" = "true" ]; then
-            read -rp "  Préfixe d'appel WAN [${WAN_PREFIX}] : " wan_pfx
-            WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
-
-            echo -e ""
-            echo -e "  ${GREEN}WAN Interop activé :${NC}"
-            echo -e "    Local  : ${CYAN}${WAN_LOCAL_IP}${NC}"
-            echo -e "    Remote : ${CYAN}${WAN_REMOTE_IP}${NC}"
-            echo -e "    Préfixe: ${CYAN}${WAN_PREFIX}${NC}"
-            for i in $(seq 1 "$n_operators"); do
-                local sp rps rpe
-                sp=$(wan_sip_port "$i")
-                rps=$(wan_rtp_start "$i")
-                rpe=$(wan_rtp_end "$i")
-                echo -e "    Op${i}: SIP :${CYAN}${sp}${NC}  RTP ${CYAN}${rps}-${rpe}${NC}"
-            done
-            echo ""
+            read -rp "  Nb opérateurs distants [${n_operators}] : " wan_nremote
+            WAN_N_REMOTE="${wan_nremote:-$n_operators}"
+            read -rp "  Préfixe WAN [${WAN_PREFIX}] : " wan_pfx; WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
+            echo -e "  ${GREEN}WAN: ${WAN_LOCAL_IP} ↔ ${WAN_REMOTE_IP} (local=${n_operators} remote=${WAN_N_REMOTE} prefix=${WAN_PREFIX})${NC}"
         fi
     fi
 
+    # ── Détection IP hôte pour Linphone ────────────────────────────────────
+    HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
+        | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
+    if [ -z "$HOST_IP" ]; then
+        HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+    fi
+    HOST_IP="${HOST_IP:-127.0.0.1}"
+    echo -e "${GREEN}IP hôte : ${CYAN}${HOST_IP}${NC}  (Linphone)${NC}"
+    echo ""
+
     # ── Réseau backbone ────────────────────────────────────────────────────
-    echo -e "${GREEN}Création du réseau backbone ${INTER_NET}...${NC}"
     docker network inspect "$INTER_NET" &>/dev/null || \
         docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" "$INTER_NET" &>/dev/null
 
     # ── SMS Routing ────────────────────────────────────────────────────────
     SMS_ROUTING_DIR=$(mktemp -d)
     if declare -f sms_routing_generate_all > /dev/null 2>&1; then
-        echo -e "${GREEN}Génération tables SMS routing (${n_operators} ops)...${NC}"
         local _ms_counts=()
-        for i in $(seq 1 "$n_operators"); do
-            _ms_counts+=("${OP_MS[$i]}")
-        done
+        for i in $(seq 1 "$n_operators"); do _ms_counts+=("${OP_MS[$i]}"); done
         sms_routing_generate_all "$n_operators" "$SMS_ROUTING_DIR" "${_ms_counts[@]}"
         sms_routing_summary "$n_operators" "${_ms_counts[@]}"
     fi
@@ -701,27 +621,22 @@ start_bridge_mode() {
     start_inter_stp "$n_operators"
     wait_inter_stp_ready "$n_operators"
 
-    # ── Préparation des données pour HLR feed (tous les opérateurs) ────────
+    # ── HLR subscribers ────────────────────────────────────────────────────
     local all_subscribers_file
     all_subscribers_file=$(mktemp)
-    
-    echo "# Format: op_id:ms_idx:imsi:msisdn:ki" > "$all_subscribers_file"
+    echo "# op_id:ms_idx:imsi:msisdn:ki" > "$all_subscribers_file"
     for op_id in $(seq 1 "$n_operators"); do
-        mcc="${OP_MCC[$op_id]}"
-        mnc="${OP_MNC[$op_id]}"
-        n_ms="${OP_MS[$op_id]}"
+        local mcc="${OP_MCC[$op_id]}" mnc="${OP_MNC[$op_id]}" n_ms="${OP_MS[$op_id]}"
         for ms_idx in $(seq 1 "$n_ms"); do
-            msin=$(printf '%04d%06d' "${op_id}" "${ms_idx}")
-            imsi="${mcc}${mnc}${msin}"
-            msisdn=$(( op_id * 10000 + ms_idx ))
-            ki=$(printf '00112233445566778899aabbccdd%02x%02x' "${ms_idx}" "${op_id}")
+            local msin; msin=$(printf '%04d%06d' "${op_id}" "${ms_idx}")
+            local imsi="${mcc}${mnc}${msin}"
+            local msisdn=$(( op_id * 10000 + ms_idx ))
+            local ki; ki=$(printf '00112233445566778899aabbccdd%02x%02x' "${ms_idx}" "${op_id}")
             echo "${op_id}:${ms_idx}:${imsi}:${msisdn}:${ki}" >> "$all_subscribers_file"
         done
     done
-    
-    total_subs=$(wc -l < "$all_subscribers_file")
-    total_subs=$((total_subs - 1))
-    echo -e "${GREEN}Total abonnés à injecter dans chaque HLR : ${total_subs}${NC}"
+    local total_subs; total_subs=$(( $(wc -l < "$all_subscribers_file") - 1 ))
+    echo -e "${GREEN}Abonnés total : ${total_subs}${NC}"
     echo ""
 
     # ── Démarrage séquentiel des opérateurs ────────────────────────────────
@@ -736,14 +651,12 @@ start_bridge_mode() {
         container_ip=$(op_private_ip "$i")
         inter_local_ip=$(op_backbone_ip "$i")
         rctx_inter=$(op_rctx_inter "$i")
-        
         n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
         last_group_ip="127.0.0.${n_groups}"
 
         echo -e "${CYAN}── Opérateur ${i} : ${OP_NAME[$i]} (MCC=${OP_MCC[$i]} MNC=${OP_MNC[$i]}) ──${NC}"
         echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Privé : ${CYAN}${container_ip}${NC}"
-        echo -e "  STP PC     : 1.${i}.2  RCTX inter : ${rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
-        echo -e "  Groupes    : ${n_groups}  Dernier groupe IP : ${last_group_ip}:4247"
+        echo -e "  STP PC     : 1.${i}.2  RCTX : ${rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
 
         docker network inspect "$net_name" &>/dev/null || \
             docker network create --subnet="$subnet" --gateway="$gateway" "$net_name" &>/dev/null
@@ -757,25 +670,33 @@ start_bridge_mode() {
             "$INTER_STP_IP" "no shutdown" \
             "$n_operators"
 
-        local vol_args
+        local vol_args alsa_args
         vol_args=$(build_vol_args "$tmpdir")
-        local alsa_args
         alsa_args=$(build_alsa_args)
 
         mkdir -p /tmp/osmocom-logs/op${i}
-        # Construction des arguments de ports WAN si activé
+
+        # ── Ports à exposer ───────────────────────────────────────────────
         local port_args=""
+
+        # Linphone SIP/RTP — toujours exposé
+        local lsip_port lrtp_s lrtp_e
+        lsip_port=$(linphone_sip_port "$i")
+        lrtp_s=$(linphone_rtp_start "$i")
+        lrtp_e=$(linphone_rtp_end "$i")
+        port_args="-p ${lsip_port}:5060/udp -p ${lrtp_s}-${lrtp_e}:${lrtp_s}-${lrtp_e}/udp"
+        echo -e "  Linphone   : ${CYAN}${HOST_IP}:${lsip_port}${NC}  RTP ${lrtp_s}-${lrtp_e}"
+
+        # WAN en plus si activé
         if [ "$WAN_ENABLED" = "true" ]; then
-            local sip_port
-            local rtp_start
-            local rtp_end
+            local sip_port rtp_start rtp_end
             sip_port=$(wan_sip_port "$i")
             rtp_start=$(wan_rtp_start "$i")
             rtp_end=$(wan_rtp_end "$i")
-            port_args="-p ${sip_port}:5060/udp -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
-            echo -e "  WAN ports exposés : SIP ${sip_port} (udp/tcp), RTP ${rtp_start}-${rtp_end}"
+            port_args="${port_args} -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
+            echo -e "  WAN        : SIP ${sip_port} RTP ${rtp_start}-${rtp_end}"
         fi
-        # shellcheck disable=SC2086
+
         # shellcheck disable=SC2086
         docker run -d \
             --rm \
@@ -786,50 +707,54 @@ start_bridge_mode() {
             --cap-add SYS_ADMIN \
             --cgroupns host \
             --device /dev/net/tun:/dev/net/tun \
-            $alsa_args \
+            --device /dev/snd \
+            --group-add audio \
             $port_args \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             -v /tmp/osmocom-logs/op${i}:/var/log/osmocom \
-            --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+            -v /run/user/${UID}/pulse:/run/user/${UID}/pulse \
+            -e PULSE_SERVER=unix:/run/user/${UID}/pulse/native \
+            -e XDG_RUNTIME_DIR=/run/user/${UID} \
+            --tmpfs /tmp \
+            --tmpfs /run:exec,size=64m \
+            --tmpfs /run/lock \
             -e OPERATOR_ID="$i" \
             -e N_MS="${OP_MS[$i]}" \
             -e CONTAINER_IP="$container_ip" \
             -e GATEWAY_IP="$gateway" \
             -e INTER_STP_IP="$INTER_STP_IP" \
+            -e HOST_IP="${HOST_IP}" \
+            -e SIP_HOST_PORT="${lsip_port}" \
+            -e ALSA_OUTPUT="${ALSA_OUTPUT}" \
+            -e ALSA_INPUT="${ALSA_INPUT}" \
             $vol_args \
             "$IMAGE_RUN" \
             sleep infinity
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
-        echo -e "  ${GREEN}[*] Réseau privé attaché${NC}"
 
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
         docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && /etc/osmocom/run.sh > /var/log/osmocom/run.sh.log 2>&1"
 
-        echo -ne "  ${GREEN}[*] Attente HLR (port 4258)${NC}"
+        # Attente HLR
+        echo -ne "  ${GREEN}[*] Attente HLR (4258)${NC}"
         local retry=0
         while ! docker exec "$container_name" bash -c "echo >/dev/tcp/127.0.0.1/4258" 2>/dev/null; do
-            sleep 2
-            echo -n "."
-            retry=$((retry + 1))
-            if [ $retry -ge 45 ]; then
-                echo -e " ${RED}TIMEOUT${NC}"
-                docker logs "$container_name" --tail 20
-                return 1
-            fi
+            sleep 2; echo -n "."; retry=$((retry + 1))
+            if [ $retry -ge 45 ]; then echo -e " ${RED}TIMEOUT${NC}"; break; fi
         done
         echo -e " ${GREEN}✓${NC}"
 
-        echo -e "  ${GREEN}[*] Alimentation HLR Op${i} avec tous les abonnés (${total_subs})...${NC}"
-
+        # Feed HLR
+        echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${total_subs} abonnés)...${NC}"
         {
             echo "#!/bin/bash"
             echo "cat > /tmp/hlr_feed.vty << 'VTYCMDS'"
             echo "enable"
-            while IFS=: read -r op_id ms_idx imsi msisdn ki; do
-                [[ "$op_id" =~ ^#.*$ ]] && continue
-                echo "subscriber imsi ${imsi} create"
-                echo "subscriber imsi ${imsi} update msisdn ${msisdn}"
-                echo "subscriber imsi ${imsi} update aud2g comp128v1 ki ${ki}"
+            while IFS=: read -r feed_op feed_ms feed_imsi feed_msisdn feed_ki; do
+                [[ "$feed_op" =~ ^#.*$ ]] && continue
+                echo "subscriber imsi ${feed_imsi} create"
+                echo "subscriber imsi ${feed_imsi} update msisdn ${feed_msisdn}"
+                echo "subscriber imsi ${feed_imsi} update aud2g comp128v1 ki ${feed_ki}"
             done < "$all_subscribers_file"
             echo "end"
             echo "VTYCMDS"
@@ -837,38 +762,25 @@ start_bridge_mode() {
 
         docker exec "$container_name" bash -c '
             if command -v nc >/dev/null 2>&1; then
-                (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) \
-                    | nc -q2 127.0.0.1 4258 2>/dev/null \
-                    | grep -vE "^(OsmoHLR|Welcome|VTY|\s*$)" \
-                    | sed "s/^/  /" || true
+                (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) | nc -q2 127.0.0.1 4258 2>/dev/null | grep -cE "^%" || true
             else
-                (sleep 1; cat /tmp/hlr_feed.vty; sleep 3) \
-                    | telnet 127.0.0.1 4258 2>/dev/null \
-                    | grep -vE "^(Trying|Connected|Escape|OsmoHLR|Welcome)" \
-                    | sed "s/^/  /" || true
+                (sleep 1; cat /tmp/hlr_feed.vty; sleep 3) | telnet 127.0.0.1 4258 2>/dev/null | grep -cE "^%" || true
             fi
             rm -f /tmp/hlr_feed.vty
         '
-
         echo -e "  ${GREEN}✓ HLR Op${i} alimenté${NC}"
-        echo -ne "  ${GREEN}[*] Attente dernier groupe (${last_group_ip}:4247)${NC}"
+
+        # Attente dernier groupe
+        echo -ne "  ${GREEN}[*] Attente groupe (${last_group_ip}:4247)${NC}"
         retry=0
-        max_retries=90
         while ! docker exec "$container_name" bash -c "echo >/dev/tcp/${last_group_ip}/4247" 2>/dev/null; do
-            sleep 2
-            echo -n "."
-            retry=$((retry + 1))
-            if [ $retry -ge $max_retries ]; then
-                echo -e " ${RED}TIMEOUT${NC}"
-                docker logs "$container_name" --tail 20
-                break
-            fi
+            sleep 2; echo -n "."; retry=$((retry + 1))
+            if [ $retry -ge 90 ]; then echo -e " ${RED}TIMEOUT${NC}"; break; fi
         done
-        echo -e " ${GREEN}OK${NC}"        
-        echo -e "  ${GREEN}[*] Stabilisation (3s)...${NC}"
+        echo -e " ${GREEN}OK${NC}"
         sleep 3
 
-        echo -e "  ${GREEN}✓${NC} ${container_name} complètement prêt (${OP_MS[$i]} MS, dernier groupe ${last_group_ip})"
+        echo -e "  ${GREEN}✓${NC} ${container_name} prêt"
         echo ""
     done
 
@@ -876,43 +788,41 @@ start_bridge_mode() {
 
     # ── Attente relays SMS ─────────────────────────────────────────────────
     if declare -f sms_routing_wait_ready > /dev/null 2>&1; then
-        echo -e "${GREEN}Vérification relays SMS (port 7890)...${NC}"
         for i in $(seq 1 "$n_operators"); do
             sms_routing_wait_ready "$(op_container "$i")" 90 || true
         done
     fi
 
-    # ── WAN Interop — setup post-démarrage ─────────────────────────────────
+    # ── WAN ────────────────────────────────────────────────────────────────
     if [ "$WAN_ENABLED" = "true" ]; then
-        setup_wan_interop "$n_operators"
+        setup_wan_interop "$n_operators" "$WAN_N_REMOTE"
     fi
 
-    # ── Résumé ────────────────────────────────────────────────────────────
+    # ── Résumé ─────────────────────────────────────────────────────────────
     echo ""
     echo -e "${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
     echo ""
     echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC}  PC=0.0.0"
     for i in $(seq 1 "$n_operators"); do
         local rctx bb_ip n_groups
-        rctx=$(op_rctx_inter "$i")
-        bb_ip=$(op_backbone_ip "$i")
+        rctx=$(op_rctx_inter "$i"); bb_ip=$(op_backbone_ip "$i")
         n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
-        echo -e "  Op${i} ${OP_NAME[$i]}  STP 1.${i}.2 @ ${bb_ip}  ──RCTX ${rctx}──►  inter-STP  [MS: ${OP_MS[$i]}, groupes: ${n_groups}]"
+        echo -e "  Op${i} ${OP_NAME[$i]}  STP 1.${i}.2 @ ${bb_ip}  RCTX ${rctx}  [${OP_MS[$i]} MS]"
     done
+
+    echo ""
+    echo -e "  ${BOLD}Linphone (depuis l'hôte) :${NC}"
+    for i in $(seq 1 "$n_operators"); do
+        local lsip bb_ip
+        lsip=$(linphone_sip_port "$i"); bb_ip=$(op_backbone_ip "$i")
+        echo -e "    Op${i}: ${CYAN}${HOST_IP}:${lsip}${NC}  (ou direct ${bb_ip}:5060)"
+    done
+    echo -e "    linphone_A / tester → 100  |  linphone_B / testerB → 200"
 
     if [ "$WAN_ENABLED" = "true" ]; then
         echo ""
-        echo -e "  ${BOLD}WAN Interop :${NC} ${CYAN}${WAN_LOCAL_IP}${NC} ↔ ${CYAN}${WAN_REMOTE_IP}${NC}"
-        echo -e "  Préfixe    : ${CYAN}${WAN_PREFIX}${NC}  (ex: ${WAN_PREFIX}10001 → MS distant)"
-        for i in $(seq 1 "$n_operators"); do
-            local sp rps rpe
-            sp=$(wan_sip_port "$i")
-            rps=$(wan_rtp_start "$i")
-            rpe=$(wan_rtp_end "$i")
-            echo -e "  Op${i}: SIP :${CYAN}${sp}${NC}  RTP ${CYAN}${rps}-${rpe}${NC}"
-        done
+        echo -e "  ${BOLD}WAN :${NC} ${CYAN}${WAN_LOCAL_IP}${NC} (${n_operators} ops) ↔ ${CYAN}${WAN_REMOTE_IP}${NC} (${WAN_N_REMOTE} ops)  prefix=${WAN_PREFIX}"
     fi
-
     echo ""
 
     # ── Wireshark ─────────────────────────────────────────────────────────
@@ -925,7 +835,7 @@ start_bridge_mode() {
         DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
             wireshark -k -i "br-${bridge_if}" -f "sctp or udp port 4729" \
             >/dev/null 2>&1 & true
-        echo -e "  Wireshark lancé sur ${CYAN}br-${bridge_if}${NC}"
+        echo -e "  Wireshark sur ${CYAN}br-${bridge_if}${NC}"
     fi
 
     # ── Terminaux xterm ───────────────────────────────────────────────────
@@ -937,127 +847,96 @@ start_bridge_mode() {
         local title="$1" script_file="$2"
         chmod +x "$script_file"
         DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-        xterm -title "$title" \
-              -fa 'Monospace' -fs 10 \
-              -bg '#1e1e1e' -fg '#d4d4d4' \
-              -e bash "$script_file" \
-        2>/dev/null &
+        xterm -title "$title" -fa 'Monospace' -fs 10 \
+              -bg '#1e1e1e' -fg '#d4d4d4' -e bash "$script_file" 2>/dev/null &
         sleep 0.3
     }
 
     for i in $(seq 1 "$n_operators"); do
-        cname=$(op_container "$i")
-        
-        echo -ne "${YELLOW}Attente du socket tmux pour ${cname}...${NC}"
-        while ! sudo docker exec "${cname}" [ -S /tmp/osmocom_tmux ] 2>/dev/null; do
-            sleep 1
-            echo -n "."
-        done
+        local cname; cname=$(op_container "$i")
+        echo -ne "${YELLOW}Attente tmux ${cname}...${NC}"
+        while ! sudo docker exec "${cname}" [ -S /tmp/osmocom_tmux ] 2>/dev/null; do sleep 1; echo -n "."; done
         echo -e " ${GREEN}OK${NC}"
 
-        tmpscript="/tmp/osmo-xterm-op${i}.sh"
+        local tmpscript="/tmp/osmo-xterm-op${i}.sh"
         cat > "$tmpscript" <<EOF
 #!/usr/bin/env bash
-echo "=== Op${i} — ${OP_NAME[$i]} (${OP_MS[$i]} MS, $((${OP_MS[$i]})) groupes) ==="
+echo "=== Op${i} — ${OP_NAME[$i]} ==="
 exec sudo docker exec -ti ${cname} tmux -S /tmp/osmocom_tmux attach
 EOF
         _open_term_script "Op${i} — ${OP_NAME[$i]}" "$tmpscript"
     done
 
-    echo ""
     echo "=== ${INTER_STP_CONTAINER} ==="
     wait_stp_vty "$INTER_STP_CONTAINER"
 
-    tmpscript_stp="/tmp/osmo-xterm-stp.sh"
+    local tmpscript_stp="/tmp/osmo-xterm-stp.sh"
     cat > "$tmpscript_stp" <<EOF
 #!/usr/bin/env bash
-echo "--- Journal systemd: osmo-stp.service (Inter-STP) ---"
 exec sudo docker logs -f --tail 50 "${INTER_STP_CONTAINER}"
 EOF
-    chmod +x "$tmpscript_stp"
+    _open_term_script "Inter-STP" "$tmpscript_stp"
 
-    _open_term_script "Journal Inter-STP" "$tmpscript_stp" &
-
-    echo -e "\n${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
-    echo -e "${CYAN}Lancement du gestionnaire de consoles...${NC}"
+    echo -e "\n${GREEN}${BOLD}Stack prête !${NC}"
 
     if [ -f "./vty-menu.sh" ]; then
         chmod +x ./vty-menu.sh
         exec ./vty-menu.sh
-    else
-        echo -e "${RED}[!] Erreur : vty-menu.sh introuvable.${NC}"
     fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Mode net-host (1 opérateur, SDR physique)
+# Mode net-host
 # ══════════════════════════════════════════════════════════════════════════════
 start_host_mode() {
     echo -e "${GREEN}Démarrage en mode net-host (1 opérateur)...${NC}"
-
     local src_ip gw_ip
     gw_ip=$(ip route get 1 | awk '{print $3; exit}')
     src_ip=$(ip route get 1 | awk '{print $7; exit}')
     [ -z "$src_ip" ] && { echo -e "${RED}Impossible de détecter l'IP hôte.${NC}"; exit 1; }
-    echo -e "  IP hôte : ${CYAN}${src_ip}${NC}  GW : ${CYAN}${gw_ip}${NC}"
+    HOST_IP="$src_ip"
 
     local n_ms
     read -rp "Nombre de MS [1] : " n_ms
     n_ms=${n_ms:-1}
-    if ! [[ "$n_ms" =~ ^[0-9]+$ ]] || [ "$n_ms" -lt 1 ] || [ "$n_ms" -gt 64 ]; then
-        echo -e "${YELLOW}Valeur invalide, forcée à 1${NC}"
-        n_ms=1
-    fi
 
     prepare_host_tun
     docker rm -f egprs &>/dev/null || true
 
     SMS_ROUTING_DIR=$(mktemp -d)
     if declare -f sms_routing_generate > /dev/null 2>&1; then
-        echo -e "${GREEN}Génération table SMS routing (1 op, ${n_ms} MS)...${NC}"
         sms_routing_generate 1 1 "$SMS_ROUTING_DIR" "$n_ms"
-        sms_routing_summary  1 "$n_ms"
     fi
 
-    local tmpdir
-    tmpdir=$(mktemp -d)
+    local tmpdir; tmpdir=$(mktemp -d)
     apply_config_templates "$tmpdir" \
         "$src_ip" "$gw_ip" \
         "1" "1.1.1" "1.1.2" "1.1.3" \
         "001" "01" "OsmoGSM" \
-        "127.0.0.1" "shutdown" \
-        "1"
+        "127.0.0.1" "shutdown" "1"
 
-    local vol_args
+    local vol_args alsa_args
     vol_args=$(build_vol_args "$tmpdir")
-    local alsa_args
     alsa_args=$(build_alsa_args)
 
     # shellcheck disable=SC2086
-    docker run -d \
-        --rm \
-        --name egprs \
-        --net host \
-        --cap-add NET_ADMIN \
-        --cap-add SYS_ADMIN \
-        --cgroupns host \
+    docker run -d --rm --name egprs --net host \
+        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
         --device /dev/net/tun:/dev/net/tun \
         $alsa_args \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+        -v /proc/asound:/proc/asound:ro \
         --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-        -e CONTAINER_IP="$src_ip" \
-        -e GATEWAY_IP="$gw_ip" \
-        -e OPERATOR_ID="1" \
-        -e N_MS="$n_ms" \
+        -e CONTAINER_IP="$src_ip" -e GATEWAY_IP="$gw_ip" \
+        -e OPERATOR_ID="1" -e N_MS="$n_ms" \
         -e INTER_STP_IP="127.0.0.1" \
+        -e HOST_IP="${HOST_IP}" -e SIP_HOST_PORT="5060" \
+        -e ALSA_OUTPUT="${ALSA_OUTPUT}" -e ALSA_INPUT="${ALSA_INPUT}" \
         $vol_args \
-        "$IMAGE_RUN" \
-        /root/run.sh
+        "$IMAGE_RUN" /root/run.sh
 
     wait_bb_vty "egprs"
-    echo -e "  ${GREEN}[*] Stabilisation (3s)...${NC}"
     sleep 3
-    
     docker exec -it egprs /bin/bash -c "/root/run.sh"
 }
 
@@ -1066,23 +945,16 @@ stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
     docker ps -a --filter "name=egprs"  --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
-
-    # Nettoyage iptables WAN
     iptables -t nat -D PREROUTING -j OSMO_WAN_INTEROP 2>/dev/null || true
     iptables -t nat -F OSMO_WAN_INTEROP 2>/dev/null || true
     iptables -t nat -X OSMO_WAN_INTEROP 2>/dev/null || true
-
     echo -e "${GREEN}Arrêté.${NC}"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Mode réseau
-# ══════════════════════════════════════════════════════════════════════════════
 choose_network_mode() {
     echo -e "${BOLD}Mode réseau :${NC}"
-    echo "  1) net-host  — SDR physique, 1 opérateur, accès direct au hardware"
-    echo "  2) bridge    — Multi-opérateurs (N≥1), SS7 inter-op via inter-STP"
-    echo ""
+    echo "  1) net-host  — SDR physique, 1 opérateur"
+    echo "  2) bridge    — Multi-opérateurs SS7 inter-op"
     read -rp "Choix [1/2] : " NET_CHOICE
     case "$NET_CHOICE" in
         1) NETWORK_MODE="host" ;;

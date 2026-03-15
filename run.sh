@@ -249,11 +249,14 @@ else
     done
 fi
 
-
 echo -e "${GREEN}=== [9/10] Asterisk ===${NC}"
-tmux -S "$TMUX_SOCKET" new-window -t "$SESSION" -n asterisk
-tmux -S "$TMUX_SOCKET" send-keys -t "${SESSION}:asterisk" \
-    "pkill asterisk 2>/dev/null; sleep 2; pkill -9 asterisk 2>/dev/null; sleep 1; rm -f /var/lib/asterisk/astdb.sqlite3; asterisk -cvvv" C-m
+# NE PAS tuer Asterisk s'il tourne déjà — juste le (re)démarrer dans tmux
+if pgrep -x asterisk >/dev/null 2>&1; then
+    echo -e "  ${GREEN}Asterisk déjà actif — reload${NC}"
+    asterisk -rx 'core reload' 2>/dev/null || true
+else
+    run_in_tmux "asterisk" "rm -f /var/lib/asterisk/astdb.sqlite3; asterisk -cvvv"
+fi
 
 echo -e "${GREEN}=== [10/10] SMSC + gapk ===${NC}"
 if [ -f /etc/osmocom/smsc-start.sh ]; then
