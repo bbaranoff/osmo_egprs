@@ -601,6 +601,7 @@ start_bridge_mode() {
         HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}') || true
     fi
     HOST_IP="${HOST_IP:-127.0.0.1}"
+    REAL_UID=$(id -u "${SUDO_USER:-$(logname 2>/dev/null || echo root)}")
     echo -e "${GREEN}IP hôte : ${CYAN}${HOST_IP}${NC}  (Linphone)${NC}"
     echo ""
 
@@ -712,9 +713,9 @@ start_bridge_mode() {
             $port_args \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             -v /tmp/osmocom-logs/op${i}:/var/log/osmocom \
-            -v /run/user/${UID}/pulse:/run/user/${UID}/pulse \
-            -e PULSE_SERVER=unix:/run/user/${UID}/pulse/native \
-            -e XDG_RUNTIME_DIR=/run/user/${UID} \
+            -v /run/user/${REAL_UID}/pulse:/run/user/${REAL_UID}/pulse \
+            -e PULSE_SERVER=unix:/run/user/${REAL_UID}/pulse/native \
+            -e XDG_RUNTIME_DIR=/run/user/${REAL_UID} \
             --tmpfs /tmp \
             --tmpfs /run:exec,size=64m \
             --tmpfs /run/lock \

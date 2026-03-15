@@ -32,7 +32,7 @@ RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/
     /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
 
 # ── Scripts ────────────────────────────────────────────────────────────────────
-COPY scripts/* /scripts/
+COPY scripts/ /scripts/
 RUN chmod +x /scripts/*.sh
 
 # ── Configs Osmocom (templates avec placeholders __XXX__) ─────────────────────
@@ -42,7 +42,7 @@ COPY configs/*.conf /etc/asterisk/
 COPY configs/*.cfg /etc/osmocom/
 COPY configs/sms-routing.conf /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
-COPY configs/asound.conf /etc/
+
 # ── Scripts de démarrage ──────────────────────────────────────────────────────
 
 COPY scripts/sms-interop-relay.py /etc/osmocom/sms-interop-relay.py
@@ -50,10 +50,8 @@ COPY scripts/gapk-start.sh /etc/osmocom/gapk-start.sh
 COPY scripts/osmo-start.sh /root/osmo-start.sh
 COPY scripts/run.sh        /root/run.sh
 COPY scripts/smsc-start.sh /etc/osmocom/smsc-start.sh
-COPY scripts/pulse-gsm-setup.sh /scripts/pulse-gsm-setup.sh
 COPY scripts/send-mt-sms.sh /etc/osmocom/send-mt-sms.sh
 RUN chmod +x /root/osmo-start.sh /root/run.sh \
-    /scripts/pulse-gsm-setup.sh \
     /etc/osmocom/smsc-start.sh /etc/osmocom/send-mt-sms.sh
 
 # ── Vérification binaires proto-SMSC ──────────────────────────────────────────

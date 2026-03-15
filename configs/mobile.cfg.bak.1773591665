@@ -76,8 +76,8 @@ ms 1
   rplmn __MCC__ __MNC__
  tch-voice
   io-handler gapk
-  alsa-output-dev gsm_out
-  alsa-input-dev gsm_in
+  alsa-output-dev __ALSA_OUTPUT__
+  alsa-input-dev __ALSA_INPUT__
  no shutdown
 !
 ! GSMTAP configuration

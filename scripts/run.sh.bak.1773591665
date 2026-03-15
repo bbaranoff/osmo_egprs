@@ -228,14 +228,6 @@ for ms in $(seq 1 "$N_MS"); do
     [ $((ms % 8)) -eq 1 ] || [ "$ms" -eq "$N_MS" ] && echo -e "  ${CYAN}[ue${ms}]${NC} ${gip}:${local_port}"
 done
 
-echo -e "${GREEN}=== [6b/10] Audio PulseAudio ===${NC}"
-if [ -f /scripts/pulse-gsm-setup.sh ]; then
-    source /scripts/pulse-gsm-setup.sh
-    pulse_gsm_setup
-fi
-echo ""
-
-echo -e "${GREEN}=== [7/10] Mobile ===${NC}"
 echo -e "${GREEN}=== [7/10] Mobile ===${NC}"
 if [ "$MOBILE_MODE" = "split" ]; then
     for ms in $(seq 1 "$N_MS"); do
