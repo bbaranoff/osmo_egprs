@@ -261,7 +261,6 @@ if [ -f /etc/osmocom/smsc-start.sh ]; then
 else
     run_in_tmux "smsc" "echo 'SMSC non disponible'"
 fi
-run_in_tmux "gapk" "sleep 5 && (gapk-start.sh auto 2>/dev/null || echo 'gapk non dispo')"
 
 # ── Résumé ────────────────────────────────────────────────────────────────────
 echo ""
