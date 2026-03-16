@@ -434,6 +434,7 @@ start_inter_stp() {
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
 
     docker run -d \
+        --rm \
         --name "$INTER_STP_CONTAINER" \
         --network "$INTER_NET" \
         --ip "$INTER_STP_IP" \
@@ -697,7 +698,7 @@ start_bridge_mode() {
             port_args="${port_args} -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
             echo -e "  WAN        : SIP ${sip_port} RTP ${rtp_start}-${rtp_end}"
         fi
-
+        docker rm -f "$container_name" 2>/dev/null || true
         # shellcheck disable=SC2086
         docker run -d \
             --rm \
