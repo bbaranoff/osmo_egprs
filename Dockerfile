@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 as osmocom-nitb
+FROM ubuntu:22.04 AS osmocom-nitb
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ROOT=/opt/GSM

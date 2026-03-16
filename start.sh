@@ -2,8 +2,8 @@
 # start.sh — Lance la stack Osmocom GSM multi-opérateurs
 #
 # Modes : net-host (1 opérateur, SDR physique) | bridge (N opérateurs SS7 inter-op)
-
-set -e
+set -eu
+DEBUG=
 if [[ -n "$DEBUG" ]]; then
     set -x
     PS4='[DEBUG] + ${BASH_SOURCE}:${LINENO}: '
@@ -146,11 +146,11 @@ build_alsa_args() {
 # Build
 # ══════════════════════════════════════════════════════════════════════════════
 build_run_image() {
-    echo -e "${GREEN}Build de l'image run (Dockerfile.run)...${NC}"
-    docker build --no-cache -f Dockerfile.run -t "$IMAGE_RUN" .
+    echo -e "${GREEN}Build de l'image run...${NC}"
+    docker build --no-cache -f Dockerfile.run -t "$IMAGE_RUN" . \
+        < /dev/null > /tmp/docker-build.log 2>&1
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
 }
-
 check_image() {
     if ! docker image inspect "$IMAGE_RUN" &>/dev/null; then
         echo -e "${RED}Image '$IMAGE_RUN' introuvable — build en cours...${NC}"
@@ -967,19 +967,20 @@ choose_network_mode() {
 # ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
+# Main
 banner
-
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
+[ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
 
-if [ "$(id -u)" -ne 0 ]; then
-    echo -e "${RED}Doit être lancé en root (sudo).${NC}"; exit 1
-fi
+# 1. Toutes les questions d'abord (avant tout restart)
+choose_network_mode
 
+# 2. Ensuite le restart docker + build
+./helpers/prepare_host.sh
 build_run_image
 check_image
-choose_network_mode
-./helpers/prepare_host.sh
 
+# 3. Lancement
 case "$NETWORK_MODE" in
     host)   start_host_mode ;;
     bridge) start_bridge_mode ;;

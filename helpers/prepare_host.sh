@@ -56,11 +56,11 @@ step "Linphone: relance (user=${TARGET_USER})"
     DISPLAY="${DISPLAY:-:0}"
     XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
 
-    sudo -u "$TARGET_USER" \
+    setsid sudo -u "$TARGET_USER" \
         env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
             DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
-        nohup linphone >/dev/null 2>&1 & true
-        
+        linphone </dev/null >/dev/null 2>&1 &
+                
 step_ok "Linphone: relance (user=${TARGET_USER})"
 
 # ---------- 3) Xterm : kill----------
@@ -68,11 +68,6 @@ step "Xterm kill"
 kill_name_root "xterm"
 sleep 0.2
 step_ok "Xterm: kill (root)"
-
-# ---------- 4) Docker: restart service ----------
-step "Restart docker service"
-systemctl restart docker >/dev/null 2>&1 || fail "Restart docker service"
-step_ok "Restart docker service"
 
 # ---------- 2) Wireshark : kill + relance en root sur GSMTAP/4729 ----------
 step "Wireshark: kill (root)"
