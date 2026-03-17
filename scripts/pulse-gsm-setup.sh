@@ -1,123 +1,108 @@
 #!/bin/bash
-# pulse-gsm-setup.sh — Sink PulseAudio virtuel pour mobile (OsmocomBB)
+# pulse-gsm-setup.sh — Configure PulseAudio for osmo-gapk audio
 #
-# Crée gsm_audio (null-sink 8kHz mono) SANS loopback vers les HP.
-# L'audio est streamé aux clients via server.js /audio endpoint (ffmpeg → MP3).
-# Patche les mobile_group*.cfg pour utiliser gsm_out / gsm_in.
-# Appelé par run.sh APRÈS generate_ms_configs, AVANT mobile.
+# Chaîne audio :
+#   osmo-gapk → ALSA "gsm_out" → asound.conf(type pulse, device gsm_audio)
+#              → PulseAudio null-sink "gsm_audio"
+#              → gsm_audio.monitor → parec → WebSocket → navigateur
+#
+# Appelé par run.sh avant le lancement d'OsmocomBB/gapk.
+# Requiert : PULSE_SERVER défini + socket monté par start.sh
 
-set -euo pipefail
+set -u
 
-GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'
-RED='\033[0;31m'; NC='\033[0m'
+TAG="[pulse-gsm]"
+TIMEOUT="${PULSE_TIMEOUT:-30}"
+SINK_NAME="gsm_audio"
+SINK_RATE=8000
+SINK_CHANNELS=1
+SINK_FORMAT="s16le"
 
-GSM_SINK_NAME="gsm_audio"
+log()  { echo "$TAG $*"; }
+err()  { echo "$TAG ERROR: $*" >&2; }
 
-_check_pulse() {
-    command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1
-}
-
-_sink_exists() {
-    pactl list short sinks 2>/dev/null | grep -q "${GSM_SINK_NAME}"
-}
-
-pulse_gsm_setup() {
-    echo -e "${CYAN}[pulse-gsm] Configuration audio isolée${NC}"
-
-    if ! _check_pulse; then
-        echo -e "  ${YELLOW}PulseAudio inaccessible — mobile utilisera default${NC}"
-        _patch_mobile_configs "default" "default"
-        return 0
-    fi
-
-    # 1. Nettoyer les anciens sinks/loopbacks gsm_audio
-    pactl list short modules 2>/dev/null \
-        | grep -E "null-sink.*${GSM_SINK_NAME}|loopback.*${GSM_SINK_NAME}" \
-        | awk '{print $1}' \
-        | xargs -rn1 pactl unload-module 2>/dev/null || true
-
-    # 2. Créer UN SEUL null-sink (pas de loopback → pas de son sur les HP hôte)
-    local mod_sink
-    mod_sink=$(pactl load-module module-null-sink \
-        sink_name="${GSM_SINK_NAME}" \
-        sink_properties=device.description="GSM-Audio" \
-        rate=8000 channels=1 2>/dev/null) || true
-
-    if _sink_exists; then
-        echo -e "  ${GREEN}✓${NC} Sink ${GSM_SINK_NAME} (module ${mod_sink:-?})"
-    else
-        echo -e "  ${RED}✗${NC} Échec création sink — fallback default"
-        _patch_mobile_configs "default" "default"
-        return 0
-    fi
-
-    # PAS de loopback : l'audio est streamé via server.js /audio endpoint
-    # Le monitor gsm_audio.monitor est lu par ffmpeg quand un client se connecte
-    echo -e "  ${GREEN}✓${NC} Pas de loopback HP — audio via web console /audio"
-
-    # 3. Vérification : exactement 1 sink
-    local n_sinks
-    n_sinks=$(pactl list short sinks 2>/dev/null | grep -c "${GSM_SINK_NAME}" || echo 0)
-    if [ "$n_sinks" -ne 1 ]; then
-        echo -e "  ${YELLOW}⚠${NC} ${n_sinks} sinks détectés (attendu: 1)"
-    fi
-
-    # 4. Patcher mobile configs
-    _patch_mobile_configs "gsm_out" "gsm_in"
-
-    echo -e "${GREEN}[pulse-gsm] Audio isolée — stream via /audio${NC}"
-}
-
-_patch_mobile_configs() {
-    local out_dev="$1" in_dev="$2"
-    local patched=0
-
-    for cfg in /root/.osmocom/bb/mobile_group*.cfg \
-               /root/.osmocom/bb/mobile_ms*.cfg \
-               /root/.osmocom/bb/mobile.cfg; do
-        [ -f "$cfg" ] || continue
-        grep -q "alsa-output-dev" "$cfg" 2>/dev/null || continue
-
-        # sed -i interdit sur bind mount → cp + sed > fichier
-        cp "$cfg" /tmp/_sedtmp
-        sed "s|alsa-output-dev .*|alsa-output-dev ${out_dev}|;s|alsa-input-dev .*|alsa-input-dev ${in_dev}|" /tmp/_sedtmp > "$cfg"
-        rm -f /tmp/_sedtmp
-        patched=$((patched + 1))
+# ── 1. Attente PulseAudio ────────────────────────────────────────────────────
+wait_pulse() {
+    local i=0
+    while [ $i -lt "$TIMEOUT" ]; do
+        if pactl info >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        i=$((i + 1))
     done
-
-    [ "$patched" -gt 0 ] && \
-        echo -e "  ${GREEN}✓${NC} ${patched} config(s) → ${out_dev}/${in_dev}" || \
-        echo -e "  ${YELLOW}⚠${NC} Aucune config mobile trouvée"
-}
-pulse_gsm_status() {
-    echo -e "${CYAN}── Audio GSM — État ──${NC}"
-    if _check_pulse; then
-        echo -e "  PulseAudio : ${GREEN}OK${NC}"
-        pactl list short sinks 2>/dev/null | grep "${GSM_SINK_NAME}" | sed 's/^/    /'
-        local lb; lb=$(pactl list short modules 2>/dev/null | grep -c "loopback.*${GSM_SINK_NAME}" || echo 0)
-        echo -e "  Loopback : ${lb} (should be 0 — audio via web)"
-    else
-        echo -e "  PulseAudio : ${RED}inaccessible${NC}"
-    fi
-    echo -e "  asound.conf :"
-    grep -E "^pcm\.|device " /etc/asound.conf 2>/dev/null | sed 's/^/    /' || echo "    (absent)"
-    echo -e "  mobile.cfg :"
-    grep "alsa-.*-dev" /root/.osmocom/bb/mobile_group*.cfg 2>/dev/null | head -2 | sed 's/^/    /' || true
+    return 1
 }
 
-pulse_gsm_teardown() {
-    pactl list short modules 2>/dev/null \
-        | grep -E "null-sink.*${GSM_SINK_NAME}|loopback.*${GSM_SINK_NAME}" \
-        | awk '{print $1}' \
-        | xargs -rn1 pactl unload-module 2>/dev/null || true
-    echo -e "${GREEN}[pulse-gsm] Nettoyé${NC}"
-}
+log "Attente connexion PulseAudio (${PULSE_SERVER:-non défini})..."
 
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    case "${1:-setup}" in
-        setup)    pulse_gsm_setup ;;
-        status)   pulse_gsm_status ;;
-        teardown) pulse_gsm_teardown ;;
-        *)        echo "Usage: $0 {setup|status|teardown}" ;;
-    esac
+if ! wait_pulse; then
+    err "PulseAudio injoignable après ${TIMEOUT}s"
+    err "Vérifier que PULSE_SERVER est défini et le socket monté"
+    exit 1
 fi
+
+log "PulseAudio connecté"
+
+# ── 2. Création du null-sink gsm_audio ───────────────────────────────────────
+if pactl list short sinks 2>/dev/null | grep -q "$SINK_NAME"; then
+    log "Sink ${SINK_NAME} déjà présent"
+else
+    if pactl load-module module-null-sink \
+        sink_name="$SINK_NAME" \
+        format="$SINK_FORMAT" \
+        rate="$SINK_RATE" \
+        channels="$SINK_CHANNELS" \
+        sink_properties=device.description=GSM_Audio >/dev/null 2>&1; then
+        log "Sink ${SINK_NAME} créé (${SINK_FORMAT}/${SINK_RATE}Hz/${SINK_CHANNELS}ch)"
+    else
+        err "Échec création sink ${SINK_NAME}"
+        exit 1
+    fi
+fi
+
+# ── 3. Vérification monitor ──────────────────────────────────────────────────
+if pactl list short sources 2>/dev/null | grep -q "${SINK_NAME}.monitor"; then
+    log "Source ${SINK_NAME}.monitor disponible"
+else
+    err "Source ${SINK_NAME}.monitor introuvable"
+    exit 1
+fi
+
+# ── 4. Empêcher la suspension automatique ────────────────────────────────────
+# PulseAudio suspend les sinks inactifs → osmo-gapk écrit dans le vide
+# et il faut toggle les haut-parleurs sur l'hôte pour réveiller le flux
+
+pactl suspend-sink "$SINK_NAME" 0 2>/dev/null || true
+pactl suspend-source "${SINK_NAME}.monitor" 0 2>/dev/null || true
+
+# Désactiver module-suspend-on-idle s'il est chargé
+SUSPEND_IDX=$(pactl list short modules 2>/dev/null | awk '/module-suspend-on-idle/ {print $1; exit}')
+if [ -n "$SUSPEND_IDX" ]; then
+    pactl unload-module "$SUSPEND_IDX" 2>/dev/null && \
+        log "module-suspend-on-idle désactivé" || true
+fi
+
+log "Sink ${SINK_NAME} forcé actif (pas de suspend)"
+
+# ── 5. Loopback gsm_audio → haut-parleurs ───────────────────────────────────
+# gsm_audio.monitor → haut-parleurs hôte (entendre le GSM)
+# Ce loopback garde aussi le sink actif en permanence.
+
+HW_SINK=$(pactl info 2>/dev/null | awk -F': ' '/Default Sink/ {print $2}')
+
+if [ -n "$HW_SINK" ] && [ "$HW_SINK" != "$SINK_NAME" ]; then
+    if ! pactl list short modules 2>/dev/null | grep -q "source=${SINK_NAME}.monitor.*sink=${HW_SINK}"; then
+        pactl load-module module-loopback \
+            source="${SINK_NAME}.monitor" \
+            sink="$HW_SINK" \
+            rate="$SINK_RATE" \
+            channels="$SINK_CHANNELS" \
+            latency_msec=20 \
+            source_dont_move=true \
+            sink_dont_move=true >/dev/null 2>&1 && \
+            log "Loopback : ${SINK_NAME} → ${HW_SINK} (haut-parleurs)" || true
+    fi
+fi
+
+log "Configuration audio prête"

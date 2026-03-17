@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Outils de build
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
     # Dépendances Osmocom Core & Network
-    libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev liburing-dev \
+    libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev liburing-dev asterisk-moh* \
     libdbi-dev libdbd-sqlite3 libsqlite3-dev sqlite3 libc-ares-dev libgnutls28-dev \
     # Audio, Radio & SIP
     libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \

@@ -77,71 +77,57 @@ banner() {
     echo -e "${NC}"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ALSA + PulseAudio passthrough
-# ══════════════════════════════════════════════════════════════════════════════
 build_alsa_args() {
     local alsa_args=""
-    local alsa_card="${ALSA_CARD:-default}"
-    local target_user="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
-    local target_uid
-    target_uid=$(id -u "${target_user}" 2>/dev/null || echo 1000)
+    local src_asound="$(dirname "$0")/configs/asound.conf"
+    local host_asound="/tmp/osmocom-alsa/asound.conf"
 
-    # /dev/snd — accès direct aux devices ALSA
+    mkdir -p /tmp/osmocom-alsa
+
+    # /dev/snd passthrough
     if [ -d /dev/snd ]; then
-        alsa_args="--device /dev/snd"
-        if getent group audio &>/dev/null; then
+        alsa_args="${alsa_args} --device /dev/snd"
+        if getent group audio >/dev/null 2>&1; then
             alsa_args="${alsa_args} --group-add $(getent group audio | cut -d: -f3)"
         fi
-        echo -e "  ALSA      : ${GREEN}/dev/snd${NC}" >&2
-    else
-        echo -e "  ALSA      : ${YELLOW}/dev/snd absent${NC}" >&2
     fi
 
-    # .asoundrc — config ALSA utilisateur
-    local asoundrc="/home/${target_user}/.asoundrc"
-    if [ -f "$asoundrc" ]; then
-        alsa_args="${alsa_args} -v ${asoundrc}:/root/.asoundrc:ro"
-    fi
+    # PulseAudio socket forwarding
+    local real_user="${SUDO_USER:-$USER}"
+    local real_uid; real_uid=$(id -u "$real_user" 2>/dev/null || echo "")
+    local pulse_sock="/run/user/${real_uid}/pulse/native"
+    local has_pulse="false"
 
-    # PulseAudio — nécessaire sur les desktops modernes (ALSA 'default' → PulseAudio)
-    local pulse_dir="/run/user/${target_uid}/pulse"
-    local pulse_socket="${pulse_dir}/native"
-    local pulse_cookie="/home/${target_user}/.config/pulse/cookie"
-
-    if [ -S "$pulse_socket" ]; then
-        # Monter le répertoire pulse complet (socket + pid + fichiers runtime)
-        alsa_args="${alsa_args} -v ${pulse_dir}:${pulse_dir}"
-        alsa_args="${alsa_args} -e PULSE_SERVER=unix:${pulse_socket}"
-
-        # Cookie PulseAudio (authentification)
+    if [ -n "$real_uid" ] && [ -S "$pulse_sock" ]; then
+        alsa_args="${alsa_args} -v ${pulse_sock}:/run/pulse/native"
+        alsa_args="${alsa_args} -e PULSE_SERVER=unix:/run/pulse/native"
+        local pulse_cookie="/home/${real_user}/.config/pulse/cookie"
+        [ ! -f "$pulse_cookie" ] && pulse_cookie="/home/${real_user}/.pulse-cookie"
         if [ -f "$pulse_cookie" ]; then
             alsa_args="${alsa_args} -v ${pulse_cookie}:/root/.config/pulse/cookie:ro"
-            alsa_args="${alsa_args} -e PULSE_COOKIE=/root/.config/pulse/cookie"
         fi
-
-        # XDG_RUNTIME_DIR pour que les libs trouvent le socket
-        alsa_args="${alsa_args} -e XDG_RUNTIME_DIR=/run/user/${target_uid}"
-
-        echo -e "  PulseAudio: ${GREEN}socket ${pulse_socket}${NC}" >&2
-    else
-        # Pas de PulseAudio — utiliser hw: direct si dispo
-        if [ -d /dev/snd ] && command -v aplay >/dev/null 2>&1; then
-            local hw_dev
-            hw_dev=$(aplay -l 2>/dev/null | grep -m1 "^card" | sed 's/card \([0-9]*\):.*device \([0-9]*\):.*/hw:\1,\2/' || true)
-            if [ -n "$hw_dev" ]; then
-                alsa_card="$hw_dev"
-                echo -e "  PulseAudio: ${YELLOW}absent — ALSA direct ${hw_dev}${NC}" >&2
-            fi
-        else
-            echo -e "  PulseAudio: ${YELLOW}absent${NC}" >&2
-        fi
+        has_pulse="true"
     fi
 
-    alsa_args="${alsa_args} -e ALSA_CARD=${alsa_card} -e GAPK_ALSA_DEV=${alsa_card}"
+    # asound.conf : copie depuis configs/
+    if [ -f "$src_asound" ]; then
+        cp "$src_asound" "$host_asound"
+        alsa_args="${alsa_args} -v ${host_asound}:/etc/asound.conf:rw"
+        alsa_args="${alsa_args} -e ALSA_OUTPUT=gsm_out -e ALSA_INPUT=gsm_in"
+        alsa_args="${alsa_args} -e ALSA_CARD=gsm_out -e GAPK_ALSA_DEV=gsm_out"
+        if [ "$has_pulse" = "true" ]; then
+            echo -e "  ${GREEN}Audio : PulseAudio + asound.conf${NC}" >&2
+        else
+            echo -e "  ${YELLOW}Audio : asound.conf sans PulseAudio${NC}" >&2
+        fi
+    else
+        alsa_args="${alsa_args} -e ALSA_OUTPUT=default -e ALSA_INPUT=default"
+        alsa_args="${alsa_args} -e ALSA_CARD=default -e GAPK_ALSA_DEV=default"
+        echo -e "  ${YELLOW}Audio : configs/asound.conf absent, fallback default${NC}" >&2
+    fi
+
     echo "$alsa_args"
 }
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Build
 # ══════════════════════════════════════════════════════════════════════════════
@@ -709,14 +695,10 @@ start_bridge_mode() {
             --cap-add SYS_ADMIN \
             --cgroupns host \
             --device /dev/net/tun:/dev/net/tun \
-            --device /dev/snd \
-            --group-add audio \
+            $alsa_args \
             $port_args \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             -v /tmp/osmocom-logs/op${i}:/var/log/osmocom \
-            -v /run/user/${REAL_UID}/pulse:/run/user/${REAL_UID}/pulse \
-            -e PULSE_SERVER=unix:/run/user/${REAL_UID}/pulse/native \
-            -e XDG_RUNTIME_DIR=/run/user/${REAL_UID} \
             --tmpfs /tmp \
             --tmpfs /run:exec,size=64m \
             --tmpfs /run/lock \
@@ -727,8 +709,6 @@ start_bridge_mode() {
             -e INTER_STP_IP="$INTER_STP_IP" \
             -e HOST_IP="${HOST_IP}" \
             -e SIP_HOST_PORT="${lsip_port}" \
-            -e ALSA_OUTPUT="${ALSA_OUTPUT}" \
-            -e ALSA_INPUT="${ALSA_INPUT}" \
             $vol_args \
             "$IMAGE_RUN" \
             sleep infinity
@@ -927,7 +907,6 @@ start_host_mode() {
         --device /dev/net/tun:/dev/net/tun \
         $alsa_args \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-        -v /proc/asound:/proc/asound:ro \
         --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
         -e CONTAINER_IP="$src_ip" -e GATEWAY_IP="$gw_ip" \
         -e OPERATOR_ID="1" -e N_MS="$n_ms" \

@@ -230,11 +230,9 @@ done
 
 echo -e "${GREEN}=== [6b/10] Audio PulseAudio ===${NC}"
 if [ -f /scripts/pulse-gsm-setup.sh ]; then
-    source /scripts/pulse-gsm-setup.sh
-    pulse_gsm_setup
+    /scripts/pulse-gsm-setup.sh
 fi
 echo ""
-
 echo -e "${GREEN}=== [7/10] Mobile ===${NC}"
 echo -e "${GREEN}=== [7/10] Mobile ===${NC}"
 if [ "$MOBILE_MODE" = "split" ]; then
