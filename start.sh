@@ -76,7 +76,49 @@ banner() {
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
+# ── Loopback audio côté session utilisateur ───────────────────────────────
+enable_user_loopback() {
+    local target_user target_uid target_runtime loopback_script
 
+    target_user="${SUDO_USER:-nirvana}"
+    target_uid="$(id -u "$target_user")"
+    target_runtime="/run/user/${target_uid}"
+    loopback_script="/home/${target_user}/osmo_egprs/loopback.sh"
+
+    echo -e "${GREEN}=== [audio] Loopback user session ===${NC}"
+    echo -e "  user    : ${CYAN}${target_user}${NC}"
+    echo -e "  runtime : ${CYAN}${target_runtime}${NC}"
+    echo -e "  script  : ${CYAN}${loopback_script}${NC}"
+
+    if [[ ! -x "$loopback_script" ]]; then
+        echo -e "  ${RED}[FAIL]${NC} script introuvable ou non exécutable"
+        return 1
+    fi
+
+    sudo -u "$target_user" \
+        XDG_RUNTIME_DIR="$target_runtime" \
+        PULSE_SERVER="unix:${target_runtime}/pulse/native" \
+        "$loopback_script" enable || {
+            echo -e "  ${RED}[FAIL]${NC} enable loopback"
+            return 1
+        }
+
+    echo -e "  ${GREEN}[OK]${NC} loopback activé"
+}
+
+disable_user_loopback() {
+    local target_user target_uid target_runtime loopback_script
+
+    target_user="${SUDO_USER:-nirvana}"
+    target_uid="$(id -u "$target_user")"
+    target_runtime="/run/user/${target_uid}"
+    loopback_script="/home/${target_user}/osmo_egprs/loopback.sh"
+
+    sudo -u "$target_user" \
+        XDG_RUNTIME_DIR="$target_runtime" \
+        PULSE_SERVER="unix:${target_runtime}/pulse/native" \
+        "$loopback_script" disable || true
+}
 build_alsa_args() {
     local alsa_args=""
     local src_asound="$(dirname "$0")/configs/asound.conf"
@@ -930,6 +972,7 @@ stop_all() {
     iptables -t nat -F OSMO_WAN_INTEROP 2>/dev/null || true
     iptables -t nat -X OSMO_WAN_INTEROP 2>/dev/null || true
     echo -e "${GREEN}Arrêté.${NC}"
+    disable_user_loopback
 }
 
 choose_network_mode() {
@@ -954,11 +997,11 @@ banner
 
 # 1. Toutes les questions d'abord (avant tout restart)
 choose_network_mode
-
 # 2. Ensuite le restart docker + build
 ./helpers/prepare_host.sh
 build_run_image
 check_image
+enable_user_loopback
 
 # 3. Lancement
 case "$NETWORK_MODE" in
