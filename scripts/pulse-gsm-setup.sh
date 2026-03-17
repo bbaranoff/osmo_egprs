@@ -85,24 +85,7 @@ fi
 
 log "Sink ${SINK_NAME} forcé actif (pas de suspend)"
 
-# ── 5. Loopback gsm_audio → haut-parleurs ───────────────────────────────────
-# gsm_audio.monitor → haut-parleurs hôte (entendre le GSM)
-# Ce loopback garde aussi le sink actif en permanence.
-
-HW_SINK=$(pactl info 2>/dev/null | awk -F': ' '/Default Sink/ {print $2}')
-
-if [ -n "$HW_SINK" ] && [ "$HW_SINK" != "$SINK_NAME" ]; then
-    if ! pactl list short modules 2>/dev/null | grep -q "source=${SINK_NAME}.monitor.*sink=${HW_SINK}"; then
-        pactl load-module module-loopback \
-            source="${SINK_NAME}.monitor" \
-            sink="$HW_SINK" \
-            rate="$SINK_RATE" \
-            channels="$SINK_CHANNELS" \
-            latency_msec=20 \
-            source_dont_move=true \
-            sink_dont_move=true >/dev/null 2>&1 && \
-            log "Loopback : ${SINK_NAME} → ${HW_SINK} (haut-parleurs)" || true
-    fi
-fi
-
 log "Configuration audio prête"
+# NOTE : pas de loopback gsm_audio → haut-parleurs.
+# Écoute via parec → WebSocket → navigateur uniquement.
+# Sink maintenu actif par suspend-sink 0 + suppression module-suspend-on-idle (étape 4).
