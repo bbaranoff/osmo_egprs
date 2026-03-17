@@ -356,6 +356,7 @@ apply_config_templates() {
     for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
         [ -f "$f" ] || continue
         sed -i \
+            -e "s|__ENCRYPTION__|${ENCRYPTION}|g" \
             -e "s|__INTER_NET_GATEWAY__|172.20.0.1|g" \
             -e "s|__CONTAINER_IP__|${container_ip}|g" \
             -e "s|__GATEWAY_IP__|${gateway_ip}|g" \
@@ -639,7 +640,20 @@ start_bridge_mode() {
         *) PHY_MODE="faketrx" ;;
     esac
     echo -e "  ${GREEN}PHY : ${PHY_MODE}${NC}"
-    
+    # ── Encryption ──
+    echo ""
+    echo -e "${CYAN}${BOLD}── Encryption A5 ──${NC}"
+    echo "  0) A5/0  — pas de chiffrement"
+    echo "  1) A5/1  — chiffrement legacy"
+    echo "  2) A5/2  — (cassé, usage test)"
+    local enc_choice
+    read -rp "Choix A5 [0] : " enc_choice
+    case "$enc_choice" in
+        1) ENCRYPTION="a5 1" ;;
+        2) ENCRYPTION="a5 2" ;;
+        *) ENCRYPTION="a5 0" ;;
+    esac
+    echo -e "  ${GREEN}Encryption : ${ENCRYPTION}${NC}"
     # ── Détection IP hôte pour Linphone ────────────────────────────────────
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
         | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
