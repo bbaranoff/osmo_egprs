@@ -994,7 +994,7 @@ stop_all() {
 
 choose_network_mode() {
     echo -e "${BOLD}Mode réseau :${NC}"
-    echo "  1) net-host  — SDR physique, 1 opérateur"
+    echo "  1) net-host  — SDR physique, 1 opérateur - HAS TO BE REPAIRED ?"
     echo "  2) bridge    — Multi-opérateurs SS7 inter-op"
     read -rp "Choix [1/2] : " NET_CHOICE
     case "$NET_CHOICE" in
