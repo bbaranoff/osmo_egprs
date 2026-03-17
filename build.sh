@@ -14,7 +14,7 @@ if ! command -v docker &> /dev/null; then
     apt-get update
     apt-get install -y docker.io docker-compose-v2 wireshark 
     linphone-desktop xterm whiptail expect netcat-openbsd telnet 
-    iproute2
+    iproute2 pulseaudio-utils
 fi
 
 # 3. Installation des dépendances critiques sur l'hôte
