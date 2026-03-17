@@ -98,12 +98,12 @@ enable_user_loopback() {
     sudo -u "$target_user" \
         XDG_RUNTIME_DIR="$target_runtime" \
         PULSE_SERVER="unix:${target_runtime}/pulse/native" \
-        "$loopback_script" enable || {
+        "$loopback_script" enable >/dev/null 2>&1 || {
             echo -e "  ${RED}[FAIL]${NC} enable loopback"
             return 1
         }
 
-    echo -e "  ${GREEN}[OK]${NC} loopback activé"
+    echo -e "[ OK ]${NC} loopback activé"
 }
 
 disable_user_loopback() {
