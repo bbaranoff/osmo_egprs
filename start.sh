@@ -631,7 +631,7 @@ start_bridge_mode() {
     echo ""
     echo -e "${CYAN}${BOLD}── PHY Mode ──${NC}"
     echo "  1) faketrx  — fake_trx + trxcon (TRXD, défaut)"
-    echo "  2) virtphy  — osmo-bts-virtual + virtphy (multicast)"
+    echo "  2) virtphy  — osmo-bts-virtual + virtphy (multicast) - EXPERIMENTAL !!"
     local phy_choice
     read -rp "Mode PHY [1] : " phy_choice
     case "$phy_choice" in
