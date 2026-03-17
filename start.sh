@@ -41,6 +41,7 @@ WAN_PREFIX="66"
 WAN_SIP_BASE=5080
 WAN_RTP_BASE=20000
 WAN_RTP_PER_OP=500
+PHY_MODE="faketrx"   # faketrx | virtphy
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
@@ -299,6 +300,10 @@ apply_config_templates() {
         [ "$(basename "$f")" = "osmo-stp-interop.cfg" ] && continue
         cp "$f" "$dest/osmocom/"
     done
+
+    if [ -f "configs/osmo-bts-virtual.cfg" ]; then
+        cp "configs/osmo-bts-virtual.cfg" "$dest/osmocom/"
+    fi
 
     # Copie configs Asterisk (y compris rtp.conf)
     for f in configs/*.conf; do
@@ -622,7 +627,19 @@ start_bridge_mode() {
             echo -e "  ${GREEN}WAN: ${WAN_LOCAL_IP} ↔ ${WAN_REMOTE_IP} (local=${n_operators} remote=${WAN_N_REMOTE} prefix=${WAN_PREFIX})${NC}"
         fi
     fi
-
+    # ── PHY Mode ──
+    echo ""
+    echo -e "${CYAN}${BOLD}── PHY Mode ──${NC}"
+    echo "  1) faketrx  — fake_trx + trxcon (TRXD, défaut)"
+    echo "  2) virtphy  — osmo-bts-virtual + virtphy (multicast)"
+    local phy_choice
+    read -rp "Mode PHY [1] : " phy_choice
+    case "$phy_choice" in
+        2) PHY_MODE="virtphy" ;;
+        *) PHY_MODE="faketrx" ;;
+    esac
+    echo -e "  ${GREEN}PHY : ${PHY_MODE}${NC}"
+    
     # ── Détection IP hôte pour Linphone ────────────────────────────────────
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
         | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
@@ -751,6 +768,7 @@ start_bridge_mode() {
             -e INTER_STP_IP="$INTER_STP_IP" \
             -e HOST_IP="${HOST_IP}" \
             -e SIP_HOST_PORT="${lsip_port}" \
+            -e PHY_MODE="${PHY_MODE}" \
             $vol_args \
             "$IMAGE_RUN" \
             sleep infinity
@@ -803,7 +821,6 @@ start_bridge_mode() {
         done
         echo -e " ${GREEN}OK${NC}"
         sleep 3
-
         echo -e "  ${GREEN}✓${NC} ${container_name} prêt"
         echo ""
     done
@@ -902,7 +919,7 @@ EOF
     _open_term_script "Inter-STP" "$tmpscript_stp"
 
     echo -e "\n${GREEN}${BOLD}Stack prête !${NC}"
-
+    enable_user_loopback
     if [ -f "./vty-menu.sh" ]; then
         chmod +x ./vty-menu.sh
         exec ./vty-menu.sh
@@ -1001,7 +1018,6 @@ choose_network_mode
 ./helpers/prepare_host.sh
 build_run_image
 check_image
-enable_user_loopback
 
 # 3. Lancement
 case "$NETWORK_MODE" in
