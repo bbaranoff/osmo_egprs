@@ -16,7 +16,7 @@ env:
 jobs:
   build-iso:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360       # la compilation Osmocom est longue
+    timeout-minutes: 360
     permissions:
       contents: write
       packages: read
@@ -27,11 +27,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ── Libérer l'espace disque du runner (~30 GB récupérés) ──
       - name: Free disk space
         run: |
-          echo "=== Avant ==="
-          df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
             /opt/ghc /opt/hostedtoolcache/CodeQL \
             /usr/local/share/boost /usr/share/swift \
@@ -39,10 +36,8 @@ jobs:
             /usr/local/lib/node_modules
           sudo apt-get remove -y '^dotnet-.*' 'php.*' 'mongodb.*' \
             'mysql.*' azure-cli google-cloud-cli 2>/dev/null || true
-          sudo apt-get autoremove -y
-          sudo apt-get clean
+          sudo apt-get autoremove -y && sudo apt-get clean
           sudo docker image prune -af
-          echo "=== Après ==="
           df -h /
 
       - name: Install host tools
@@ -52,38 +47,19 @@ jobs:
             squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin \
             grub-common mtools debootstrap
 
-      # ── Build Docker sans buildx (--load implicite, image dispo localement) ──
       - name: Build osmocom-nitb image
         run: |
-          # Le Dockerfile core contient FROM ubuntu:22.04 + libosmocore
-          # Si le repo a un Dockerfile.web séparé, on cible explicitement le core
-          if grep -q "libosmocore" Dockerfile; then
-            CORE_DF="Dockerfile"
-          elif [ -f Dockerfile.core ]; then
-            CORE_DF="Dockerfile.core"
-          else
-            echo "::error::Dockerfile core (libosmocore) introuvable"
-            exit 1
-          fi
-          echo "Core Dockerfile: $CORE_DF"
+          if grep -q "libosmocore" Dockerfile; then CORE_DF="Dockerfile";
+          elif [ -f Dockerfile.core ]; then CORE_DF="Dockerfile.core";
+          else echo "::error::Dockerfile core introuvable"; exit 1; fi
           docker build -f "$CORE_DF" -t osmocom-nitb .
-          echo "✓ osmocom-nitb built"
-          docker images osmocom-nitb
 
       - name: Build osmocom-run image
         run: |
-          if [ -f Dockerfile.run ]; then
-            docker build -f Dockerfile.run -t osmocom-run .
-            echo "✓ osmocom-run built"
-          else
-            echo "Dockerfile.run absent — skip"
-          fi
+          [ -f Dockerfile.run ] && docker build -f Dockerfile.run -t osmocom-run . || true
 
-      # ── Purge du cache Docker pour libérer de l'espace avant l'ISO ──
-      - name: Reclaim Docker build cache
-        run: |
-          docker builder prune -af 2>/dev/null || true
-          echo "Espace libre: $(df -h / | tail -1 | awk '{print $4}')"
+      - name: Reclaim space
+        run: docker builder prune -af 2>/dev/null || true
 
       - name: Build ISO
         run: |
@@ -91,13 +67,13 @@ jobs:
           sudo ./build-iso.sh --output="${ISO_NAME}"
           ls -lh "${ISO_NAME}"
 
-      - name: Compute checksums
+      - name: Checksums
         run: |
           sha256sum "${ISO_NAME}" > "${ISO_NAME}.sha256"
           md5sum "${ISO_NAME}" > "${ISO_NAME}.md5"
           cat "${ISO_NAME}.sha256"
 
-      - name: Upload ISO artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: osmo_egprs-iso
@@ -118,27 +94,18 @@ jobs:
           body: |
             ## osmo_egprs Live ISO
 
-            Bootable ISO contenant :
-            - **Stack Osmocom complète** (libosmocore, osmo-msc, osmo-bsc, osmo-hlr, osmo-bts-trx, osmo-ggsn, osmo-sgsn, osmo-mgw, osmo-sip-connector, OsmocomBB, osmo-gapk, gsup-smsc-proto)
-            - **Dashboard web** (Node.js + tshark, port 8080)
-            - **Docker Engine** (pour le mode multi-opérateur bridge)
-            - **Scripts d'orchestration** (start.sh, checks, WAN interop, SMS routing)
-
-            ### Utilisation
+            Stack Osmocom complète + Dashboard web (port 8080) + Docker Engine
 
             ```bash
             # QEMU
-            qemu-system-x86_64 -cdrom osmo_egprs.iso -m 8G -enable-kvm -smp 4 \
+            qemu-system-x86_64 -cdrom osmo_egprs.iso -m 8G -enable-kvm -cpu host -smp 4 \
               -nic user,hostfwd=tcp::8080-:8080
 
-            # USB bootable
+            # USB
             sudo dd if=osmo_egprs.iso of=/dev/sdX bs=4M status=progress && sync
-            ```
 
-            Une fois démarré :
-            ```bash
-            cd /opt/osmo_egprs && sudo ./start.sh   # lancer le lab
-            # Dashboard : http://localhost:8080
+            # Premier boot
+            cd /opt/osmo_egprs && sudo ./start.sh
             ```
           files: |
             ${{ env.ISO_NAME }}

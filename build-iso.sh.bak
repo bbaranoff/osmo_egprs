@@ -115,10 +115,7 @@ done
 [ -f "$DIR/Dockerfile" ]     && cp "$DIR/Dockerfile"     "$P/"
 [ -f "$DIR/Dockerfile.run" ] && cp "$DIR/Dockerfile.run" "$P/"
 ln -sf /opt/osmo_egprs/start.sh "$ROOTFS/usr/local/bin/osmo-start-lab"
-# Orchestrateur global
-[ -f "$DIR/osmo-launch.sh" ] && cp "$DIR/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
-ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
-echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs + /opt/osmo-launch.sh"
+echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs"
 
 # ── 6. Chroot config ─────────────────────────────────────────────────────────
 echo -e "${GREEN}[6/8] Configuration chroot...${NC}"
@@ -134,10 +131,6 @@ APT_OPTS="-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
 
 # Preseed debconf pour wireshark (capture sans root) et tshark
 echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections
-# Preseed clavier par défaut (US pendant le build, reconfiguré au premier boot)
-echo "keyboard-configuration keyboard-configuration/layoutcode string us" | debconf-set-selections
-echo "keyboard-configuration keyboard-configuration/modelcode string pc105" | debconf-set-selections
-echo "console-setup console-setup/charmap47 select UTF-8" | debconf-set-selections
 
 # ── Sources complètes (main + universe + multiverse) ──
 cat > /etc/apt/sources.list <<SOURCES
@@ -165,8 +158,7 @@ apt-get install -y $APT_OPTS --no-install-recommends \
 apt-get install -y $APT_OPTS --no-install-recommends \
     iproute2 iptables net-tools lksctp-tools \
     tmux telnet expect whiptail netcat-openbsd \
-    lsb-release pulseaudio-utils \
-    console-setup keyboard-configuration locales
+    lsb-release pulseaudio-utils
 
 # ── Python + tshark + ffmpeg + asterisk ──
 apt-get install -y $APT_OPTS --no-install-recommends \
@@ -273,7 +265,6 @@ cat >> "$ROOTFS/root/.bashrc" <<'BASH'
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
 alias osmo-lab='cd /opt/osmo_egprs && ./start.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
-alias osmo-status='osmo-launch status'
 export PS1='\[\033[0;36m\]osmo-egprs\[\033[0m\]:\[\033[0;33m\]\w\[\033[0m\]\$ '
 BASH
 
@@ -283,85 +274,14 @@ cat > "$ROOTFS/etc/motd" <<'MOTD'
   ║  osmo_egprs — GSM/EGPRS Multi-PLMN Live System              ║
   ║  SS7/SIGTRAN • Osmocom • Web Dashboard                      ║
   ╠══════════════════════════════════════════════════════════════╣
-  ║  sudo osmo-launch            ← lance tout (lab + web)        ║
-  ║  sudo osmo-launch --auto     ← mode automatique (2 ops)     ║
-  ║  sudo osmo-launch status     ← état des services            ║
-  ║  sudo osmo-launch stop       ← arrête tout                  ║
-  ║  http://localhost:8080       ← dashboard web                 ║
-  ║                                                              ║
-  ║  loadkeys fr                 ← changer clavier après boot    ║
+  ║  cd /opt/osmo_egprs && sudo ./start.sh    ← lancer le lab   ║
+  ║  http://localhost:8080                    ← dashboard web    ║
+  ║  /opt/osmo_egprs/checks/global_check.sh  ← diagnostics      ║
   ╚══════════════════════════════════════════════════════════════╝
 
 MOTD
 
 chroot "$ROOTFS" passwd -d root 2>/dev/null||true
-
-# ── Script premier boot : choix clavier ──────────────────────────────────────
-cat > "$ROOTFS/etc/profile.d/01-keyboard-setup.sh" <<'KBSCRIPT'
-#!/bin/bash
-# Premier boot : configuration clavier (s'exécute une seule fois)
-[ -f /var/lib/osmo-kb-done ] && return 0
-[ "$(id -u)" -ne 0 ] && return 0
-
-echo ""
-echo -e "\033[1;36m══ Configuration clavier ══\033[0m"
-echo ""
-echo "  1) fr    — Français (AZERTY)"
-echo "  2) us    — English (QWERTY)"
-echo "  3) de    — Deutsch (QWERTZ)"
-echo "  4) es    — Español"
-echo "  5) it    — Italiano"
-echo "  6) pt    — Português"
-echo "  7) gb    — UK English"
-echo "  8) be    — Belge"
-echo "  9) ch    — Suisse"
-echo "  0) Autre (saisie manuelle)"
-echo ""
-read -rp "  Choix [1] : " KB_CHOICE
-KB_CHOICE="${KB_CHOICE:-1}"
-
-case "$KB_CHOICE" in
-    1) KB_LAYOUT="fr" ;;
-    2) KB_LAYOUT="us" ;;
-    3) KB_LAYOUT="de" ;;
-    4) KB_LAYOUT="es" ;;
-    5) KB_LAYOUT="it" ;;
-    6) KB_LAYOUT="pt" ;;
-    7) KB_LAYOUT="gb" ;;
-    8) KB_LAYOUT="be" ;;
-    9) KB_LAYOUT="ch" ;;
-    0)
-        read -rp "  Layout (ex: fr, us, de, ru, ar...) : " KB_LAYOUT
-        KB_LAYOUT="${KB_LAYOUT:-us}"
-        ;;
-    *) KB_LAYOUT="fr" ;;
-esac
-
-echo ""
-echo -e "  \033[1;32m→ Clavier : ${KB_LAYOUT}\033[0m"
-
-# Appliquer immédiatement
-loadkeys "$KB_LAYOUT" 2>/dev/null || true
-
-# Persister dans la config
-cat > /etc/default/keyboard <<KBCONF
-XKBMODEL="pc105"
-XKBLAYOUT="${KB_LAYOUT}"
-XKBVARIANT=""
-XKBOPTIONS=""
-BACKSPACE="guess"
-KBCONF
-
-# Appliquer via setupcon
-setupcon --force 2>/dev/null || true
-dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
-
-# Marquer comme fait — ne plus demander
-touch /var/lib/osmo-kb-done
-echo -e "  \033[1;32m✓ Clavier configuré (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
-echo ""
-KBSCRIPT
-chmod +x "$ROOTFS/etc/profile.d/01-keyboard-setup.sh"
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 
 echo -e "  ${GREEN}✓${NC} config terminée"
@@ -404,10 +324,8 @@ menuentry "osmo_egprs — Copy to RAM" {
 }
 GRUB
 
-grub-mkrescue -o "$OUTPUT" "$ISOROOT" --product-name "osmo_egprs" -- -volid "$LABEL"
-if command -v isohybrid &>/dev/null; then
-    isohybrid --uefi "$OUTPUT"
-fi
+grub-mkrescue -o "$OUTPUT" "$ISOROOT" \
+    --product-name "osmo_egprs" -- -volid "$LABEL"
 
 if [ ! -f "$OUTPUT" ]; then
     echo -e "${RED}grub-mkrescue a échoué — ISO non créée${NC}"
