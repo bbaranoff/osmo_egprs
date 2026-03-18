@@ -29,7 +29,7 @@ cleanup() { umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$
 trap cleanup EXIT
 
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
-for t in docker mksquashfs xorriso grub-mkrescue debootstrap; do
+for t in docker mksquashfs xorriso grub-mkrescue debootstrap git; do
     command -v "$t" &>/dev/null || { echo -e "${RED}Manquant: $t${NC}"; exit 1; }
 done
 mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
@@ -77,16 +77,25 @@ done
 docker rm "$CID" &>/dev/null
 echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectés"
 
-# ── 4. Injecter le dashboard web ─────────────────────────────────────────────
-echo -e "${GREEN}[4/8] Dashboard web...${NC}"
+# ── 4. Injecter le dashboard web (dépôt séparé) ─────────────────────────────
+echo -e "${GREEN}[4/8] Dashboard web (git clone)...${NC}"
 WEB="$ROOTFS/opt/osmo-egprs-web"
+WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
+WEB_BRANCH="${OSMO_WEB_BRANCH:-main}"
+
+# Cloner dans un temp sur l'hôte, puis copier dans le rootfs
+WEB_TMP="$WORK/osmo-egprs-web"
+git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2
+
 mkdir -p "$WEB/web"
-[ -f "$DIR/server/server.js" ]    && cp "$DIR/server/server.js"    "$WEB/server.js"
-[ -f "$DIR/server/package.json" ] && cp "$DIR/server/package.json" "$WEB/package.json"
-[ -d "$DIR/web" ]                 && cp -r "$DIR/web/."            "$WEB/web/"
-[ -f "$DIR/start-web.sh" ]        && cp "$DIR/start-web.sh"        "$WEB/" && chmod +x "$WEB/start-web.sh"
+[ -f "$WEB_TMP/server/server.js" ]    && cp "$WEB_TMP/server/server.js"    "$WEB/server.js"
+[ -f "$WEB_TMP/server/package.json" ] && cp "$WEB_TMP/server/package.json" "$WEB/package.json"
+[ -d "$WEB_TMP/web" ]                 && cp -r "$WEB_TMP/web/."            "$WEB/web/"
+[ -f "$WEB_TMP/start-web.sh" ]        && cp "$WEB_TMP/start-web.sh"        "$WEB/" && chmod +x "$WEB/start-web.sh"
+[ -f "$WEB_TMP/Dockerfile" ]          && cp "$WEB_TMP/Dockerfile"          "$WEB/Dockerfile"
 # node_modules seront installés en chroot
-echo -e "  ${GREEN}✓${NC} /opt/osmo-egprs-web"
+rm -rf "$WEB_TMP"
+echo -e "  ${GREEN}✓${NC} /opt/osmo-egprs-web (from $WEB_REPO)"
 
 # ── 5. Injecter scripts projet ───────────────────────────────────────────────
 echo -e "${GREEN}[5/8] Scripts projet...${NC}"
