@@ -1,16 +1,6 @@
 #!/bin/bash
-# ══════════════════════════════════════════════════════════════════════════════
-# build-iso.sh — Génère une ISO bootable contenant :
-#   1. La stack Osmocom complète (compilée depuis le Dockerfile principal)
-#   2. Le dashboard web osmo-egprs-web (Node.js + tshark)
-#   3. Docker Engine (pour le mode multi-opérateur bridge)
-#
-# Usage :
-#   sudo ./build-iso.sh [--output osmo_egprs.iso]
-#
-# Prérequis hôte :
-#   apt install squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin mtools debootstrap
-# ══════════════════════════════════════════════════════════════════════════════
+# build-iso.sh — Génère une ISO bootable en utilisant build.sh et start.sh
+# Aucun docker build direct dans ce script, tout passe par les scripts existants.
 set -euo pipefail
 
 OUTPUT="osmo_egprs.iso"
@@ -21,8 +11,6 @@ LABEL="OSMO_EGPRS"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 for arg in "$@"; do case "$arg" in --output=*) OUTPUT="${arg#*=}" ;; esac; done
-
-# Rendre le chemin de sortie absolu
 case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
@@ -37,37 +25,105 @@ for t in docker mksquashfs xorriso grub-mkrescue debootstrap git; do
 done
 mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 
-echo -e "${CYAN}${BOLD}══ osmo_egprs ISO builder (core + web) ══${NC}"
+echo -e "${CYAN}${BOLD}══ osmo_egprs ISO builder (via build.sh + start.sh) ══${NC}"
 
-# ── 1. Build image Docker core ───────────────────────────────────────────────
-echo -e "${GREEN}[1/8] Build image osmocom-nitb...${NC}"
-# Le Dockerfile core contient libosmocore — on le détecte
-CORE_DF=""
-for c in "$DIR/Dockerfile" "$DIR/../Dockerfile" "$DIR/Dockerfile.core"; do
-    [ -f "$c" ] && grep -q "libosmocore" "$c" && CORE_DF="$c" && break
-done
-if [ -n "$CORE_DF" ]; then
-    docker build -f "$CORE_DF" -t osmocom-nitb "$(dirname "$CORE_DF")" 2>&1 | tail -3
+# ── Étape 1 : Exécuter build.sh pour préparer l'hôte et construire osmocom-nitb ──
+echo -e "${GREEN}[1/7] Exécution de build.sh...${NC}"
+if [ -f "$DIR/build.sh" ]; then
+    bash "$DIR/build.sh"
 else
-    docker image inspect osmocom-nitb &>/dev/null || { echo -e "${RED}Image osmocom-nitb absente.${NC}"; exit 1; }
+    echo -e "${YELLOW}build.sh introuvable, construction manuelle de l'image osmocom-nitb...${NC}"
+    docker build -t osmocom-nitb "$DIR"
 fi
-echo -e "  ${GREEN}✓${NC} osmocom-nitb OK"
+echo -e "  ${GREEN}✓${NC} image osmocom-nitb prête"
 
-# ── 2. Bootstrap rootfs minimal ──────────────────────────────────────────────
-# debootstrap n'a accès qu'à main — on bootstrap le strict minimum,
-# puis on ajoute universe/multiverse en chroot pour le reste.
-echo -e "${GREEN}[2/8] debootstrap jammy (minimal)...${NC}"
+load_start_lib() {
+    local src="$DIR/start.sh"
+    local lib="$WORK/start.lib.sh"
+
+    awk '
+        BEGIN { skip=0 }
+        /^banner[[:space:]]*$/                    { exit }
+        /^\[ "\$\{1:-\}" = "stop" \]/             { exit }
+        /^\[ "\$\(id -u\)" -ne 0 \]/              { exit }
+        /^choose_network_mode[[:space:]]*$/       { exit }
+        /^\.\//                                   { exit }
+        /^case "\$NETWORK_MODE" in[[:space:]]*$/  { exit }
+        { print }
+    ' "$src" > "$lib"
+
+    # shellcheck disable=SC1090
+    source "$lib"
+}
+
+# ── Étape 2 : Construire l'image osmocom-run via start.sh ─────────────────────
+echo -e "${GREEN}[2/7] Construction de l'image osmocom-run via start.sh...${NC}"
+load_start_lib
+build_run_image
+echo -e "  ${GREEN}✓${NC} osmocom-run construite"
+
+echo -e "${GREEN}[2b/7] Préparation d'une image osmocom-run (net-host)...${NC}"
+
+ISO_N_MS=8
+ENCRYPTION="a5 0"
+
+HOST_IP="127.0.0.1"
+GATEWAY_IP="127.0.0.1"
+
+ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
+ALSA_INPUT="${ALSA_INPUT:-default}"
+PHY_MODE="${PHY_MODE:-faketrx}"
+INTER_STP_IP="127.0.0.1"
+
+echo -e "  Host IP    : ${CYAN}${HOST_IP}${NC}"
+echo -e "  Gateway    : ${CYAN}${GATEWAY_IP}${NC}"
+echo -e "  MS         : ${CYAN}${ISO_N_MS}${NC}"
+echo -e "  Encryption : ${CYAN}${ENCRYPTION}${NC}"
+echo -e "  PHY        : ${CYAN}${PHY_MODE}${NC}"
+
+TEMP_CONFIG="$(mktemp -d)"
+SMS_ROUTING_DIR="$(mktemp -d)"
+
+if declare -f sms_routing_generate >/dev/null 2>&1; then
+    sms_routing_generate 1 1 "$SMS_ROUTING_DIR" "$ISO_N_MS" || true
+fi
+
+apply_config_templates "$TEMP_CONFIG" \
+    "127.0.0.1" "127.0.0.1" \
+    "1" "1.1.1" "1.1.2" "1.1.3" \
+    "001" "01" "OsmoGSM" \
+    "127.0.0.1" "shutdown" "1"
+
+ISO_RUN_IMAGE="osmocom-run-iso-net-host"
+TMP_CID="$(docker create osmocom-run /bin/sh)"
+
+docker cp "$TEMP_CONFIG/osmocom/."  "$TMP_CID:/etc/osmocom/"  2>/dev/null || true
+docker cp "$TEMP_CONFIG/asterisk/." "$TMP_CID:/etc/asterisk/" 2>/dev/null || true
+
+docker commit "$TMP_CID" "$ISO_RUN_IMAGE" >/dev/null
+docker rm -f "$TMP_CID" >/dev/null 2>&1 || true
+rm -rf "$TEMP_CONFIG" "$SMS_ROUTING_DIR"
+
+echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prête"
+
+# ── Étape 3 : Sauvegarde de l'image Docker pour l'inclure dans l'ISO ───────
+echo -e "${GREEN}[3/7] Sauvegarde de l'image osmocom-run net-host...${NC}"
+mkdir -p "$ROOTFS/opt/osmo_egprs/images"
+docker save "$ISO_RUN_IMAGE" | gzip > "$ROOTFS/opt/osmo_egprs/images/osmocom-run.tar.gz"
+echo -e "  ${GREEN}✓${NC} image sauvegardée ($(du -h "$ROOTFS/opt/osmo_egprs/images/osmocom-run.tar.gz" | cut -f1))"
+
+# ── Étape 4 : Bootstrap rootfs minimal ─────────────────────────────────────
+echo -e "${GREEN}[4/7] debootstrap jammy (minimal)...${NC}"
 debootstrap --variant=minbase --include=\
 systemd,systemd-sysv,dbus,kmod,\
 ca-certificates,curl,gnupg,\
 iproute2,iputils-ping,procps,less,nano \
     jammy "$ROOTFS" http://archive.ubuntu.com/ubuntu
-
 echo -e "  ${GREEN}✓${NC} rootfs base $(du -sh "$ROOTFS"|cut -f1)"
 
-# ── 3. Injecter Osmocom depuis Docker ────────────────────────────────────────
-echo -e "${GREEN}[3/8] Injection stack Osmocom...${NC}"
-CID=$(docker create osmocom-nitb /bin/true)
+# ── Étape 5 : Injection des binaires et libs depuis l'image osmocom-run ───
+echo -e "${GREEN}[5/7] Injection stack Osmocom...${NC}"
+CID=$(docker create "$ISO_RUN_IMAGE" /bin/true)
 docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
 docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
 docker cp "$CID:/usr/local/include/." "$ROOTFS/usr/local/include/" 2>/dev/null||true
@@ -79,14 +135,69 @@ for svc in osmo-bts-trx osmo-bsc osmo-msc osmo-hlr osmo-mgw osmo-stp osmo-ggsn o
 done
 docker rm "$CID" &>/dev/null
 echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectés"
+echo -e "${GREEN}[5c/7] Ajustements osmocom dans le rootfs...${NC}"
+echo -e "${GREEN}[5b/7] Patch configs ISO...${NC}"
 
-# ── 4. Injecter le dashboard web (dépôt séparé) ─────────────────────────────
-echo -e "${GREEN}[4/8] Dashboard web (git clone)...${NC}"
+echo -e "${GREEN}[5b/7] Patch configs ISO...${NC}"
+
+if [ -f "$ROOTFS/etc/osmocom/osmo-sgsn.cfg" ]; then
+    sed -i \
+        -e 's/^\([[:space:]]*gtp[[:space:]]\+local-ip[[:space:]]\+\).*/\1127.0.0.2/' \
+        -e 's/^\([[:space:]]*gsup[[:space:]]\+remote-ip[[:space:]]\+\).*/\1127.0.0.2/' \
+        -e '/^[[:space:]]*bind udp local$/,/^[[:space:]]*!$/ s/^\([[:space:]]*listen[[:space:]]\+\).*/\1127.0.0.2 23000/' \
+        "$ROOTFS/etc/osmocom/osmo-sgsn.cfg"
+fi
+
+if [ -f "$ROOTFS/etc/osmocom/osmo-msc.cfg" ]; then
+    sed -i \
+        -e '/^hlr$/,/^!$/ s/^\([[:space:]]*remote-ip[[:space:]]\+\).*/\1127.0.0.2/' \
+        "$ROOTFS/etc/osmocom/osmo-msc.cfg"
+fi
+
+echo -e "  ${GREEN}✓${NC} patch SGSN + MSC appliqué"
+
+# run.sh: réduire toute ligne "trxcon options..." à "trxcon"
+#         et toute ligne "mobile options..." à "mobile"
+if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
+    sed -i \
+        -e 's#^[[:space:]]*\([^[:space:]]*/\)\?trxcon\([[:space:]].*\)\?$#trxcon#' \
+        -e 's#^[[:space:]]*\([^[:space:]]*/\)\?mobile\([[:space:]].*\)\?$#mobile#' \
+        "$ROOTFS/etc/osmocom/run.sh"
+    chmod +x "$ROOTFS/etc/osmocom/run.sh"
+fi
+
+echo -e "  ${GREEN}✓${NC} patch SGSN + run.sh appliqué"
+mkdir -p "$ROOTFS/usr/bin"
+cp -a "$ROOTFS/usr/local/bin/." "$ROOTFS/usr/bin/" 2>/dev/null || true
+
+mkdir -p "$ROOTFS/root/.osmocom/bb"
+if [ -f "$ROOTFS/opt/osmo_egprs/mobile.cfg" ]; then
+    cp "$ROOTFS/opt/osmo_egprs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
+elif [ -f "$ROOTFS/opt/osmo_egprs/configs/mobile.cfg" ]; then
+    cp "$ROOTFS/opt/osmo_egprs/configs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
+elif [ -f "$ROOTFS/etc/osmocom/mobile.cfg" ]; then
+    cp "$ROOTFS/etc/osmocom/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
+fi
+
+if ! chroot "$ROOTFS" getent passwd osmocom >/dev/null 2>&1; then
+    chroot "$ROOTFS" useradd -m -s /bin/bash osmocom 2>/dev/null || true
+fi
+
+chroot "$ROOTFS" usermod -o -u 0 -g 0 osmocom 2>/dev/null || true
+
+mkdir -p "$ROOTFS/home/osmocom"
+chown -R 0:0 "$ROOTFS/home/osmocom" "$ROOTFS/root/.osmocom" 2>/dev/null || true
+
+echo -e "  ${GREEN}✓${NC} user osmocom + /usr/bin + mobile.cfg prêts"
+
+chmod +x "$ROOTFS/etc/osmocom/run.sh"
+
+# ── Étape 6 : Injection du dashboard web ───────────────────────────────────
+echo -e "${GREEN}[6/7] Dashboard web (git clone)...${NC}"
 WEB="$ROOTFS/opt/osmo-egprs-web"
 WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
 WEB_BRANCH="${OSMO_WEB_BRANCH:-main}"
 
-# Cloner dans un temp sur l'hôte, puis copier dans le rootfs
 WEB_TMP="$WORK/osmo-egprs-web"
 git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2
 
@@ -96,12 +207,11 @@ mkdir -p "$WEB/web"
 [ -d "$WEB_TMP/web" ]                 && cp -r "$WEB_TMP/web/."            "$WEB/web/"
 [ -f "$WEB_TMP/start-web.sh" ]        && cp "$WEB_TMP/start-web.sh"        "$WEB/" && chmod +x "$WEB/start-web.sh"
 [ -f "$WEB_TMP/Dockerfile" ]          && cp "$WEB_TMP/Dockerfile"          "$WEB/Dockerfile"
-# node_modules seront installés en chroot
 rm -rf "$WEB_TMP"
-echo -e "  ${GREEN}✓${NC} /opt/osmo-egprs-web (from $WEB_REPO)"
+echo -e "  ${GREEN}✓${NC} /opt/osmo-egprs-web"
 
-# ── 5. Injecter scripts projet ───────────────────────────────────────────────
-echo -e "${GREEN}[5/8] Scripts projet...${NC}"
+# ── Étape 7 : Injection des scripts projet et création de start-in-iso.sh ──
+echo -e "${GREEN}[7/7] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
 mkdir -p "$P"/{scripts,configs,checks,helpers}
 for f in start.sh build.sh loopback.sh vty-menu.sh vty-connect.exp \
@@ -111,35 +221,65 @@ done
 for d in scripts configs checks helpers; do
     [ -d "$DIR/$d" ] && cp -r "$DIR/$d/." "$P/$d/" && find "$P/$d" -name "*.sh" -exec chmod +x {} \;
 done
-# Dockerfile + Dockerfile.run pour le mode Docker interne
 [ -f "$DIR/Dockerfile" ]     && cp "$DIR/Dockerfile"     "$P/"
 [ -f "$DIR/Dockerfile.run" ] && cp "$DIR/Dockerfile.run" "$P/"
 ln -sf /opt/osmo_egprs/start.sh "$ROOTFS/usr/local/bin/osmo-start-lab"
-# Orchestrateur global
 [ -f "$DIR/osmo-launch.sh" ] && cp "$DIR/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
 ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
-echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs + /opt/osmo-launch.sh"
 
-# ── 6. Chroot config ─────────────────────────────────────────────────────────
-echo -e "${GREEN}[6/8] Configuration chroot...${NC}"
+# Copie du script start-in-iso.sh (s'il existe)
+if [ -f "$DIR/start-in-iso.sh" ]; then
+    cp "$DIR/start-in-iso.sh" "$P/start-in-iso.sh"
+    chmod +x "$P/start-in-iso.sh"
+    echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs/start-in-iso.sh copié"
+else
+    echo -e "  ${YELLOW}start-in-iso.sh non trouvé, création d'un script minimal...${NC}"
+    cat > "$P/start-in-iso.sh" <<'EOF'
+#!/bin/bash
+# start-in-iso.sh minimal (à remplacer par votre version)
+echo "Veuillez fournir un script start-in-iso.sh complet."
+exit 1
+EOF
+    chmod +x "$P/start-in-iso.sh"
+fi
+
+# ── Étape 8 : Service systemd pour charger l'image Docker au boot ─────────
+cat > "$ROOTFS/etc/systemd/system/load-osmocom-image.service" <<'EOF'
+[Unit]
+Description=Load osmocom-run Docker image
+Before=docker.service
+After=docker.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/bin/bash -c 'while ! docker info &>/dev/null; do sleep 1; done'
+ExecStart=/bin/bash -c 'gunzip -c /opt/osmo_egprs/images/osmocom-run.tar.gz | docker load'
+ExecStartPost=rm -f /opt/osmo_egprs/images/osmocom-run.tar.gz
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+chroot "$ROOTFS" systemctl enable load-osmocom-image 2>/dev/null || true
+
+# ── Étape 9 : Configuration chroot (paquets) ───────────────────────────────
+echo -e "${GREEN}[8/7] Configuration chroot...${NC}"
 mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
 cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 
 chroot "$ROOTFS" bash -c '
 set -e; export DEBIAN_FRONTEND=noninteractive
-# Empêcher toute question interactive sur les conffiles
 export DPKG_OPTIONS="--force-confold --force-confdef"
 APT_OPTS="-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
 
-# Preseed debconf pour wireshark (capture sans root) et tshark
+# Preseed debconf
 echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections
-# Preseed clavier par défaut (US pendant le build, reconfiguré au premier boot)
 echo "keyboard-configuration keyboard-configuration/layoutcode string us" | debconf-set-selections
 echo "keyboard-configuration keyboard-configuration/modelcode string pc105" | debconf-set-selections
 echo "console-setup console-setup/charmap47 select UTF-8" | debconf-set-selections
 
-# ── Sources complètes (main + universe + multiverse) ──
 cat > /etc/apt/sources.list <<SOURCES
 deb http://archive.ubuntu.com/ubuntu jammy           main universe multiverse
 deb http://archive.ubuntu.com/ubuntu jammy-updates    main universe multiverse
@@ -147,39 +287,33 @@ deb http://archive.ubuntu.com/ubuntu jammy-security   main universe multiverse
 SOURCES
 apt-get update -qq
 
-# ── Kernel + initramfs + live-boot ──
-# live-boot fournit les hooks initramfs pour boot=live → mount squashfs
 apt-get install -y $APT_OPTS --no-install-recommends \
     linux-image-generic initramfs-tools \
     live-boot live-boot-initramfs-tools
 
-# ── Libs runtime nécessaires aux binaires Osmocom ──
 apt-get install -y $APT_OPTS --no-install-recommends \
     libtalloc2 libpcsclite1 libsctp1 libc-ares2 libgnutls30 \
-    libdbi1 libdbd-sqlite3 sqlite3 \
+    libortp-dev libdbi1 libdbd-sqlite3 sqlite3 \
     libfftw3-single3 libusb-1.0-0 \
     libgsm1 libasound2 libasound2-plugins \
-    libsofia-sip-ua-glib3 libmnl0
+    libsofia-sip-ua-glib3 libmnl0 \
+    liburing2
 
-# ── Outils réseau / système ──
 apt-get install -y $APT_OPTS --no-install-recommends \
     iproute2 iptables net-tools lksctp-tools \
     tmux telnet expect whiptail netcat-openbsd \
     lsb-release pulseaudio-utils \
     console-setup keyboard-configuration locales
 
-# ── Python + tshark + ffmpeg + asterisk ──
 apt-get install -y $APT_OPTS --no-install-recommends \
     python3 python3-scapy \
     tshark wireshark-common \
     asterisk \
     ffmpeg
 
-# ── ldconfig pour les libs Osmocom ──
 echo "/usr/local/lib" > /etc/ld.so.conf.d/osmocom.conf
 ldconfig
 
-# ── Docker Engine ──
 if [ ! -f /usr/bin/dockerd ]; then
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
@@ -193,29 +327,24 @@ https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
         docker-ce docker-ce-cli containerd.io docker-compose-plugin
 fi
 
-# ── Node.js 20 (pour le dashboard) ──
 if ! command -v node &>/dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     apt-get install -y $APT_OPTS --no-install-recommends nodejs
 fi
 
-# ── npm install dashboard ──
 if [ -f /opt/osmo-egprs-web/package.json ]; then
     cd /opt/osmo-egprs-web && npm install --production 2>/dev/null || true
 fi
 
-# ── Capabilities pour dumpcap (tshark capture sans root) ──
 setcap cap_net_raw,cap_net_admin+eip $(which dumpcap) 2>/dev/null || true
 
-# ── Regénérer initramfs avec les hooks live-boot ──
 KERNEL=$(ls /boot/vmlinuz-* | sort -V | tail -1 | sed "s|/boot/vmlinuz-||")
 update-initramfs -u -k "$KERNEL"
 
-# ── Cleanup ──
 apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 '
 
-# ── Sysconfig ─────────────────────────────────────────────────────────────────
+# ── Configuration système ──────────────────────────────────────────────────
 echo "osmo-egprs" > "$ROOTFS/etc/hostname"
 cat > "$ROOTFS/etc/hosts" <<'EOF'
 127.0.0.1 localhost osmo-egprs
@@ -231,7 +360,7 @@ DHCP=yes
 EOF
 chroot "$ROOTFS" systemctl enable systemd-networkd systemd-resolved docker 2>/dev/null||true
 
-# Autologin
+# Autologin root
 mkdir -p "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
 cat > "$ROOTFS/etc/systemd/system/getty@tty1.service.d/override.conf" <<'EOF'
 [Service]
@@ -239,7 +368,7 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
 EOF
 
-# Dashboard web service
+# Service web dashboard
 cat > "$ROOTFS/etc/systemd/system/osmo-egprs-web.service" <<'EOF'
 [Unit]
 Description=osmo_egprs Web Dashboard
@@ -261,45 +390,43 @@ chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 mkdir -p "$ROOTFS/etc/modules-load.d"
 printf 'sctp\ntun\n' > "$ROOTFS/etc/modules-load.d/osmocom.conf"
 
-# Env
+# Variables d'environnement
 cat > "$ROOTFS/etc/environment" <<'EOF'
 PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
 LD_LIBRARY_PATH="/usr/local/lib"
 EOF
 
-# bashrc
+# bashrc pour root
 cat >> "$ROOTFS/root/.bashrc" <<'BASH'
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
-alias osmo-lab='cd /opt/osmo_egprs && ./start.sh'
+alias osmo-lab='cd /opt/osmo_egprs && ./start-in-iso.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
-alias osmo-status='osmo-launch status'
+alias osmo-status='/opt/osmo-launch.sh status'
 export PS1='\[\033[0;36m\]osmo-egprs\[\033[0m\]:\[\033[0;33m\]\w\[\033[0m\]\$ '
 BASH
 
+# Message du jour
 cat > "$ROOTFS/etc/motd" <<'MOTD'
 
   ╔══════════════════════════════════════════════════════════════╗
   ║  osmo_egprs — GSM/EGPRS Multi-PLMN Live System              ║
   ║  SS7/SIGTRAN • Osmocom • Web Dashboard                      ║
   ╠══════════════════════════════════════════════════════════════╣
-  ║  sudo osmo-launch            ← lance tout (lab + web)        ║
-  ║  sudo osmo-launch --auto     ← mode automatique (2 ops)     ║
-  ║  sudo osmo-launch status     ← état des services            ║
-  ║  sudo osmo-launch stop       ← arrête tout                  ║
-  ║  http://localhost:8080       ← dashboard web                 ║
+  ║  /opt/osmo-launch.sh            ← lance tout (lab + web)     ║
+  ║  /opt/osmo_egprs/start-in-iso.sh ← lancement manuel du lab  ║
+  ║  http://localhost:8080           ← dashboard web             ║
   ║                                                              ║
-  ║  loadkeys fr                 ← changer clavier après boot    ║
+  ║  loadkeys fr                     ← changer clavier après boot║
   ╚══════════════════════════════════════════════════════════════╝
 
 MOTD
 
 chroot "$ROOTFS" passwd -d root 2>/dev/null||true
 
-# ── Script premier boot : choix clavier ──────────────────────────────────────
+# Script de configuration clavier au premier boot
 cat > "$ROOTFS/etc/profile.d/01-keyboard-setup.sh" <<'KBSCRIPT'
 #!/bin/bash
-# Premier boot : configuration clavier (s'exécute une seule fois)
 [ -f /var/lib/osmo-kb-done ] && return 0
 [ "$(id -u)" -ne 0 ] && return 0
 
@@ -340,10 +467,8 @@ esac
 echo ""
 echo -e "  \033[1;32m→ Clavier : ${KB_LAYOUT}\033[0m"
 
-# Appliquer immédiatement
 loadkeys "$KB_LAYOUT" 2>/dev/null || true
 
-# Persister dans la config
 cat > /etc/default/keyboard <<KBCONF
 XKBMODEL="pc105"
 XKBLAYOUT="${KB_LAYOUT}"
@@ -352,22 +477,25 @@ XKBOPTIONS=""
 BACKSPACE="guess"
 KBCONF
 
-# Appliquer via setupcon
 setupcon --force 2>/dev/null || true
 dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 
-# Marquer comme fait — ne plus demander
 touch /var/lib/osmo-kb-done
+
+echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lancé automatiquement."
+echo -e "  \033[1;33mPour démarrer la stack manuellement : /etc/osmocom/run.sh\033[0m"
+
 echo -e "  \033[1;32m✓ Clavier configuré (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
 echo ""
 KBSCRIPT
+
 chmod +x "$ROOTFS/etc/profile.d/01-keyboard-setup.sh"
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 
 echo -e "  ${GREEN}✓${NC} config terminée"
 
-# ── 7. Squashfs ───────────────────────────────────────────────────────────────
-echo -e "${GREEN}[7/8] Squashfs...${NC}"
+# ── Création du squashfs et de l'ISO ───────────────────────────────────────
+echo -e "${GREEN}[9/7] Squashfs et ISO...${NC}"
 mkdir -p "$ISOROOT/live" "$ISOROOT/boot/grub"
 
 VMLINUZ=$(ls "$ROOTFS"/boot/vmlinuz-*|sort -V|tail -1)
@@ -382,8 +510,6 @@ mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
     -no-progress
 echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs"|cut -f1)"
 
-# ── 8. GRUB + ISO ─────────────────────────────────────────────────────────────
-echo -e "${GREEN}[8/8] ISO...${NC}"
 cp "$VMLINUZ" "$ISOROOT/boot/vmlinuz"
 cp "$INITRD"  "$ISOROOT/boot/initrd.img"
 
@@ -417,5 +543,3 @@ fi
 echo ""
 echo -e "${GREEN}${BOLD}═══ ISO prête : ${OUTPUT} ($(du -sh "$OUTPUT"|cut -f1)) ═══${NC}"
 echo -e "  Chemin absolu : $(readlink -f "$OUTPUT")"
-echo -e "  qemu-system-x86_64 -cdrom $OUTPUT -m 8G -enable-kvm -smp 4 -nic user,hostfwd=tcp::8080-:8080"
-echo -e "  dd if=$OUTPUT of=/dev/sdX bs=4M status=progress"

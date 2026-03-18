@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: 'Create GitHub Release'
+        description: "Create GitHub Release"
         type: boolean
         default: true
 
@@ -36,8 +36,9 @@ jobs:
             /usr/local/lib/node_modules
           sudo apt-get remove -y '^dotnet-.*' 'php.*' 'mongodb.*' \
             'mysql.*' azure-cli google-cloud-cli 2>/dev/null || true
-          sudo apt-get autoremove -y && sudo apt-get clean
-          sudo docker image prune -af
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          sudo docker image prune -af || true
           df -h /
 
       - name: Install host tools
@@ -45,23 +46,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin \
-            grub-common mtools debootstrap
+            grub-common mtools debootstrap git
 
-      - name: Build osmocom-nitb image
-        run: |
-          if grep -q "libosmocore" Dockerfile; then CORE_DF="Dockerfile";
-          elif [ -f Dockerfile.core ]; then CORE_DF="Dockerfile.core";
-          else echo "::error::Dockerfile core introuvable"; exit 1; fi
-          docker build -f "$CORE_DF" -t osmocom-nitb .
-
-      - name: Build osmocom-run image
-        run: |
-          [ -f Dockerfile.run ] && docker build -f Dockerfile.run -t osmocom-run . || true
-
-      - name: Reclaim space
-        run: docker builder prune -af 2>/dev/null || true
-
-      - name: Build ISO
+      - name: Build ISO via build-iso.sh
         run: |
           chmod +x build-iso.sh
           sudo ./build-iso.sh --output="${ISO_NAME}"
@@ -80,6 +67,7 @@ jobs:
           path: |
             ${{ env.ISO_NAME }}
             ${{ env.ISO_NAME }}.sha256
+            ${{ env.ISO_NAME }}.md5
           retention-days: 14
           compression-level: 0
 
@@ -94,7 +82,7 @@ jobs:
           body: |
             ## osmo_egprs Live ISO
 
-            Stack Osmocom complète + Dashboard web (port 8080) + Docker Engine
+            Build x86_64 généré via `build-iso.sh`.
 
             ```bash
             # QEMU
@@ -105,7 +93,7 @@ jobs:
             sudo dd if=osmo_egprs.iso of=/dev/sdX bs=4M status=progress && sync
 
             # Premier boot
-            cd /opt/osmo_egprs && sudo ./start.sh
+            cd /etc/osmocom/ && sudo ./run.sh
             ```
           files: |
             ${{ env.ISO_NAME }}

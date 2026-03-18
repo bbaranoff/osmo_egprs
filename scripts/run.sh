@@ -15,7 +15,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
 FAKETRX_PY="${FAKETRX_PY:-/opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py}"
-OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-1}"; MOBILE_MODE="${MOBILE_MODE:-combined}"
+OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-8}"; MOBILE_MODE="${MOBILE_MODE:-combined}"
 PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
 BB_PORT_BASE=6700; BB_PORT_STEP=3; BTS_PORT_BASE=5700
@@ -286,9 +286,9 @@ else
     #
     #   mobile ↔ trxcon ↔ (TRXD UDP) ↔ fake_trx ↔ osmo-bts-trx ↔ BSC
     # ─────────────────────────────────────────────────────────────────────────
-
     echo -e "${GREEN}=== [4/10] FakeTRX ===${NC}"
     FAKETRX_CMD="python3 ${FAKETRX_PY} -b 127.0.0.1 -R 127.0.0.1 -r 127.0.0.1 -P ${BTS_PORT_BASE} -p ${BB_PORT_BASE}"
+    systemctl restart osmo-bts-trx
     for t in $(seq 1 $((N_TRX-1))); do
         FAKETRX_CMD+=" --trx bts${t}@127.0.0.1:${BTS_PORT_BASE}/${t}"
     done
