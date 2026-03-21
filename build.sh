@@ -19,7 +19,7 @@ fi
 # SCTP est vital pour les protocoles de signalisation Osmocom
 echo "[*] Installation de SCTP, TUN et D-Bus sur l'hôte..."
 apt-get update
-apt-get install -y lksctp-tools libsctp-dev dbus tunctl libusb-1.0-0-dev \
+apt-get install -y lksctp-tools libsctp-dev dbus uml-utilities libusb-1.0-0-dev \
      wireshark linphone-desktop xterm whiptail expect netcat-openbsd \
      telnet iproute2 pulseaudio-utils xterm
 
