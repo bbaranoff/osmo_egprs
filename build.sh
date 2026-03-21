@@ -10,18 +10,18 @@ echo "--- Préparation complète de l'hôte (SDR & Docker) ---"
 
 # 2. Installation de Docker (si non présent)
 if ! command -v docker &> /dev/null; then
-    echo "[*] Docker n'est pas installé. Installation en cours..."
+    echo "[*] Docker n'est pas installé. CInstallation en cours..."
     apt-get update
-    apt-get install -y docker.io docker-compose-v2 wireshark 
-    linphone-desktop xterm whiptail expect netcat-openbsd telnet 
-    iproute2 pulseaudio-utils
+    apt-get install -y docker.io docker-compose-v2 
 fi
 
 # 3. Installation des dépendances critiques sur l'hôte
 # SCTP est vital pour les protocoles de signalisation Osmocom
 echo "[*] Installation de SCTP, TUN et D-Bus sur l'hôte..."
 apt-get update
-apt-get install -y lksctp-tools libsctp-dev dbus tunctl libusb-1.0-0-dev
+apt-get install -y lksctp-tools libsctp-dev dbus tunctl libusb-1.0-0-dev \
+     wireshark linphone-desktop xterm whiptail expect netcat-openbsd \
+     telnet iproute2 pulseaudio-utils
 
 # 4. Chargement des modules noyau
 echo "[*] Chargement des modules noyau (SCTP & TUN)..."
