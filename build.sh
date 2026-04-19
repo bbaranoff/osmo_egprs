@@ -1,8 +1,9 @@
 #!/bin/bash
+set -euo pipefail
 
 # 1. Vérification des privilèges ROOT
 if [[ $EUID -ne 0 ]]; then
-   echo -e "\033[0;31m[ERREUR] Ce script doit être lancé en tant que root (sudo).\033[0m" 
+   echo -e "\033[0;31m[ERREUR] Ce script doit être lancé en tant que root (sudo).\033[0m"
    exit 1
 fi
 
@@ -10,9 +11,9 @@ echo "--- Préparation complète de l'hôte (SDR & Docker) ---"
 
 # 2. Installation de Docker (si non présent)
 if ! command -v docker &> /dev/null; then
-    echo "[*] Docker n'est pas installé. CInstallation en cours..."
+    echo "[*] Docker n'est pas installé. Installation en cours..."
     apt-get update
-    apt-get install -y docker.io docker-compose-v2 
+    apt-get install -y docker.io docker-compose-v2
 fi
 
 # 3. Installation des dépendances critiques sur l'hôte
@@ -21,7 +22,7 @@ echo "[*] Installation de SCTP, TUN et D-Bus sur l'hôte..."
 apt-get update
 apt-get install -y lksctp-tools libsctp-dev dbus uml-utilities libusb-1.0-0-dev \
      wireshark linphone-desktop xterm whiptail expect netcat-openbsd \
-     telnet iproute2 pulseaudio-utils xterm
+     telnet iproute2 pulseaudio-utils
 
 # 4. Chargement des modules noyau
 echo "[*] Chargement des modules noyau (SCTP & TUN)..."
@@ -38,10 +39,7 @@ fi
 # 5. Lancement du build Docker
 echo "--- Lancement du build de l'image osmocom-nitb ---"
 # On utilise --no-cache si tu veux une installation propre des paquets dans le container
-docker build . -t osmocom-nitb
-
-# 6. Vérification du succès
-if [ $? -eq 0 ]; then
+if docker build . -t osmocom-nitb; then
     echo -e "\033[0;32m[OK] Image osmocom-nitb construite avec succès.\033[0m"
 else
     echo -e "\033[0;31m[ERREUR] Le build Docker a échoué.\033[0m"
