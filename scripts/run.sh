@@ -3,6 +3,7 @@
 #
 # PHY_MODE=faketrx (défaut) : fake_trx → trxcon → mobile
 # PHY_MODE=virtphy           : osmo-bts-virtual → virtphy → mobile
+# PHY_MODE=qemu              : fake_trx → osmo-bts-trx / QEMU Calypso L1 + l1ctl_bridge → mobile
 #
 set -euo pipefail
 
@@ -16,7 +17,7 @@ GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC
 
 FAKETRX_PY="${FAKETRX_PY:-/opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py}"
 OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-8}"; MOBILE_MODE="${MOBILE_MODE:-combined}"
-PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy
+PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy | qemu
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
 BB_PORT_BASE=6700; BB_PORT_STEP=3; BTS_PORT_BASE=5700
 L2_SOCK_BASE="/tmp/osmocom_l2"; SAP_SOCK_BASE="/tmp/osmocom_sap"
@@ -24,7 +25,13 @@ L2_SOCK_BASE="/tmp/osmocom_l2"; SAP_SOCK_BASE="/tmp/osmocom_sap"
 [[ ! "$N_MS" =~ ^[0-9]+$ ]] || [ "$N_MS" -lt 1 ] || [ "$N_MS" -gt $MAX_MS ] && N_MS=1
 [[ ! "$OPERATOR_ID" =~ ^[0-9]+$ ]] || [ "$OPERATOR_ID" -lt 1 ] || [ "$OPERATOR_ID" -gt 24 ] && exit 1
 [[ "$MOBILE_MODE" != "combined" && "$MOBILE_MODE" != "split" ]] && MOBILE_MODE="combined"
-[[ "$PHY_MODE" != "faketrx" && "$PHY_MODE" != "virtphy" ]] && PHY_MODE="faketrx"
+[[ "$PHY_MODE" != "faketrx" && "$PHY_MODE" != "virtphy" && "$PHY_MODE" != "qemu" ]] && PHY_MODE="faketrx"
+
+# ── QEMU-specific vars ──────────────────────────────────────────────────────
+QEMU_DIR="${QEMU_DIR:-/opt/GSM/qemu}"
+QEMU_BIN="${QEMU_DIR}/build/qemu-system-arm"
+L1_FW="${L1_FW:-/opt/GSM/firmware/board/compal_e88/layer1.highram.elf}"
+BRIDGE_SCRIPT="${QEMU_DIR}/sercomm_udp.py"
 
 N_TRX=$(( (N_MS + MS_PER_TRX - 1) / MS_PER_TRX ))
 [ "$MOBILE_MODE" = "combined" ] && N_GROUPS=$(( (N_MS + MAX_MS_PER_MOBILE - 1) / MAX_MS_PER_MOBILE )) || N_GROUPS=$N_MS
@@ -65,15 +72,12 @@ SESSION="osmocom"; TMUX_SOCKET="/tmp/osmocom_tmux"; TMUX_OK=false
 init_tmux() {
     echo -e "  ${CYAN}Init tmux...${NC}"
     rm -f "$TMUX_SOCKET"
-
     tmux -S "$TMUX_SOCKET" start-server 2>/dev/null || true
     sleep 0.5
     tmux -S "$TMUX_SOCKET" new-session -d -s "$SESSION" -n main 2>/dev/null || true
     sleep 0.5
-
     local i=0
     while [ ! -S "$TMUX_SOCKET" ] && [ $i -lt 30 ]; do sleep 0.3; i=$((i+1)); done
-
     if [ -S "$TMUX_SOCKET" ] && tmux -S "$TMUX_SOCKET" has-session -t "$SESSION" 2>/dev/null; then
         TMUX_OK=true
         echo -e "  ${GREEN}✓ tmux OK${NC}"
@@ -179,8 +183,6 @@ inject_extra_trx_virtual() {
     [ "$1" -le 1 ] && return 0
     local bts="/etc/osmocom/osmo-bts-virtual.cfg"
     [ -f "$bts" ] || return 0
-
-    # Ajouter des instances phy supplémentaires après "instance 0"
     local tmp; tmp=$(mktemp)
     local insert_done=0
     while IFS= read -r line; do
@@ -193,8 +195,6 @@ inject_extra_trx_virtual() {
         fi
     done < "$bts"
     cp "$tmp" "$bts"; rm -f "$tmp"
-
-    # Ajouter les TRX supplémentaires en fin de fichier
     for t in $(seq 1 $(($1-1))); do
         printf ' trx %d\n  power-ramp max-initial 23000 mdBm\n  power-ramp step-size 2000 mdB\n  power-ramp step-interval 1\n  ms-power-control osmo\n  phy 0 instance %d\n' "$t" "$t" >> "$bts"
     done
@@ -238,23 +238,17 @@ echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PHY : fake_trx (TRXD) OU virtphy (multicast)
+# PHY mode dispatch
 # ══════════════════════════════════════════════════════════════════════════════
 
 if [ "$PHY_MODE" = "virtphy" ]; then
     # ─────────────────────────────────────────────────────────────────────────
-    # MODE VIRTPHY : osmo-bts-virtual → virtphy → mobile
-    #
-    #   mobile ↔ virtphy ↔ (multicast UDP) ↔ osmo-bts-virtual ↔ BSC
-    #
-    # Pas de fake_trx, pas de trxcon.
+    # MODE VIRTPHY : osmo-bts-virtual -> virtphy -> mobile
     # ─────────────────────────────────────────────────────────────────────────
 
     echo -e "${GREEN}=== [4/10] BTS Virtual ===${NC}"
-    # Arrêter osmo-bts-trx s'il a été démarré par systemd
     systemctl stop osmo-bts-trx 2>/dev/null || true
     systemctl disable osmo-bts-trx 2>/dev/null || true
-
     run_in_tmux "bts" "osmo-bts-virtual -c /etc/osmocom/osmo-bts-virtual.cfg"
     wait_port 127.0.0.1 4241 "BTS-virtual" 30 || true
 
@@ -275,17 +269,86 @@ if [ "$PHY_MODE" = "virtphy" ]; then
         fi
         [ $((ms % 8)) -eq 1 ] || [ "$ms" -eq "$N_MS" ] && echo -e "  ${CYAN}[ue${ms}]${NC} l2=${local_l2}"
     done
-    # Laisser virtphy créer les sockets avant de lancer mobile
     sleep 2
 
-    # Pas de step 6 (trxcon) en mode virtphy
+elif [ "$PHY_MODE" = "qemu" ]; then
+    # ─────────────────────────────────────────────────────────────────────────
+    # MODE QEMU : fake_trx + osmo-bts-trx (BTS) / QEMU Calypso L1 (MS)
+    #
+    #   BTS ←5700/5800→ fake_trx ←6700/6800→ BRIDGE ←7700/7800→ QEMU
+    #                                           ↕ (L1CTL unix sock)
+    #                                         mobile
+    # ─────────────────────────────────────────────────────────────────────────
+
+    FAKETRX_BASE=6700
+    QEMU_TRX_BASE=8700
+
+    pkill -9 -f qemu-system-arm 2>/dev/null || true
+    pkill -9 -f fake_trx 2>/dev/null || true
+    pkill -f l1ctl_bridge 2>/dev/null || true
+    pkill -9 osmo-bts-trx 2>/dev/null || true
+    rm -f /tmp/qemu-calypso-mon*.sock /tmp/qemu-uart*.sock
+    sleep 1
+
+    echo -e "${GREEN}=== [4/10] FakeTRX ===${NC}"
+    run_in_tmux "faketrx" "PYTHONDONTWRITEBYTECODE=1 python3 ${FAKETRX_PY} -b 127.0.0.1 -R 127.0.0.1 -r 127.0.0.1 -P ${BTS_PORT_BASE} -p ${FAKETRX_BASE}"
+    wait_udp 5700 "fake_trx BTS" 30 || true
+
+    echo -e "${GREEN}=== [4b/10] osmo-bts-trx ===${NC}"
+    systemctl restart osmo-bts-trx
+    wait_port 127.0.0.1 4241 "BTS-TRX" 30 || true
+
+    echo -e "${GREEN}=== [5/10] QEMU + Bridge (${N_MS} MS) ===${NC}"
+    for ms in $(seq 1 "$N_MS"); do
+        local_l2=$(l2_sock "$ms")
+        mon_sock="/tmp/qemu-calypso-mon-ms${ms}.sock"
+        uart_sock="/tmp/qemu-uart-ms${ms}.sock"
+        qemu_log="/var/log/osmocom/qemu_ms${ms}.log"
+
+        # QEMU trx-port=7700 via env (binds 7800-7802, sends to 7700-7702)
+        qemu_cmd="CALYPSO_TRX_PORT=${QEMU_TRX_BASE} ${QEMU_BIN} -M calypso -cpu arm946 -display none \
+            -chardev socket,id=uart0,path=${uart_sock},server=on,wait=off \
+            -serial chardev:uart0 -serial none \
+            -monitor unix:${mon_sock},server,nowait \
+            -s \
+            -kernel ${L1_FW}"
+        run_in_tmux "qemu${ms}" "${qemu_cmd} 2>&1 | tee ${qemu_log}"
+
+        # Wait for QEMU to create the uart socket
+        echo -ne "  ${CYAN}[ue${ms}]${NC} Attente QEMU uart (${uart_sock})"
+        retry=0
+        while [ ! -S "$uart_sock" ] && [ $retry -lt 30 ]; do
+            sleep 0.5; echo -n "."; retry=$((retry+1))
+        done
+        if [ ! -S "$uart_sock" ]; then
+            echo -e " ${RED}TIMEOUT${NC}"
+            continue
+        fi
+        echo -e " ${GREEN}OK${NC}"
+        sleep 1
+
+        # Bridge: L1CTL (uart_sock ↔ l2_sock) + TRX relay (6700↔7700)
+        bridge_cmd="python3 ${BRIDGE_SCRIPT} ${uart_sock} ${local_l2} ${FAKETRX_BASE} ${QEMU_TRX_BASE}"
+        run_in_tmux "bridge${ms}" "$bridge_cmd"
+
+        # Wait for L2 socket
+        echo -ne "  ${CYAN}[ue${ms}]${NC} Attente socket L2"
+        retry=0
+        while [ ! -S "$local_l2" ] && [ $retry -lt 20 ]; do
+            sleep 1; echo -n "."; retry=$((retry+1))
+        done
+        if [ -S "$local_l2" ]; then
+            echo -e " ${GREEN}OK${NC}"
+        else
+            echo -e " ${YELLOW}timeout (bridge may still be starting)${NC}"
+        fi
+    done
 
 else
     # ─────────────────────────────────────────────────────────────────────────
-    # MODE FAKETRX : fake_trx → trxcon → mobile
-    #
-    #   mobile ↔ trxcon ↔ (TRXD UDP) ↔ fake_trx ↔ osmo-bts-trx ↔ BSC
+    # MODE FAKETRX : fake_trx -> trxcon -> mobile
     # ─────────────────────────────────────────────────────────────────────────
+
     echo -e "${GREEN}=== [4/10] FakeTRX ===${NC}"
     FAKETRX_CMD="python3 ${FAKETRX_PY} -b 127.0.0.1 -R 127.0.0.1 -r 127.0.0.1 -P ${BTS_PORT_BASE} -p ${BB_PORT_BASE}"
     systemctl restart osmo-bts-trx
@@ -318,9 +381,13 @@ else
     done
 fi
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Common steps (all PHY modes)
+# ══════════════════════════════════════════════════════════════════════════════
+
 echo -e "${GREEN}=== [6b/10] Audio PulseAudio ===${NC}"
 if [ -f /scripts/pulse-gsm-setup.sh ]; then
-    /scripts/pulse-gsm-setup.sh
+    /scripts/pulse-gsm-setup.sh || echo -e "  ${YELLOW}PulseAudio skip${NC}"
 fi
 echo ""
 
@@ -355,13 +422,13 @@ else
     run_in_tmux "smsc" "echo 'SMSC non disponible'"
 fi
 
-# ── Nettoyage : supprimer la fenêtre main inutile ─────────────────────────────
+# ── Cleanup main window ──────────────────────────────────────────────────────
 if [ "$TMUX_OK" = true ]; then
     sleep 1
     tmux -S "$TMUX_SOCKET" kill-window -t "${SESSION}:main" 2>/dev/null || true
 fi
 
-# ── Résumé ────────────────────────────────────────────────────────────────────
+# ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║  Op${OPERATOR_ID} — ${N_MS} MS — ${MOBILE_MODE} — ${PHY_MODE} — ${N_TRX} TRX     ║${NC}"
@@ -370,6 +437,9 @@ echo ""
 if [ "$PHY_MODE" = "virtphy" ]; then
     echo -e "  ${CYAN}PHY       :${NC} virtphy (osmo-bts-virtual, multicast)"
     echo -e "  ${CYAN}tmux      :${NC} bts  virtphy*  ue*  asterisk  smsc"
+elif [ "$PHY_MODE" = "qemu" ]; then
+    echo -e "  ${CYAN}PHY       :${NC} qemu (fake_trx + QEMU Calypso L1 + l1ctl_bridge)"
+    echo -e "  ${CYAN}tmux      :${NC} faketrx  qemu*  bridge*  ue*  asterisk  smsc"
 else
     echo -e "  ${CYAN}PHY       :${NC} faketrx (osmo-bts-trx, TRXD)"
     echo -e "  ${CYAN}BB ports  :${NC} $(bb_port 1) .. $(bb_port $N_MS)"

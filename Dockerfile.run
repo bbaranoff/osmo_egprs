@@ -1,5 +1,5 @@
 # Dockerfile.run — Image d'exécution ; repose sur l'image de base 
-FROM osmocom-nitb:latest AS osmocom-run
+FROM osmocom-nitb AS osmocom-run
 
 # ── Répertoires nécessaires ────────────────────────────────────────────────────
 RUN mkdir -p \
@@ -19,7 +19,7 @@ RUN mkdir -p \
     /var/run/asterisk \
     /var/log/osmocom
 
-RUN apt-get install -y --no-install-recommends telnet nano iproute2 tmux \
+RUN apt-get update && apt-get install -y --no-install-recommends telnet nano iproute2 tmux \
     libasound2-plugins pulseaudio-utils && \
     rm -rf /var/lib/apt/lists/*
 
@@ -49,6 +49,7 @@ COPY scripts/sms-interop-relay.py /etc/osmocom/sms-interop-relay.py
 COPY scripts/gapk-start.sh /etc/osmocom/gapk-start.sh
 COPY scripts/osmo-start.sh /root/osmo-start.sh
 COPY scripts/run.sh        /root/run.sh
+COPY scripts/run.sh        /etc/osmocom/run.sh
 COPY scripts/smsc-start.sh /etc/osmocom/smsc-start.sh
 COPY scripts/pulse-gsm-setup.sh /scripts/pulse-gsm-setup.sh
 COPY scripts/send-mt-sms.sh /etc/osmocom/send-mt-sms.sh
@@ -61,6 +62,14 @@ RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
     echo "proto-smsc binaries OK" || \
     echo "WARNING: proto-smsc binaries not found in PATH"
 
+# ── Rebuild QEMU (pull latest from GitHub + rebuild) ─────────────────────────
+ARG QEMU_CACHE_BUST=1
+RUN cd /opt/GSM/qemu-src && \
+    . /root/.env/bin/activate && \
+    cd build && ninja -j$(nproc) && \
+    cp qemu-system-arm /usr/local/bin/qemu-system-arm && \
+    cp qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm
+    
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]

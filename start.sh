@@ -41,7 +41,7 @@ WAN_PREFIX="66"
 WAN_SIP_BASE=5080
 WAN_RTP_BASE=20000
 WAN_RTP_PER_OP=500
-PHY_MODE="faketrx"   # faketrx | virtphy
+PHY_MODE="faketrx"   # faketrx | virtphy | qemu
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
@@ -77,6 +77,7 @@ banner() {
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
+
 # ── Loopback audio côté session utilisateur ───────────────────────────────
 enable_user_loopback() {
     local target_user target_uid target_runtime loopback_script
@@ -176,10 +177,10 @@ build_alsa_args() {
 # ══════════════════════════════════════════════════════════════════════════════
 build_run_image() {
     echo -e "${GREEN}Build de l'image run...${NC}"
-    docker build --no-cache -f Dockerfile.run -t "$IMAGE_RUN" . \
-        < /dev/null > /tmp/docker-build.log 2>&1
+    docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
 }
+
 check_image() {
     if ! docker image inspect "$IMAGE_RUN" &>/dev/null; then
         echo -e "${RED}Image '$IMAGE_RUN' introuvable — build en cours...${NC}"
@@ -633,10 +634,12 @@ start_bridge_mode() {
     echo -e "${CYAN}${BOLD}── PHY Mode ──${NC}"
     echo "  1) faketrx  — fake_trx + trxcon (TRXD, défaut)"
     echo "  2) virtphy  — osmo-bts-virtual + virtphy (multicast) - EXPERIMENTAL !!"
+    echo "  3) qemu     — Calypso QEMU + transceiver + osmo-bts-trx"
     local phy_choice
     read -rp "Mode PHY [1] : " phy_choice
     case "$phy_choice" in
         2) PHY_MODE="virtphy" ;;
+        3) PHY_MODE="qemu" ;;
         *) PHY_MODE="faketrx" ;;
     esac
     echo -e "  ${GREEN}PHY : ${PHY_MODE}${NC}"
@@ -1021,10 +1024,14 @@ choose_network_mode() {
 # ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
-# Main
 banner
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
+
+# Cleanup résiduel
+docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
+docker rm -f $(docker ps -aq --filter "name=egprs") 2>/dev/null || true
+docker network ls --filter "name=gsm-" -q | xargs -r docker network rm 2>/dev/null || true
 
 # 1. Toutes les questions d'abord (avant tout restart)
 choose_network_mode

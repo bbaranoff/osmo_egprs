@@ -154,12 +154,80 @@ RUN mkdir -p /root/.osmocom/bb/
 RUN cp /opt/GSM/osmocom-bb/src/host/trxcon/src/trxcon /usr/local/bin
 RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/mobile/mobile /usr/local/bin
 RUN cp /opt/GSM/osmocom-bb/src/host/virt_phy/src/virtphy /usr/local/bin
-RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/misc/ccch_scan /usr/local/bin
 RUN echo "alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc && source ~/.bashrc
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 RUN chmod +x /root/run.sh
 
 # Répertoires pour le proto-SMSC
 RUN mkdir -p /var/log/osmocom /var/run/smsc
+
+# ── QEMU Calypso (bbaranoff/qemu) ───────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-venv libglib2.0-dev libpixman-1-dev libslirp-dev socat \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cd /opt/GSM && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
+    && cd /opt/GSM/qemu-src \
+    && python3 -m venv /root/.env \
+    && . /root/.env/bin/activate \
+    && pip install ninja tomli \
+    && mkdir build && cd build \
+    && ../configure --target-list=arm-softmmu --prefix=/opt/GSM/qemu-install \
+    && make -j$(nproc) \
+    && make install \
+    && cp /opt/GSM/qemu-install/bin/qemu-system-arm /usr/local/bin/qemu-system-arm
+
+RUN mkdir -p /opt/GSM/qemu/build \
+    && cp /opt/GSM/qemu-src/*.py /opt/GSM/qemu/ 2>/dev/null || true \
+    && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm
+
+# ── GCC 9/11 alternatives ────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc-9 g++-9 gcc-11 g++-11 \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 \
+       --slave /usr/bin/g++ g++ /usr/bin/g++-9 \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110 \
+       --slave /usr/bin/g++ g++ /usr/bin/g++-11
+
+# ── libosmodsp (dépendance osmocom-bb transceiver/burst_ind) ─────────────────
+RUN cd /opt/GSM \
+    && git clone https://gitea.osmocom.org/sdr/libosmo-dsp.git \
+    && cd libosmo-dsp \
+    && autoreconf -fi \
+    && ./configure \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig
+
+# ── Switch to gcc-9 for osmocom-bb transceiver ──────────────────────────────
+RUN update-alternatives --set gcc /usr/bin/gcc-9
+
+# ── osmocom-bb jolly/testing → transceiver ──────────────────────────────────
+RUN git clone --branch jolly/testing --depth 1 \
+        https://gitea.osmocom.org/phone-side/osmocom-bb.git \
+        /opt/GSM/osmocom-bb-transceiver \
+    && cd /opt/GSM/osmocom-bb-transceiver/src \
+    && make HOST_layer23_CONFARGS=--enable-transceiver nofirmware -j$(nproc) \
+    && cp /opt/GSM/osmocom-bb-transceiver/src/host/layer23/src/transceiver/transceiver \
+       /usr/local/bin/transceiver
+
+RUN git clone --branch fixeria/burst_ind --depth 1 \
+        https://gitea.osmocom.org/phone-side/osmocom-bb.git \
+        /opt/GSM/burst_ind \
+    && cd /opt/GSM/burst_ind/src \
+    && make nofirmware -j$(nproc) \
+    && cp /opt/GSM/burst_ind/src/host/layer23/src/misc/ccch_scan \
+       /usr/local/bin/ccch_scan \
+    && cp /opt/GSM/burst_ind/src/host/layer23/src/misc/bcch_scan \
+       /usr/local/bin/bcch_scan \
+    && cp /opt/GSM/burst_ind/src/host/layer23/src/misc/cell_log \
+       /usr/local/bin/cell_log
+
+# ── Switch back to gcc-11 ────────────────────────────────────────────────────
+RUN update-alternatives --set gcc /usr/bin/gcc-11
+
+# ── Firmware Calypso ─────────────────────────────────────────────────────────
+COPY firmware/board/ /opt/GSM/firmware/board/
 
 CMD ["/bin/bash"]
