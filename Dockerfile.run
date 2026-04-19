@@ -49,13 +49,17 @@ COPY scripts/sms-interop-relay.py /etc/osmocom/sms-interop-relay.py
 COPY scripts/gapk-start.sh /etc/osmocom/gapk-start.sh
 COPY scripts/osmo-start.sh /root/osmo-start.sh
 COPY scripts/run.sh        /root/run.sh
-COPY scripts/run.sh        /etc/osmocom/run.sh
 COPY scripts/smsc-start.sh /etc/osmocom/smsc-start.sh
 COPY scripts/pulse-gsm-setup.sh /scripts/pulse-gsm-setup.sh
 COPY scripts/send-mt-sms.sh /etc/osmocom/send-mt-sms.sh
+# /scripts/run.sh (laissé par "COPY scripts/*") et /etc/osmocom/run.sh
+# pointent vers la même source que /root/run.sh — on symlink pour éviter
+# trois copies divergentes.
 RUN chmod +x /root/osmo-start.sh /root/run.sh \
     /scripts/pulse-gsm-setup.sh \
-    /etc/osmocom/smsc-start.sh /etc/osmocom/send-mt-sms.sh
+    /etc/osmocom/smsc-start.sh /etc/osmocom/send-mt-sms.sh && \
+    ln -sf /root/run.sh /etc/osmocom/run.sh && \
+    ln -sf /root/run.sh /scripts/run.sh
 
 # ── Vérification binaires proto-SMSC ──────────────────────────────────────────
 RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
