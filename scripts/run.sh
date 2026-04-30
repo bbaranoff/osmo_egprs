@@ -145,7 +145,16 @@ generate_ms_configs() {
         echo "$block" >> "$outfile"; echo "" >> "$outfile"
     }
 
-    rm -f /root/.osmocom/bb/mobile_ms*.cfg /root/.osmocom/bb/mobile_group*.cfg
+    # Si le fichier est bind-monté (docker -v file:file), rm renvoie EBUSY.
+    # Dans ce cas on ne peut pas le supprimer mais on peut le truncate puis
+    # ré-écrire dedans, ce qui est équivalent pour notre besoin.
+    for f in /root/.osmocom/bb/mobile_ms*.cfg /root/.osmocom/bb/mobile_group*.cfg; do
+        [ -e "$f" ] || continue
+        if ! rm -f "$f" 2>/dev/null; then
+            : > "$f" 2>/dev/null || \
+                echo -e "  ${YELLOW}[warn] $f ni rm ni truncate (bind-mount RO ?)${NC}"
+        fi
+    done
 
     if [ "$MOBILE_MODE" = "split" ]; then
         for ms in $(seq 1 "$N_MS"); do
