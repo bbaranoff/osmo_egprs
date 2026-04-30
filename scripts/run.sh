@@ -264,6 +264,15 @@ if [ "$PHY_MODE" = "qemu" ]; then
     # continuer avec Asterisk + SMSC ensuite. L'utilisateur peut attacher
     # interactivement après coup avec : tmux attach -t calypso
     # ─────────────────────────────────────────────────────────────────────────
+
+    # generate_ms_configs a créé mobile_group1.cfg avec
+    # `layer2-socket /tmp/osmocom_l2_1` (per-MS). En mode qemu, osmocon
+    # publie le L1CTL à /tmp/osmocom_l2 (sans suffixe). On corrige le
+    # config sinon mobile ne peut pas attach et n'expose jamais sa VTY 4247.
+    cfg_qemu="/root/.osmocom/bb/mobile_group1.cfg"
+    [ -f "$cfg_qemu" ] && \
+        sed -i 's|layer2-socket [^[:space:]]*|layer2-socket /tmp/osmocom_l2|' "$cfg_qemu"
+
     echo -e "${GREEN}=== [4-7/10] run_si.sh (QEMU+core+mobile) ===${NC}"
     if [ -x "$QEMU_RUN_SI" ]; then
         "$QEMU_RUN_SI" </dev/null || true
