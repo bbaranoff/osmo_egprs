@@ -285,6 +285,17 @@ sudo ./start.sh stop     # Arrête tous les containers
 sudo ./provision_hlr.sh  # Provisionne les abonnés de test dans les HLR
 ```
 
+Trois modes PHY pour le côté MS, sélectionnés via `PHY_MODE` à l'intérieur du
+container avant d'invoquer `run.sh` :
+
+| `PHY_MODE` | Pile | Usage |
+|------------|------|-------|
+| `faketrx` (défaut) | `fake_trx` → `trxcon` → `mobile` | Multi-MS, rapide, pas de DSP |
+| `virtphy` | `osmo-bts-virtual` ↔ `virtphy` ↔ `mobile` | Multi-MS via multicast UDP |
+| `qemu` | `osmo-bts-trx` ↔ `bridge.py` ↔ QEMU Calypso ↔ `mobile` | Baseband émulé (ARM7+DSP), 1 MS |
+
+Voir §11 pour le mode QEMU.
+
 ### 8.2 Accès aux containers
 
 ```bash
@@ -403,13 +414,114 @@ Le premier chiffre d'un numéro NXXXX identifie l'opérateur. Le dialplan `[gsm_
 
 ---
 
-## 11. Extensions possibles
+## 11. RAN virtuel QEMU (PHY_MODE=qemu)
+
+Le projet intègre [bbaranoff/qemu](https://github.com/bbaranoff/qemu) — un fork
+de QEMU avec une machine `calypso` qui émule le SoC GSM TI Calypso (ARM7TDMI +
+DSP TMS320C54x). Cela permet d'exécuter le **vrai firmware** OsmocomBB
+`layer1.highram.elf` au-dessus d'un baseband virtualisé, sans aucun hardware.
+
+### 11.1 Architecture
+
+```mermaid
+flowchart LR
+    mobile["mobile (layer23)"] -->|"L1CTL\n/tmp/osmocom_l2"| QEMU
+    subgraph QEMU["QEMU calypso"]
+        ARM["ARM7\nlayer1.highram.elf"]
+        DSP["DSP C54x\ncalypso_dsp.txt"]
+        BSP["BSP DMA\nUDP 6702"]
+        ARM <-->|"API RAM"| DSP
+        DSP --> BSP
+    end
+    QEMU -->|"CLK UDP 6700"| BRIDGE
+    BRIDGE["bridge.py"] <-->|"TRX 5700-5702"| BTS
+    BTS["osmo-bts-trx"] -->|"Abis/IP"| BSC
+    BSC --> CORE[Core PLMN]
+```
+
+- **ARM7** exécute le firmware osmocom-bb compilé dans le conteneur.
+- **DSP C54x** charge le ROM Calypso réel (`calypso_dsp.txt`, dumpé d'un téléphone).
+- **`bridge.py`** (Python) relaie les bursts entre `osmo-bts-trx` (UDP 5700-5702)
+  et la BSP du DSP (UDP 6702). QEMU est maître d'horloge TDMA et envoie des
+  ticks sur UDP 6700 ; bridge synthétise des `IND CLOCK` à cadence wall-clock
+  pour le BTS, en piochant le FN de QEMU.
+- **`mobile`** se connecte au socket L1CTL `/tmp/osmocom_l2` publié par QEMU
+  via la PTY série du firmware (sercomm DLCI 5).
+
+### 11.2 Composants ajoutés au conteneur
+
+| Composant | Path container | Source |
+|-----------|---------------|--------|
+| `qemu-system-arm` (machine `calypso`) | `/usr/local/bin/qemu-system-arm` | bbaranoff/qemu |
+| Firmware Calypso layer1 | `/opt/GSM/firmware/board/compal_e88/layer1.highram.elf` | osmocom-bb (build container) |
+| ROM DSP | `/opt/GSM/calypso_dsp.txt` | bbaranoff/qemu (symlink) |
+| Bridge BTS↔BSP | `/opt/GSM/qemu-src/bridge.py` | bbaranoff/qemu |
+| `transceiver` (BTS soft-SDR Calypso) | `/usr/local/bin/transceiver` | osmocom-bb branche jolly/testing |
+| `ccch_scan`, `bcch_scan`, `cell_log` | `/usr/local/bin/` | osmocom-bb branche fixeria/burst_ind |
+
+Le Dockerfile installe le toolchain ARM (`gcc-arm-none-eabi`) avant la build
+osmocom-bb pour produire le `.elf`. La build complète prend ~15-20 min selon
+la machine.
+
+### 11.3 Lancement
+
+```bash
+sudo ./build.sh
+sudo ./start.sh        # mode opérateur unique (single)
+docker exec -ti osmo-operator-1 bash
+# dans le container :
+PHY_MODE=qemu /root/run.sh
+```
+
+`run.sh` orchestre la séquence : `osmo-bts-trx` → QEMU (PTY+monitor) →
+attente du socket `/tmp/osmocom_l2` → `bridge.py` → attente des ticks QEMU
+sur UDP 6700 → `mobile`. Tout est lancé dans des fenêtres tmux distinctes.
+
+| Variable | Défaut | Rôle |
+|----------|--------|------|
+| `QEMU_BIN` | `/opt/GSM/qemu/build/qemu-system-arm` | Binaire QEMU |
+| `QEMU_FW` | `/opt/GSM/firmware/board/compal_e88/layer1.highram.elf` | Firmware ARM |
+| `QEMU_DSP_ROM` | `/opt/GSM/calypso_dsp.txt` | ROM DSP C54x |
+| `QEMU_BRIDGE` | `/opt/GSM/qemu-src/bridge.py` | Script bridge BTS↔BSP |
+| `QEMU_L1CTL_SOCK` | `/tmp/osmocom_l2` | Socket L1CTL publié par QEMU |
+| `QEMU_MON_SOCK` | `/tmp/qemu-calypso-mon.sock` | Monitor QEMU (HMP) |
+
+`PHY_MODE=qemu` force `N_MS=1` : le bridge utilise des ports UDP fixes (un seul
+Calypso émulé par conteneur). Pour faire tourner plusieurs MS virtuels, lancer
+plusieurs conteneurs (un par opérateur, chacun avec son bridge).
+
+### 11.4 Diagnostic
+
+```bash
+# tmux : fenêtres qemu / bridge / bts / ue_g1
+docker exec -ti osmo-operator-1 tmux -S /tmp/osmocom_tmux attach -t osmocom
+
+# Monitor QEMU (HMP)
+docker exec -ti osmo-operator-1 socat - unix-connect:/tmp/qemu-calypso-mon.sock
+
+# Logs
+/var/log/osmocom/qemu.log     # Émulation ARM/DSP, BSP, MVPD, IRQ
+/var/log/osmocom/bridge.log   # Ticks QEMU, IND CLOCK, DL/UL bursts
+/var/log/osmocom/run.sh.log   # Orchestration
+```
+
+| Symptôme | Cause probable | Diagnostic |
+|----------|---------------|------------|
+| `bridge: timeout — vérifier que QEMU émet sur UDP 6700` | QEMU n'a pas démarré le TPU/DSP | `grep TINT0 /var/log/osmocom/qemu.log` |
+| Mobile `FBSB result=255` (no cell) | DSP ne détecte pas le FB — voir `qemu/SESSION_STATUS.md` (bug IMR=0x0000 connu) | `grep "IMR change" /var/log/osmocom/qemu.log \| wc -l` |
+| `osmo-bts-trx: PC clock skew too high` | bridge cesse d'envoyer `IND CLOCK` | redémarrer bridge.py |
+| Socket `/tmp/osmocom_l2` jamais créé | Firmware ne boote pas | `head -50 /var/log/osmocom/qemu.log` (chercher MVPD/PROM0) |
+
+L'intégration QEMU est en développement actif côté DSP (voir
+`bbaranoff/qemu/CLAUDE.md` pour le statut courant des bugs C54x).
+
+---
+
+## 12. Autres extensions
 
 **srsRAN (LTE)** — coexistence 2G/4G avec eNodeB virtuel, HLR/HSS partagé.
 
 **VoWiFi / IMS** — passerelle SIP via Asterisk pour l'accès WiFi, pont vers le core GSM.
-
-**RAN virtuel QEMU** — émulation TI Calypso (OsmocomBB) pour un lab 100% virtualisé baseband → core, sans hardware physique.
 
 **Monitoring** — Prometheus/Grafana pour métriques M3UA, dashboards MAP, visualisation SCCP.
 
