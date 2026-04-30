@@ -322,8 +322,10 @@ apply_config_templates() {
     # mobile.cfg
     if [ -f "configs/mobile.cfg.template" ]; then
         cp "configs/mobile.cfg.template" "$dest/bb/mobile.cfg"
+        cp "configs/mobile.cfg.template" "$dest/bb/mobile_group1.cfg"
     elif [ -f "configs/mobile.cfg" ]; then
         cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
+        cp "configs/mobile.cfg" "$dest/bb/mobile_group1.cfg"
     fi
 
     # Calculs dérivés
@@ -428,6 +430,9 @@ build_vol_args() {
     done
     if [ -f "$tmpdir/bb/mobile.cfg" ]; then
         vol_args="$vol_args -v $tmpdir/bb/mobile.cfg:/root/.osmocom/bb/mobile.cfg"
+    fi
+    if [ -f "$tmpdir/bb/mobile_group1.cfg" ]; then
+        vol_args="$vol_args -v $tmpdir/bb/mobile_group1.cfg:/root/.osmocom/bb/mobile_group1.cfg"
     fi
     echo "$vol_args"
 }
