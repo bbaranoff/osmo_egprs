@@ -145,7 +145,16 @@ generate_ms_configs() {
         echo "$block" >> "$outfile"; echo "" >> "$outfile"
     }
 
-    rm -f /root/.osmocom/bb/mobile_ms*.cfg /root/.osmocom/bb/mobile_group*.cfg
+    # Si le fichier est bind-monté (docker -v file:file), rm renvoie EBUSY.
+    # Dans ce cas on ne peut pas le supprimer mais on peut le truncate puis
+    # ré-écrire dedans, ce qui est équivalent pour notre besoin.
+    for f in /root/.osmocom/bb/mobile_ms*.cfg /root/.osmocom/bb/mobile_group*.cfg; do
+        [ -e "$f" ] || continue
+        if ! rm -f "$f" 2>/dev/null; then
+            : > "$f" 2>/dev/null || \
+                echo -e "  ${YELLOW}[warn] $f ni rm ni truncate (bind-mount RO ?)${NC}"
+        fi
+    done
 
     if [ "$MOBILE_MODE" = "split" ]; then
         for ms in $(seq 1 "$N_MS"); do
@@ -272,6 +281,13 @@ if [ "$PHY_MODE" = "qemu" ]; then
     cfg_qemu="/root/.osmocom/bb/mobile_group1.cfg"
     [ -f "$cfg_qemu" ] && \
         sed -i 's|layer2-socket [^[:space:]]*|layer2-socket /tmp/osmocom_l2|' "$cfg_qemu"
+
+    # systemd auto-respawn osmo-bts-trx (Restart=always). En mode qemu
+    # c'est run_si.sh (tmux window "bts") qui doit posséder le BTS, sinon
+    # le killall -9 de run_si.sh est suivi d'un respawn systemd qui
+    # conflictue sur les ports UDP TRX.
+    systemctl stop    osmo-bts-trx 2>/dev/null || true
+    systemctl disable osmo-bts-trx 2>/dev/null || true
 
     echo -e "${GREEN}=== [4-7/10] run_si.sh (QEMU+core+mobile) ===${NC}"
     if [ -x "$QEMU_RUN_SI" ]; then

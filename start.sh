@@ -780,7 +780,7 @@ start_bridge_mode() {
             $port_args \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             -v /tmp/osmocom-logs/op${i}:/var/log/osmocom \
-            --tmpfs /tmp \
+            --tmpfs /tmp:exec,mode=1777,size=512m \
             --tmpfs /run:exec,size=64m \
             --tmpfs /run/lock \
             -e OPERATOR_ID="$i" \
@@ -988,7 +988,7 @@ start_host_mode() {
         --device /dev/net/tun:/dev/net/tun \
         $alsa_args \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec,mode=1777,size=512m \
         -e CONTAINER_IP="$src_ip" -e GATEWAY_IP="$gw_ip" \
         -e OPERATOR_ID="1" -e N_MS="$n_ms" \
         -e INTER_STP_IP="127.0.0.1" \
