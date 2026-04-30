@@ -208,13 +208,6 @@ RUN mkdir -p /opt/GSM/qemu/build \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
     && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
-# Firmware Calypso : récupéré depuis le build osmocom-bb (déjà compilé plus haut)
-# Path attendu par run.sh : /opt/GSM/firmware/board/compal_e88/layer1.highram.elf
-RUN mkdir -p /opt/GSM/firmware/board/compal_e88 \
-    && cp /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.elf \
-          /opt/GSM/firmware/board/compal_e88/layer1.highram.elf 2>/dev/null \
-    || (echo "WARN: layer1.highram.elf manquant — vérifier build osmocom-bb" && true)
-
 # ── libosmo-dsp (dépendance transceiver/burst_ind) ──────────────────────────
 RUN cd /opt/GSM \
     && git clone https://gitea.osmocom.org/sdr/libosmo-dsp.git \
