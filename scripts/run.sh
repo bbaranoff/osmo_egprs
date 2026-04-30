@@ -9,6 +9,18 @@
 #
 set -euo pipefail
 
+# PHY_MODE=qemu : délégué intégralement à run_si.sh (fork bbaranoff/qemu).
+# Évalué AVANT la redirection stdout vers tee, sinon le `tmux attach` final
+# de run_si.sh échoue avec "open terminal failed: not a terminal" car le
+# TTY a été remplacé par un pipe.
+PHY_MODE="${PHY_MODE:-faketrx}"
+QEMU_RUN_SI="${QEMU_RUN_SI:-/opt/GSM/qemu-src/run_si.sh}"
+if [ "$PHY_MODE" = "qemu" ]; then
+    [ -x "$QEMU_RUN_SI" ] || { echo "run_si.sh introuvable ou non exécutable : ${QEMU_RUN_SI}" >&2; exit 1; }
+    echo "[PHY=qemu] délégation à ${QEMU_RUN_SI}"
+    exec "$QEMU_RUN_SI"
+fi
+
 LOG_FILE="/var/log/osmocom/run.sh.log"
 mkdir -p "$(dirname "$LOG_FILE")"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -19,27 +31,14 @@ GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC
 
 FAKETRX_PY="${FAKETRX_PY:-/opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py}"
 OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-1}"; MOBILE_MODE="${MOBILE_MODE:-combined}"
-PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy | qemu
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
 BB_PORT_BASE=6700; BB_PORT_STEP=3; BTS_PORT_BASE=5700
 L2_SOCK_BASE="/tmp/osmocom_l2"; SAP_SOCK_BASE="/tmp/osmocom_sap"
 
-# Path du run_si.sh (orchestrateur fork bbaranoff/qemu) — utilisé en PHY_MODE=qemu
-QEMU_RUN_SI="${QEMU_RUN_SI:-/opt/GSM/qemu-src/run_si.sh}"
-
 [[ ! "$N_MS" =~ ^[0-9]+$ ]] || [ "$N_MS" -lt 1 ] || [ "$N_MS" -gt $MAX_MS ] && N_MS=1
 [[ ! "$OPERATOR_ID" =~ ^[0-9]+$ ]] || [ "$OPERATOR_ID" -lt 1 ] || [ "$OPERATOR_ID" -gt 24 ] && exit 1
 [[ "$MOBILE_MODE" != "combined" && "$MOBILE_MODE" != "split" ]] && MOBILE_MODE="combined"
-[[ "$PHY_MODE" != "faketrx" && "$PHY_MODE" != "virtphy" && "$PHY_MODE" != "qemu" ]] && PHY_MODE="faketrx"
-
-# PHY_MODE=qemu : on délègue tout à run_si.sh, dès maintenant — pas de
-# génération de configs MS, pas d'init tmux ici (run_si.sh gère sa propre
-# session "calypso").
-if [ "$PHY_MODE" = "qemu" ]; then
-    [ -x "$QEMU_RUN_SI" ] || { echo -e "${RED}run_si.sh introuvable ou non exécutable : ${QEMU_RUN_SI}${NC}"; exit 1; }
-    echo -e "${GREEN}[PHY=qemu] délégation à ${QEMU_RUN_SI}${NC}"
-    exec "$QEMU_RUN_SI"
-fi
+[[ "$PHY_MODE" != "faketrx" && "$PHY_MODE" != "virtphy" ]] && PHY_MODE="faketrx"
 
 N_TRX=$(( (N_MS + MS_PER_TRX - 1) / MS_PER_TRX ))
 [ "$MOBILE_MODE" = "combined" ] && N_GROUPS=$(( (N_MS + MAX_MS_PER_MOBILE - 1) / MAX_MS_PER_MOBILE )) || N_GROUPS=$N_MS
