@@ -90,12 +90,7 @@ RUN cd ${ROOT} && \
     ldconfig
 
     
-# ── ARM cross-toolchain (Calypso firmware build) ─────────────────────────────
-# Requis avant la compilation osmocom-bb pour produire layer1.highram.elf
-# (utilisé par QEMU calypso comme noyau ARM7).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
-    && rm -rf /var/lib/apt/lists/*
+# ── Calypso build ─────────────────────────────
 
 RUN cd ${ROOT} && \
     git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
@@ -103,7 +98,7 @@ RUN cd ${ROOT} && \
     # Build complet : firmware (layer1.bin/.elf pour Calypso) + outils host
     # (mobile, trxcon, virtphy, ccch_scan). Le firmware est nécessaire pour
     # le mode PHY_MODE=qemu où QEMU émule un Calypso et exécute layer1.
-    make -j$(nproc)
+    make nofirmware
 
 # ── gsup-smsc-proto : SMSC externe connecté à OsmoHLR via GSUP ────────────────
 # Programmes : proto-smsc-daemon (réception MO SMS + relai MT via GSUP)
