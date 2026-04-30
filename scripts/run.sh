@@ -244,11 +244,11 @@ inject_handover
 echo ""
 
 echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
-# En mode qemu c'est run_si.sh qui appellera status.sh stop / osmo-start.sh
-# (et redémarrera donc tout le core). Inutile de le faire ici.
-if [ "$PHY_MODE" != "qemu" ]; then
-    /etc/osmocom/osmo-start.sh
-fi
+# Toujours démarrer le core ici, y compris en mode qemu : run_si.sh est
+# patché au build (Dockerfile) pour ne plus appeler status.sh stop /
+# osmo-start.sh, sinon le HLR serait kill juste après le provisioning
+# par start.sh, perdant les abonnés.
+/etc/osmocom/osmo-start.sh
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PHY dispatch : qemu (run_si.sh) | virtphy (multicast) | faketrx (TRXD)
