@@ -279,8 +279,13 @@ if [ "$PHY_MODE" = "qemu" ]; then
     # publie le L1CTL à /tmp/osmocom_l2 (sans suffixe). On corrige le
     # config sinon mobile ne peut pas attach et n'expose jamais sa VTY 4247.
     cfg_qemu="/root/.osmocom/bb/mobile_group1.cfg"
-    [ -f "$cfg_qemu" ] && \
-        sed -i 's|layer2-socket [^[:space:]]*|layer2-socket /tmp/osmocom_l2|' "$cfg_qemu"
+    if [ -f "$cfg_qemu" ]; then
+        # Pas de `sed -i` : si le fichier est bind-monté (docker -v), le
+        # rename atomique échoue avec EBUSY. On édite en place via une
+        # capture mémoire + truncate-rewrite sur le même inode.
+        new_cfg=$(sed 's|layer2-socket [^[:space:]]*|layer2-socket /tmp/osmocom_l2|' "$cfg_qemu") \
+            && printf '%s\n' "$new_cfg" > "$cfg_qemu"
+    fi
 
     # systemd auto-respawn osmo-bts-trx (Restart=always). En mode qemu
     # c'est run_si.sh (tmux window "bts") qui doit posséder le BTS, sinon
