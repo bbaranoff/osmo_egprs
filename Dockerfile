@@ -208,6 +208,15 @@ RUN mkdir -p /opt/GSM/qemu/build \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
     && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
+# Neutralise le tear-down + restart du core dans run_si.sh : notre run.sh
+# (étape 3) lance déjà osmo-start.sh, le HLR doit rester up pour que
+# start.sh puisse provisionner les abonnés sans se faire kill par
+# status.sh stop déclenché par run_si.sh.
+RUN sed -i \
+    -e 's|^/etc/osmocom/status\.sh stop.*|: # status.sh stop neutralisé (osmo_egprs)|' \
+    -e 's|^/etc/osmocom/osmo-start\.sh.*|: # osmo-start.sh neutralisé (osmo_egprs)|' \
+    /opt/GSM/qemu-src/run_si.sh
+
 # ── libosmo-dsp (dépendance transceiver/burst_ind) ──────────────────────────
 RUN cd /opt/GSM \
     && git clone https://gitea.osmocom.org/sdr/libosmo-dsp.git \
