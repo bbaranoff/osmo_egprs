@@ -1,6 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
+# 0. Parsing des arguments
+NO_CACHE=""
+for arg in "$@"; do
+    case "$arg" in
+        --no-cache)
+            NO_CACHE="--no-cache"
+            ;;
+        -h|--help)
+            echo "Usage: sudo $0 [--no-cache]"
+            echo "  --no-cache   Force la reconstruction complète de l'image (paquets propres)."
+            exit 0
+            ;;
+        *)
+            echo -e "\033[0;33m[WARN] Argument inconnu ignoré : $arg\033[0m"
+            ;;
+    esac
+done
+
 # 1. Vérification des privilèges ROOT
 if [[ $EUID -ne 0 ]]; then
    echo -e "\033[0;31m[ERREUR] Ce script doit être lancé en tant que root (sudo).\033[0m"
@@ -29,8 +47,9 @@ echo "[*] Chargement des modules noyau (SCTP & TUN)..."
 modprobe sctp
 modprobe tun
 
-# Vérification du module SCTP
-if lsmod | grep -q sctp; then
+# Vérification du module SCTP (lecture directe de /proc/modules : pas de tube,
+# donc pas de SIGPIPE/pipefail, et ancrage sur le nom de module exact)
+if grep -q '^sctp ' /proc/modules; then
     echo -e "\033[0;32m[OK] Module SCTP chargé sur l'hôte.\033[0m"
 else
     echo -e "\033[0;31m[ERREUR] Impossible de charger SCTP.\033[0m"
@@ -38,8 +57,10 @@ fi
 
 # 5. Lancement du build Docker
 echo "--- Lancement du build de l'image osmocom-nitb ---"
-# On utilise --no-cache si tu veux une installation propre des paquets dans le container
-if docker build . -t osmocom-nitb; then
+if [[ -n "$NO_CACHE" ]]; then
+    echo "[*] Mode --no-cache actif : reconstruction complète, paquets propres."
+fi
+if docker build $NO_CACHE . -t osmocom-nitb; then
     echo -e "\033[0;32m[OK] Image osmocom-nitb construite avec succès.\033[0m"
 else
     echo -e "\033[0;31m[ERREUR] Le build Docker a échoué.\033[0m"
