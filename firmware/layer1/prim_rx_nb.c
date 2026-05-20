@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -126,6 +122,8 @@ static int l1s_nb_resp(__unused uint8_t p1, uint8_t burst_id, uint16_t p3)
 		/* Set SACCH indication in Link IDentifier */
 		if (mf_task_flags & MF_F_SACCH)
 			rxnb.dl->link_id = 0x40;
+		else if (mf_task_flags & MF_F_PTCCH)
+			rxnb.dl->link_id = 0x80;
 		else
 			rxnb.dl->link_id = 0x00;
 

@@ -122,7 +122,7 @@ enum vrpcsts_reg_bits {
 enum togbr2_bits {
 	TOGBR2_KEEPR	= (1 << 0),	/* Clear KEEPON bit */
 	TOGBR2_KEEPS	= (1 << 1),	/* Set KEEPON bit */
-	TOGBR2_ACTR	= (1 << 2),	/* Dectivate MCLK */
+	TOGBR2_ACTR	= (1 << 2),	/* Deactivate MCLK */
 	TOGBR2_ACTS	= (1 << 3),	/* Activate MCLK */
 	TOGBR2_IBUFPTR1	= (1 << 4),	/* Initialize pointer of burst buffer 1 */
 	TOGBR2_IBUFPTR2	= (1 << 5),	/* Initialize pointer of burst buffer 2 */
@@ -144,7 +144,10 @@ void twl3025_init(void);
 void twl3025_reg_write(uint8_t reg, uint16_t data);
 uint16_t twl3025_reg_read(uint8_t reg);
 
+int twl3025_get_pwon(void);
+
 void twl3025_power_off(void);
+void twl3025_power_off_now(void);
 
 void twl3025_clk13m(int enable);
 

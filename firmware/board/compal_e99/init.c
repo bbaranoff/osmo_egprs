@@ -15,10 +15,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -51,6 +47,7 @@
 
 #define ARMIO_LATCH_OUT 0xfffe4802
 #define IO_CNTL_REG	0xfffe4804
+#define ARM_CONF_REG	0xfffef006
 #define ASIC_CONF_REG	0xfffef008
 
 static void board_io_init(void)
@@ -76,6 +73,11 @@ static void board_io_init(void)
 	reg &= ~(1 << 3);
 	reg |= (1 << 1);
 	writew(reg, ARMIO_LATCH_OUT);
+
+	/* configure ADD(22), needed for second half of flash */
+	reg = readw(ARM_CONF_REG);
+	reg |= (1 << 3);
+	writew(reg, ARM_CONF_REG);
 }
 
 void board_init(int with_irq)

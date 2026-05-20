@@ -15,10 +15,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -58,7 +54,7 @@ void toa_input(int32_t offset, uint32_t snr)
 {
 	int valid = 1;
 
-	if (snr < TOA_SNR_THRESHOLD || offset < 0 || offset >31)
+	if (snr < TOA_SNR_THRESHOLD || offset < 0 || offset > 31)
 		valid = 0;
 	runavg_input(&toa_state.ravg, offset, valid);
 	runavg_check_output(&toa_state.ravg);

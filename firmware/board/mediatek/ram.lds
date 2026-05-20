@@ -12,7 +12,7 @@ MEMORY
 {
     /* mtk-loaded binary: our text, initialized data */
     LRAM (rw) : ORIGIN = 0x40000000, LENGTH = 0x00006000
-    /* mtk-loaded binary: our unitialized data, stacks, heap */
+    /* mtk-loaded binary: our uninitialized data, stacks, heap */
     IRAM (rw) : ORIGIN = 0x40006000, LENGTH = 0x00006000
 }
 SECTIONS
@@ -51,6 +51,7 @@ SECTIONS
         LONG(SIZEOF(.ctors) / 4 - 2)
         /* ctor pointers */
         KEEP(*(SORT(.ctors)))
+        KEEP(*(SORT(.init_array)))
         /* end of list */
         LONG(0)
     } > LRAM

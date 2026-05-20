@@ -12,7 +12,7 @@ MEMORY
     /* compal-loaded binary: our text, initialized data */
     /* (only this zone can contain loaded data since loader is 64k limit) */
     LRAM (rw) : ORIGIN = 0x00800000, LENGTH = 0x00010000
-    /* compal-loaded binary: our unitialized data, stacks, heap */
+    /* compal-loaded binary: our uninitialized data, stacks, heap */
     IRAM (rw) : ORIGIN = 0x00810000, LENGTH = 0x00030000
 }
 SECTIONS
@@ -20,10 +20,10 @@ SECTIONS
     . = 0x800000;
 
     /* romloader data section, contains passthru interrupt vectors */
-    .compal.loader (NOLOAD) : { . = 0x100; } > LRAM
+    .compal.loader (NOLOAD) : { . = 0x1c; } > LRAM
 
     /* image signature (prepended by osmocon according to phone type) */
-    .compal.header (NOLOAD) : { . = 4; } > LRAM
+    .compal.header 0x800100 (NOLOAD): { . = 4; } > LRAM
 
     /* initialization code */
     . = ALIGN(4);
@@ -62,6 +62,7 @@ SECTIONS
         LONG(SIZEOF(.ctors) / 4 - 2)
         /* ctor pointers */
         KEEP(*(SORT(.ctors)))
+        KEEP(*(SORT(.init_array)))
         /* end of list */
         LONG(0)
     } > LRAM

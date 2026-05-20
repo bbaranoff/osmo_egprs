@@ -15,10 +15,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -31,6 +27,7 @@
 #include <keypad.h>
 #include <console.h>
 #include <flash/cfi_flash.h>
+#include <tiffs.h>
 
 #include <calypso/irq.h>
 #include <calypso/clock.h>
@@ -60,8 +57,8 @@ static void board_io_init(void)
 	uint16_t reg;
 
 	reg = readw(ASIC_CONF_REG);
-	/* Set function pins to I2C Mode */
-	reg |= ((1 << 12) | (1 << 7));		/* SCL / SDA */
+	/* Set LPG and PWL pin mux like Pirelli's fw does */
+	reg |= (1 << 6) | (1 << 4);
 	/* TWL3025: Set SPI+RIF RX clock to rising edge */
 	reg |= (1 << 13) | (1 << 14);
 	reg &= ~(1 << 1);
@@ -156,4 +153,7 @@ void board_init(int with_irq)
 
 	/* enable LEDB driver of Iota for keypad backlight */
 	twl3025_reg_write(AUXLED, 0x02);
+
+	/* Initialize TIFFS reader (18 sectors of 256 KiB each) */
+	tiffs_init(0x02000000, 0x40000, 18);
 }

@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 /*
@@ -356,7 +352,6 @@ bat_compal_e88_adc_read(){
 static void
 battery_compal_e88_timer_cb(void *p){
 	struct osmo_timer_list *tmr = (struct osmo_timer_list*)p;
-	int i;
 
 	if(bat_compal_e88_adc_read()){ /* read back ADCs after a brief delay */
 		osmo_timer_schedule(tmr,ADC_TIMER_DELAY);

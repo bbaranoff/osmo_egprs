@@ -90,9 +90,9 @@ typedef signed short API_SIGNED;
 
 // bits in d_gsm_bgd_mgt - background task management
 #define B_DSPBGD_RECO           1       // start of reco in dsp background
-#define B_DSPBGD_UPD            2       // start of alignement update in dsp background
+#define B_DSPBGD_UPD            2       // start of alignment update in dsp background
 #define B_DSPBGD_STOP_RECO      256     // stop of reco in dsp background
-#define B_DSPBGD_STOP_UPD       512     // stop of alignement update in dsp background
+#define B_DSPBGD_STOP_UPD       512     // stop of alignment update in dsp background
 
 // bit in d_pll_config
 #define B_32KHZ_CALIB      (1 << 14) // force DSP in Idle1 during 32 khz calibration
@@ -104,6 +104,8 @@ typedef signed short API_SIGNED;
 #define B_PLAY_UL         (1 << 3) // Play UL
 #define B_DCO_ON          (1 << 4) // DCO ON/OFF
 #define B_AUDIO_ASYNC     (1 << 1) // WCP reserved
+#define B_MUTE_VOCODEC_DL (1 << 14) // DL voice decoder
+#define B_MUTE_VOCODEC_UL (1 << 15) // UL voice encoder
 
 // ****************************************************************
 // PARAMETER AREA (PARAM) MCU<->DSP COMMUNICATION DEFINITIONS

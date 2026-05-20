@@ -15,10 +15,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <fb/framebuffer.h>
@@ -118,6 +114,7 @@ static struct framebuffer fb_st7558_framebuffer = {
 	.clear = fb_bw8_clear,
 	.boxto = fb_bw8_boxto,
 	.lineto = fb_bw8_lineto,
+	.set_p = fb_bw8_set_p,
 	.putstr = fb_bw8_putstr,
 	.flush = fb_st7558_flush,
 	.width = ST7558_WIDTH,

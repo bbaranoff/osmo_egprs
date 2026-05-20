@@ -18,10 +18,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <fb/framebuffer.h>
@@ -72,7 +68,7 @@ s6b33b1x_initdata[] = {
 	{ DATA, 0x0a }, /* DATA: fPCK = fOSC/6 */
 	{ CMD,  0x2a }, /* CMD   Contrast Control */
 	{ DATA, 0x2d }, /* DATA: default contrast */
-	{ CMD,  0x30 }, /* CMD   Adressing mode set */
+	{ CMD,  0x30 }, /* CMD   Addressing mode set */
 	{ DATA, 0x0b }, /* DATA: 65536 color mode */
 	{ CMD,  0x10 }, /* CMD   Driver output mode set */
 	{ DATA, 0x03 }, /* DATA: Display duty: 1/132 */
@@ -99,6 +95,7 @@ static void fb_s6b33b1x_send_cmdlist(const struct s6b33b1x_cmdlist *p)
 static void fb_spca_write(uint16_t addr, uint16_t val)
 {
 	writew(addr, nCS4_ADDR);
+	delay_ms(1);
 	writew(val , nCS4_ADDR | 2);
 }
 

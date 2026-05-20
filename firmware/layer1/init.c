@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 
@@ -36,7 +32,7 @@
 #include <layer1/async.h>
 #include <layer1/l23_api.h>
 
-void layer1_init(int load_extcode)
+void layer1_init(void)
 {
 #ifndef CONFIG_TX_ENABLE
 	printf("\n\nTHIS FIRMWARE WAS COMPILED WITHOUT TX SUPPORT!!!\n\n");
@@ -47,7 +43,7 @@ void layer1_init(int load_extcode)
 	/* initialize TDMA Frame IRQ driven synchronous L1 */
 	l1s_init();
 	/* power up the DSP */
-	dsp_power_on(load_extcode);
+	dsp_power_on();
 
 	/* Initialize TPU, TSP and TRF drivers */
 	tpu_init();

@@ -14,15 +14,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #define DEBUG
 
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,7 +37,6 @@
 #include <layer1/prim.h>
 #include <layer1/tpu_window.h>
 #include <layer1/sched_gsmtime.h>
-#include <layer1/trx.h>
 
 #include <abb/twl3025.h>
 #include <rf/trf6151.h>
@@ -74,55 +68,81 @@ enum mf_type {
 	MF26ODD,
 	MF26EVEN
 };
-static uint32_t chan_nr2mf_task_mask(uint8_t chan_nr, uint8_t neigh_mode, uint8_t cbch)
+static uint32_t chan_nr2mf_task_mask(uint8_t chan_nr, uint8_t neigh_mode)
 {
 	uint8_t cbits = chan_nr >> 3;
 	uint8_t tn = chan_nr & 0x7;
 	uint8_t lch_idx;
-	enum mframe_task master_task = 0;
-	uint32_t neigh_task = 0;
-	enum mf_type multiframe;
+	enum mf_type multiframe = 0;
+	uint32_t task_mask = 0x00;
+
+#define TASK_SET(task) \
+	task_mask |= (1 << (task))
 
 	if (cbits == 0x01) {
 		lch_idx = 0;
-		master_task = (tn & 1) ? MF_TASK_TCH_F_ODD : MF_TASK_TCH_F_EVEN;
+		TASK_SET((tn & 1) ? MF_TASK_TCH_F_ODD : MF_TASK_TCH_F_EVEN);
 		multiframe = (tn & 1) ? MF26ODD : MF26EVEN;
 	} else if ((cbits & 0x1e) == 0x02) {
 		lch_idx = cbits & 0x1;
-		master_task = MF_TASK_TCH_H_0 + lch_idx;
+		TASK_SET(MF_TASK_TCH_H_0 + lch_idx);
+		multiframe = (lch_idx & 1) ? MF26ODD : MF26EVEN;
 	} else if ((cbits & 0x1c) == 0x04) {
 		lch_idx = cbits & 0x3;
-		master_task = cbch ? MF_TASK_SDCCH4_CBCH : (MF_TASK_SDCCH4_0 + lch_idx);
+		TASK_SET(MF_TASK_SDCCH4_0 + lch_idx);
 		multiframe = MF51;
 	} else if ((cbits & 0x18) == 0x08) {
 		lch_idx = cbits & 0x7;
-		master_task = cbch ? MF_TASK_SDCCH8_CBCH : (MF_TASK_SDCCH8_0 + lch_idx);
+		TASK_SET(MF_TASK_SDCCH8_0 + lch_idx);
+		multiframe = MF51;
+	} else if ((cbits & 0x1f) == 0x18) {
+		/* Osmocom specific extension for PDTCH and PTCCH */
+		TASK_SET(MF_TASK_GPRS_PDTCH);
+		TASK_SET(MF_TASK_GPRS_PTCCH);
+		/* FIXME: PDCH has different multiframe structure */
+		multiframe = MFNONE;
+	} else if ((cbits & 0x1f) == 0x19) {
+		/* Osmocom specific extension for CBCH on SDCCH/4 */
+		TASK_SET(MF_TASK_SDCCH4_CBCH);
+		multiframe = MF51;
+	} else if ((cbits & 0x1f) == 0x1a) {
+		/* Osmocom specific extension for CBCH on SDCCH/8 */
+		TASK_SET(MF_TASK_SDCCH8_CBCH);
 		multiframe = MF51;
 #if 0
 	} else if (cbits == 0x10) {
 		/* FIXME: when to do extended BCCH? */
-		master_task = MF_TASK_BCCH_NORM;
+		TASK_SET(MF_TASK_BCCH_NORM);
 	} else if (cbits == 0x11 || cbits == 0x12) {
 		/* FIXME: how to decide CCCH norm/extd? */
-		master_task = MF_TASK_BCCH_CCCH;
+		TASK_SET(MF_TASK_BCCH_CCCH);
 #endif
+	} else {
+		TASK_SET(MF_TASK_BCCH_NORM);
 	}
+
 	switch (neigh_mode) {
 	case NEIGH_MODE_PM:
 		switch (multiframe) {
 		case MF51:
-			neigh_task = (1 << MF_TASK_NEIGH_PM51);
+			TASK_SET(MF_TASK_NEIGH_PM51);
 			break;
 		case MF26EVEN:
-			neigh_task = (1 << MF_TASK_NEIGH_PM26E);
+			TASK_SET(MF_TASK_NEIGH_PM26E);
 			break;
 		case MF26ODD:
-			neigh_task = (1 << MF_TASK_NEIGH_PM26O);
+			TASK_SET(MF_TASK_NEIGH_PM26O);
+			break;
+		default:
+			/* no neighbor measurement */
 			break;
 		}
 		break;
 	}
-	return (1 << master_task) | neigh_task;
+
+#undef TASK_SET
+
+	return task_mask;
 }
 
 static int  chan_nr2dchan_type(uint8_t chan_nr)
@@ -137,7 +157,17 @@ static int  chan_nr2dchan_type(uint8_t chan_nr)
 		return GSM_DCHAN_SDCCH_4;
 	} else if ((cbits & 0x18) == 0x08) {
 		return GSM_DCHAN_SDCCH_8;
+	} else if ((cbits & 0x1f) == 0x18) {
+		/* Osmocom-specific extension for PDCH */
+		return GSM_DCHAN_PDCH;
+	} else if ((cbits & 0x1f) == 0x19) {
+		/* Osmocom-specific extension for CBCH on SDCCH/4 */
+		return GSM_DCHAN_SDCCH_4_CBCH;
+	} else if ((cbits & 0x1f) == 0x1a) {
+		/* Osmocom-specific extension for CBCH on SDCCH/8 */
+		return GSM_DCHAN_SDCCH_8_CBCH;
 	}
+
 	return GSM_DCHAN_UNKNOWN;
 }
 
@@ -227,9 +257,8 @@ static void l1ctl_rx_dm_est_req(struct msgb *msg)
 	struct l1ctl_info_ul *ul = (struct l1ctl_info_ul *) l1h->data;
 	struct l1ctl_dm_est_req *est_req = (struct l1ctl_dm_est_req *) ul->payload;
 
-	printd("L1CTL_DM_EST_REQ (arfcn=%u, chan_nr=0x%02x, tsc=%u, flags=0x%x)\n",
-		ntohs(est_req->h0.band_arfcn), ul->chan_nr, est_req->tsc,
-		est_req->dm_flags);
+	printd("L1CTL_DM_EST_REQ (chan_nr=0x%02x, tsc=%u)\n",
+	       ul->chan_nr, est_req->tsc);
 
 	/* disable neighbour cell measurement of C0 TS 0 */
 	mframe_disable(MF_TASK_NEIGH_PM51_C0T0);
@@ -247,8 +276,12 @@ static void l1ctl_rx_dm_est_req(struct msgb *msg)
 		l1s.dedicated.h1.n    = est_req->h1.n;
 		for (i=0; i<est_req->h1.n; i++)
 			l1s.dedicated.h1.ma[i] = ntohs(est_req->h1.ma[i]);
+		printd("L1CTL_DM_EST_REQ indicates H1 (HSN=%u, MAIO=%u, chans=%u)\n",
+		       est_req->h1.hsn, est_req->h1.maio, est_req->h1.n);
 	} else {
 		l1s.dedicated.h0.arfcn = ntohs(est_req->h0.band_arfcn);
+		printd("L1CTL_DM_EST_REQ indicates H0 (ARFCN=%u)\n",
+		       l1s.dedicated.h0.arfcn & ~ARFCN_FLAG_MASK);
 	}
 
 	/* TCH config */
@@ -256,6 +289,7 @@ static void l1ctl_rx_dm_est_req(struct msgb *msg)
 		/* Mode */
 		l1a_tch_mode_set(est_req->tch_mode);
 		l1a_audio_mode_set(est_req->audio_mode);
+		l1a_tch_flags_set(est_req->tch_flags);
 
 		/* Sync */
 		l1s.tch_sync = 1;	/* can be set without locking */
@@ -265,8 +299,7 @@ static void l1ctl_rx_dm_est_req(struct msgb *msg)
 	}
 
 	/* figure out which MF tasks to enable */
-	l1a_mftask_set(chan_nr2mf_task_mask(ul->chan_nr, NEIGH_MODE_PM,
-		est_req->dm_flags & L1CTL_DM_F_CBCH));
+	l1a_mftask_set(chan_nr2mf_task_mask(ul->chan_nr, NEIGH_MODE_PM));
 }
 
 /* receive a L1CTL_DM_FREQ_REQ from L23 */
@@ -304,11 +337,10 @@ static void l1ctl_rx_crypto_req(struct msgb *msg)
 	struct l1ctl_hdr *l1h = (struct l1ctl_hdr *) msg->data;
 	struct l1ctl_info_ul *ul = (struct l1ctl_info_ul *) l1h->data;
 	struct l1ctl_crypto_req *cr = (struct l1ctl_crypto_req *) ul->payload;
-	uint8_t key_len = msg->len - sizeof(*l1h) - sizeof(*ul) - sizeof(*cr);
 
-	printd("L1CTL_CRYPTO_REQ (algo=A5/%u, len=%u)\n", cr->algo, key_len);
+	printd("L1CTL_CRYPTO_REQ (algo=A5/%u, len=%u)\n", cr->algo, cr->key_len);
 
-	if (cr->algo && key_len != 8) {
+	if (cr->algo && cr->key_len != 8) {
 		printd("L1CTL_CRYPTO_REQ -> Invalid key\n");
 		return;
 	}
@@ -319,9 +351,6 @@ static void l1ctl_rx_crypto_req(struct msgb *msg)
 /* receive a L1CTL_DM_REL_REQ from L23 */
 static void l1ctl_rx_dm_rel_req(struct msgb *msg)
 {
-	struct l1ctl_hdr *l1h = (struct l1ctl_hdr *) msg->data;
-	struct l1ctl_info_ul *ul = (struct l1ctl_info_ul *) l1h->data;
-
 	printd("L1CTL_DM_REL_REQ\n");
 	l1a_mftask_set(0);
 	l1s.dedicated.type = GSM_DCHAN_NONE;
@@ -332,6 +361,7 @@ static void l1ctl_rx_dm_rel_req(struct msgb *msg)
 	dsp_load_ciph_param(0, NULL);
 	l1a_tch_mode_set(GSM48_CMODE_SIGN);
 	audio_set_enabled(GSM48_CMODE_SIGN, 0);
+	l1s.tch_loop_mode = L1CTL_TCH_LOOP_OPEN;
 	l1s.neigh_pm.n = 0;
 }
 
@@ -342,7 +372,7 @@ static void l1ctl_rx_param_req(struct msgb *msg)
 	struct l1ctl_info_ul *ul = (struct l1ctl_info_ul *) l1h->data;
 	struct l1ctl_par_req *par_req = (struct l1ctl_par_req *) ul->payload;
 
-	printd("L1CTL_PARAM_REQ (ta=%d, tx_power=%d)\n", par_req->ta,
+	printd("L1CTL_PARAM_REQ (ta=%d, tx_power=%u)\n", par_req->ta,
 		par_req->tx_power);
 
 	l1s.ta = par_req->ta;
@@ -356,11 +386,10 @@ static void l1ctl_rx_rach_req(struct msgb *msg)
 	struct l1ctl_info_ul *ul = (struct l1ctl_info_ul *) l1h->data;
 	struct l1ctl_rach_req *rach_req = (struct l1ctl_rach_req *) ul->payload;
 
-	printd("L1CTL_RACH_REQ (ra=0x%02x, offset=%d combined=%d)\n",
-		rach_req->ra, ntohs(rach_req->offset), rach_req->combined);
+	printd("L1CTL_RACH_REQ (ra=0x%02x, offset=%d, combined=%d, uic=0x%02x)\n",
+		rach_req->ra, ntohs(rach_req->offset), rach_req->combined, rach_req->uic);
 
-	l1a_rach_req(ntohs(rach_req->offset), rach_req->combined,
-		rach_req->ra);
+	l1a_rach_req(ntohs(rach_req->offset), rach_req->combined, rach_req->ra, rach_req->uic);
 }
 
 /* receive a L1CTL_DATA_REQ from L23 */
@@ -484,12 +513,16 @@ static void l1ctl_rx_ccch_mode_req(struct msgb *msg)
 		mframe_enable(MF_TASK_CCCH_COMB);
 	else if (ccch_mode == CCCH_MODE_NON_COMBINED)
 		mframe_enable(MF_TASK_CCCH);
+	else if (ccch_mode == CCCH_MODE_COMBINED_CBCH) {
+		mframe_enable(MF_TASK_CCCH_COMB);
+		mframe_enable(MF_TASK_SDCCH4_CBCH);
+	}
 
 	l1ctl_tx_ccch_mode_conf(ccch_mode);
 }
 
 /* Transmit a L1CTL_TCH_MODE_CONF */
-static void l1ctl_tx_tch_mode_conf(uint8_t tch_mode, uint8_t audio_mode)
+static void l1ctl_tx_tch_mode_conf(uint8_t tch_mode, uint8_t audio_mode, uint8_t tch_flags)
 {
 	struct msgb *msg = l1ctl_msgb_alloc(L1CTL_TCH_MODE_CONF);
 	struct l1ctl_tch_mode_conf *mode_conf;
@@ -497,6 +530,8 @@ static void l1ctl_tx_tch_mode_conf(uint8_t tch_mode, uint8_t audio_mode)
 				msgb_put(msg, sizeof(*mode_conf));
 	mode_conf->tch_mode = tch_mode;
 	mode_conf->audio_mode = audio_mode;
+	mode_conf->tch_flags = l1s.tch_flags;
+	mode_conf->tch_loop_mode = l1s.tch_loop_mode;
 
 	l1_queue_for_l2(msg);
 }
@@ -509,17 +544,22 @@ static void l1ctl_rx_tch_mode_req(struct msgb *msg)
 		(struct l1ctl_tch_mode_req *) l1h->data;
 	uint8_t tch_mode = tch_mode_req->tch_mode;
 	uint8_t audio_mode = tch_mode_req->audio_mode;
+	uint8_t tch_flags = tch_mode_req->tch_flags;
 
 	printd("L1CTL_TCH_MODE_REQ (tch_mode=0x%02x audio_mode=0x%02x)\n",
 		tch_mode, audio_mode);
+
 	tch_mode = l1a_tch_mode_set(tch_mode);
 	audio_mode = l1a_audio_mode_set(audio_mode);
+	tch_flags = l1a_tch_flags_set(tch_flags);
 
 	audio_set_enabled(tch_mode, audio_mode);
 
 	l1s.tch_sync = 1; /* Needed for audio to work */
+	l1s.tch_loop_mode = tch_mode_req->tch_loop_mode;
+	/* TODO: Handle AMR codecs from tch_mode_req if tch_mode_req->tch_mode==GSM48_CMODE_SPEECH_AMR */
 
-	l1ctl_tx_tch_mode_conf(tch_mode, audio_mode);
+	l1ctl_tx_tch_mode_conf(tch_mode, audio_mode, tch_flags);
 }
 
 /* receive a L1CTL_NEIGH_PM_REQ from L23 */
@@ -556,7 +596,7 @@ static void l1ctl_rx_traffic_req(struct msgb *msg)
 	struct l1ctl_traffic_req *tr = (struct l1ctl_traffic_req *) ul->payload;
 	int num = 0;
 
-	/* printd("L1CTL_TRAFFIC_REQ\n"); */ /* Very verbose, can overwelm serial */
+	/* printd("L1CTL_TRAFFIC_REQ\n"); */ /* Very verbose, can overwhelm serial */
 
 	msg->l2h = tr->data;
 
@@ -586,95 +626,6 @@ static void l1ctl_sim_req(struct msgb *msg)
 #endif
 
    sim_apdu(len, data);
-}
-
-static int l1ctl_bts_mode(struct msgb *msg)
-{
-	struct l1ctl_hdr *l1h = (struct l1ctl_hdr *) msg->data;
-	struct l1ctl_bts_mode *bm = (struct l1ctl_bts_mode *) l1h->data;
-
-	if (msg->len < (sizeof(*l1h) + sizeof(*bm))) {
-		printf("l1ctl_bts_mode: Short message. %u\n", msg->len);
-		return -EINVAL;
-	}
-
-	l1s.bts.bsic  = bm->bsic;
-	l1s.bts.arfcn = ntohs(bm->band_arfcn);
-
-	l1s.tx_power = ms_pwr_ctl_lvl(gsm_arfcn2band(l1s.bts.arfcn), 15);
-
-	l1a_mftask_set(0);
-	if (bm->enabled) {
-		int i;
-
-		mframe_enable(MF_TASK_BTS_SYNC);
-		mframe_enable(MF_TASK_BTS);
-		for (i = 0; i < 8; i++) {
-			l1s.bts.type[i] = bm->type[i];
-			l1s.bts.handover[i] = bm->handover[i];
-		}
-		l1s.bts.gain = bm->gain;
-
-		/* Calculate TX and RX windows by bit masks */
-		for (i = 0; i < 8; i++) {
-			if (!(bm->tx_mask & (1 << ((i-1) & 7)))
-			 && (bm->tx_mask & (1 << i))) {
-				l1s.bts.tx_start = i;
-				break;
-			}
-		}
-		if (i == 8)
-			goto error;
-		l1s.bts.tx_num = 0;
-		while ((bm->tx_mask & (1 << i))) {
-			l1s.bts.tx_num++;
-			i = (i+1) & 7;
-		}
-		for (i = 0; i < 8; i++) {
-			if (!(bm->rx_mask & (1 << ((i-1) & 7)))
-			 && (bm->rx_mask & (1 << i))) {
-				l1s.bts.rx_start = i;
-				break;
-			}
-		}
-		if (i == 8)
-			goto error;
-		l1s.bts.rx_num = 0;
-		while ((bm->rx_mask & (1 << i))) {
-			l1s.bts.rx_num++;
-			i = (i+1) & 7;
-		}
-	} else {
-		mframe_enable(MF_TASK_BCCH_NORM);
-	}
-
-	printf("BTS MODE: %u %u {%u,%u,%u,%u,%u,%u,%u,%u} "
-		"TX %d..%d RX %d..%d\n", l1s.bts.bsic, l1s.bts.arfcn,
-		bm->type[0], bm->type[1], bm->type[2], bm->type[3],
-		bm->type[4], bm->type[5], bm->type[6], bm->type[7],
-		l1s.bts.tx_start, (l1s.bts.tx_start + l1s.bts.tx_num - 1) & 7,
-		l1s.bts.rx_start, (l1s.bts.rx_start + l1s.bts.rx_num - 1) & 7);
-
-	return 0;
-
-error:
-		printf("BTS MODE: invalid bit masks 0x%02x, 0x%02x\n",
-			bm->tx_mask, bm->rx_mask);
-
-	return -EINVAL;
-}
-
-static int l1ctl_bts_burst_req(struct msgb *msg)
-{
-	struct l1ctl_hdr *l1h = (struct l1ctl_hdr *) msg->data;
-	struct l1ctl_bts_burst_req *br = (struct l1ctl_bts_burst_req *) l1h->data;
-
-	if (msg->len < sizeof(*l1h) + sizeof(*br)) {
-		printf("l1ctl_bts_burst_req: Short message. %u\n", msg->len);
-		return -EINVAL;
-	}
-
-	return trx_put_burst(ntohl(br->fn), br->tn, br->type, br->data);
 }
 
 static struct llist_head l23_rx_queue = LLIST_HEAD_INIT(l23_rx_queue);
@@ -768,12 +719,6 @@ void l1a_l23_handler(void)
 	case L1CTL_SIM_REQ:
 		l1ctl_sim_req(msg);
 		break;
-	case L1CTL_BTS_MODE:
-		l1ctl_bts_mode(msg);
-		break;
-	case L1CTL_BTS_BURST_REQ:
-		l1ctl_bts_burst_req(msg);
-		break;
 	}
 
 exit_msgbfree:
@@ -786,4 +731,3 @@ void l1a_l23api_init(void)
 {
 	sercomm_register_rx_cb(SC_DLCI_L1A_L23, l1a_l23_rx);
 }
-

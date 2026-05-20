@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -113,6 +109,10 @@ uint8_t l1a_tch_mode_set(uint8_t mode)
 	switch (mode) {
 	case GSM48_CMODE_SPEECH_V1:
 	case GSM48_CMODE_SPEECH_EFR:
+	case GSM48_CMODE_DATA_14k5:
+	case GSM48_CMODE_DATA_12k0:
+	case GSM48_CMODE_DATA_6k0:
+	case GSM48_CMODE_DATA_3k6:
 		l1s.tch_mode = mode;
 		break;
 	default:
@@ -127,6 +127,13 @@ uint8_t l1a_audio_mode_set(uint8_t mode)
 {
 	l1s.audio_mode = mode;
 	return mode;
+}
+
+/* Set TCH flags */
+uint8_t l1a_tch_flags_set(uint8_t flags)
+{
+	l1s.tch_flags = flags;
+	return flags;
 }
 
 /* Initialize asynchronous part of Layer1 */

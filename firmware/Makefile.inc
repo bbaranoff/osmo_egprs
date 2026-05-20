@@ -1,10 +1,10 @@
 
 #### TOOLCHAIN CONFIGURATION ####
 
-CROSS_COMPILE?=arm-elf-
+CROSS_COMPILE?=arm-none-eabi-
 
 CC=gcc
-LD=ld
+LD=gcc
 AR=ar
 SIZE=size
 OBJCOPY=objcopy
@@ -22,7 +22,7 @@ CFLAGS += -g$(DEBUGF)
 #ASFLAGS=--g$(DEBUGF) $(INCLUDES) -D__ASSEMBLY__
 ASFLAGS=$(INCLUDES) -D__ASSEMBLY__
 
-LDFLAGS = -nostartfiles -nostdlib -nodefaultlibs --gc-sections --cref
+LDFLAGS = -nostartfiles -nostdlib -nodefaultlibs -Wl,--gc-sections -Wl,--cref
 
 #### QUIET OUTPUT ####
 
@@ -39,12 +39,16 @@ Q_SIZE = $(if $(V:1=),@echo "  SIZE   $@";)
 #### GIT VERSION ####
 
 GIT_COMMIT:=$(shell git describe --always)
+GIT_SHORTHASH:=$(shell git rev-parse --short HEAD)
 GIT_MODIFIED:=$(shell (git status | grep "modified:\|added:\|deleted:" -q) && echo "-modified")
 
 GIT_REVISION:=$(GIT_COMMIT)$(GIT_MODIFIED)
 
 ASFLAGS += -DGIT_REVISION=\"$(GIT_REVISION)\"
 CFLAGS += -DGIT_REVISION=\"$(GIT_REVISION)\"
+
+ASFLAGS += -DGIT_SHORTHASH=\"$(GIT_SHORTHASH)\"
+CFLAGS += -DGIT_SHORTHASH=\"$(GIT_SHORTHASH)\"
 
 #### GLOBAL DATA ####
 
@@ -95,8 +99,8 @@ $(1)_$(2)_$(3)_OBJS+=board/$(2)/$(1).$(3).manifest.o
 # define compilation rule, also generates map file
 board/$(2)/$(1).$(3).elf board/$(2)/$(1).$(3).map: $$($(1)_$(2)_$(3)_OBJS) $$($(1)_$(2)_$(3)_LIBS) $$(ENV_$(3)_LDS)
 	$$(Q_LD)$(CROSS_COMPILE)$(LD) $(LDFLAGS) -T $$(ENV_$(3)_LDS) -Bstatic \
-		-Map board/$(2)/$(1).$(3).map -o board/$(2)/$(1).$(3).elf \
-		--start-group $$($(1)_$(2)_$(3)_OBJS) $$($(1)_$(2)_$(3)_LIBS) --end-group
+		-Wl,-Map,board/$(2)/$(1).$(3).map -o board/$(2)/$(1).$(3).elf \
+		-Wl,--start-group $$($(1)_$(2)_$(3)_OBJS) $$($(1)_$(2)_$(3)_LIBS) -Wl,--end-group
 
 # define size rule
 board/$(2)/$(1).$(3).size: board/$(2)/$(1).$(3).elf

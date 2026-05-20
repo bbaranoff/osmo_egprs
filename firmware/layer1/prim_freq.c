@@ -14,17 +14,13 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-
+#include <inttypes.h>
 #include <defines.h>
 #include <debug.h>
 #include <memory.h>
@@ -48,11 +44,6 @@
 #include <layer1/sched_gsmtime.h>
 
 #include <l1ctl_proto.h>
-
-struct {
-	uint32_t fn;
-	uint16_t band_arfcn;
-} last_rach;
 
 /* if the "starting time" is reached, use frequencies "after time" */
 static int l1s_freq_cmd(__unused uint8_t p1, __unused uint8_t p2, __unused uint16_t p3)
@@ -103,7 +94,7 @@ void l1a_freq_req(uint32_t fn_sched)
 	fn_sched = l1s.current_time.fn + diff;
 	if (fn_sched >= GSM_MAX_FN)
 		fn_sched -= GSM_MAX_FN;
-	printf("Scheduling frequency change at fn=%u, currently fn=%u\n",
+	printf("Scheduling frequency change at fn=%"PRIu32", currently fn=%"PRIu32"\n",
 		fn_sched, l1s.current_time.fn);
 
 	local_firq_save(flags);

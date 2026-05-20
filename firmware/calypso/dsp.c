@@ -15,10 +15,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -85,7 +81,6 @@ struct dsp_section {
 #include "dsp_params.c"
 #include "dsp_bootcode.c"
 #include "dsp_dumpcode.c"
-#include "dsp_extcode.c"
 
 struct dsp_api dsp_api = {
 	.ndb	= (T_NDB_MCU_DSP *) BASE_API_NDB,
@@ -197,7 +192,7 @@ static void dsp_pre_boot(const struct dsp_section *bootcode)
 	dsp_bl_wait_ready();
 }
 
-static void dsp_set_params(int16_t *param_tab, int param_size, int load_extcode)
+static void dsp_set_params(int16_t *param_tab, int param_size)
 {
 	int i;
 	int16_t *param_ptr = (int16_t *) BASE_API_PARAM;
@@ -205,13 +200,8 @@ static void dsp_set_params(int16_t *param_tab, int param_size, int load_extcode)
 	/* Start DSP up to bootloader */
 	dsp_pre_boot(dsp_bootcode);
 
-	if (load_extcode) {
-		/* Load our DSP extensions */
-		dputs("Installing DSP extensions patch\n");
-		dsp_bl_upload_sections(dsp_extcode);
-	}
+	/* FIXME: Implement Patch download, if any */
 
-	/* Configure API params */
 	dputs("Setting some dsp_api.ndb values\n");
 	dsp_api.ndb->d_background_enable = 0;
 	dsp_api.ndb->d_background_abort = 0;
@@ -231,13 +221,9 @@ static void dsp_set_params(int16_t *param_tab, int param_size, int load_extcode)
 	dputs("Setting API NDB parameters\n");
 	for (i = 0; i < param_size; i ++)
 		*param_ptr++ = param_tab[i];
+	
+	dsp_dump_version();
 
-	if (load_extcode) {
-		/* Init address for the extensions */
-		dsp_api.param->d_gprs_install_address = DSP_EXT_START;
-	}
-
-	/* Perform actual boot */
 	dputs("Finishing download phase\n");
 	dsp_bl_start_at(DSP_START);
 
@@ -402,7 +388,7 @@ static void dsp_ndb_init(void)
 	ndb->d_afcctladd= ABB_VAL_T(AFCCTLADD, 0x000);  // Value at reset
 	ndb->d_vbuctrl	= ABB_VAL_T(VBUCTRL, 0x0C9);	// Uplink gain amp 0dB, Sidetone gain to mute
 	ndb->d_vbdctrl	= ABB_VAL_T(VBDCTRL, 0x006);	// Downlink gain amp 0dB, Volume control 0 dB
-	ndb->d_bbctrl	= ABB_VAL_T(BBCTRL,  0x2E1);	// value at reset
+	ndb->d_bbctrl	= ABB_VAL_T(BBCTRL,  0x2C1);	// value at reset
 	ndb->d_bulgcal	= ABB_VAL_T(BULGCAL, 0x000);	// value at reset
 	ndb->d_apcoff	= ABB_VAL_T(APCOFF,  0x040);	// value at reset
 	ndb->d_bulioff	= ABB_VAL_T(BULIOFF, 0x0FF);	// value at reset
@@ -454,12 +440,12 @@ static void dsp_db_init(void)
 	dsp_api_memset((uint16_t *)BASE_API_R_PAGE_1, sizeof(T_DB_DSP_TO_MCU));
 }
 
-void dsp_power_on(int load_extcode)
+void dsp_power_on(void)
 {
 	/* probably a good idea to initialize the whole API area to a known value */
 	dsp_api_memset((uint16_t *)BASE_API_RAM, API_SIZE * 2); // size is in words
 
-	dsp_set_params((int16_t *)&dsp_params, sizeof(dsp_params)/2, load_extcode);
+	dsp_set_params((int16_t *)&dsp_params, sizeof(dsp_params)/2);
 	dsp_ndb_init();
 	dsp_db_init();
 	dsp_api.frame_ctr = 0;
@@ -578,6 +564,9 @@ void dsp_load_ciph_param(int mode, uint8_t *key)
 {
 	dsp_api.ndb->d_a5mode = mode;
 
+	if (mode >= 3) /* Only A5/0, A5/1, A5/2 are supported by calypso */
+		printd("Algo A5/%u is not supported!!!\n", mode);
+
 	if (!mode || !key)
 		return;
 
@@ -649,7 +638,7 @@ static void _dsp_dump_range(uint32_t addr, uint32_t size, int mode)
 			 * the sercomm buffer */
 			delay_ms(2);
 			if ((addr&15)==0)
-				printf("%05x : ", addr);
+				printf("%05lx : ", addr);
 			printf("%04hx%c", *api++, ((addr&15)==15)?'\n':' ');
 			addr++;
 		}
@@ -695,7 +684,7 @@ void dsp_dump(void)
 
 	/* Dump each range */
 	for (i=0; dr[i].name; i++) {
-		printf("DSP dump: %s [%05x-%05x]\n", dr[i].name,
+		printf("DSP dump: %s [%05lx-%05lx]\n", dr[i].name,
 			dr[i].addr, dr[i].addr+dr[i].size-1);
 		_dsp_dump_range(dr[i].addr, dr[i].size, dr[i].mode);
 	}

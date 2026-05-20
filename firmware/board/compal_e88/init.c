@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -30,6 +26,7 @@
 #include <keypad.h>
 #include <console.h>
 #include <flash/cfi_flash.h>
+#include <tiffs.h>
 
 #include <calypso/irq.h>
 #include <calypso/clock.h>
@@ -116,6 +113,11 @@ void board_init(int with_irq)
 	uart_init(UART_IRDA, with_irq);
 	uart_baudrate(UART_IRDA, UART_115200);
 
+	/* fw-irda boot marker — read by tools/irda_capture.py and asserted by
+	   tests/test_irda_channel.py::test_irda_boot_marker_present. Phase 0.5
+	   of PLAN_CLAUDE_CODE_20260516_IRDA_DEBUG_CHANNEL.md. */
+	cons_puts("=== fw-irda boot OK ===\r\n");
+
 	/* Initialize hardware timers */
 	hwtimer_init();
 
@@ -142,4 +144,7 @@ void board_init(int with_irq)
 
 	/* Initialize the charging controller */
 	battery_compal_e88_init();
+
+	/* Initialize TIFFS reader (6 sectors of 8 KiB each) */
+	tiffs_init(0x001f0000, 0x2000, 6);
 }

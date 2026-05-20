@@ -15,7 +15,7 @@ struct l1_cell_info {
 	uint8_t		bsic;
 	/* Combined or non-combined CCCH */
 	uint8_t		ccch_mode; /* enum ccch_mode */
-	/* whats the delta of the cells current GSM frame number
+	/* what's the delta of the cells current GSM frame number
 	 * compared to our current local frame number */
 	int32_t		fn_offset;
 	/* how much does the TPU need adjustment (delta) to synchronize
@@ -82,6 +82,10 @@ struct l1s_state {
 	uint8_t		tch_mode;
 	uint8_t		tch_sync;
 	uint8_t		audio_mode;
+	uint8_t		tch_flags;
+
+	/* 3GPP TS 44.014, section 5.1 (Calypso DSP specific numbers) */
+	enum l1ctl_tch_loop_mode tch_loop_mode;
 
 	/* Transmit queues of pending packets for main DCCH and ACCH */
 	struct llist_head tx_queue[_NUM_L1S_CHAN];
@@ -113,15 +117,19 @@ struct l1s_state {
 
 	struct {
 		uint8_t		ra;
+		uint8_t		uic;
 	} rach;
 
 	struct {
 		enum {
 			GSM_DCHAN_NONE = 0,
 			GSM_DCHAN_SDCCH_4,
+			GSM_DCHAN_SDCCH_4_CBCH,
 			GSM_DCHAN_SDCCH_8,
+			GSM_DCHAN_SDCCH_8_CBCH,
 			GSM_DCHAN_TCH_H,
 			GSM_DCHAN_TCH_F,
+			GSM_DCHAN_PDCH,
 			GSM_DCHAN_UNKNOWN,
 		} type;
 
@@ -154,17 +162,6 @@ struct l1s_state {
 		uint8_t tn[64];
 		uint8_t	level[64];
 	} neigh_pm;
-
-	/* bts mode */
-	struct {
-		uint8_t tx_start, tx_num;
-		uint8_t rx_start, rx_num;
-		uint8_t type[8];
-		uint8_t handover[8];
-		uint16_t arfcn;
-		uint8_t bsic;
-		uint8_t gain;
-	} bts;
 };
 
 extern struct l1s_state l1s;
@@ -192,7 +189,7 @@ void l1s_init(void);
 void l1s_reset(void);
 
 /* init.c */
-void layer1_init(int load_extcode);
+void layer1_init(void);
 
 /* A debug macro to print every TDMA frame */
 #ifdef DEBUG_EVERY_TDMA

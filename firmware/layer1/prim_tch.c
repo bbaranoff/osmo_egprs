@@ -15,10 +15,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -55,7 +51,6 @@
 
 #include <l1ctl_proto.h>
 
-
 /* This computes various parameters both for the DSP and for
  * our logic. Not all are used all the time, but it's easier
  * to build all in one place */
@@ -86,10 +81,34 @@ static void tch_get_params(struct gsm_time *time, uint8_t chan_nr,
 		case GSM48_CMODE_SPEECH_EFR:
 			*tch_mode = *tch_f_hn ? TCH_EFR_MODE : SIG_ONLY_MODE;
 			break;
+		case GSM48_CMODE_DATA_14k5:
+			*tch_mode = *tch_f_hn ? TCH_144_MODE : SIG_ONLY_MODE;
+			break;
+		case GSM48_CMODE_DATA_12k0:
+			*tch_mode = *tch_f_hn ? TCH_96_MODE : SIG_ONLY_MODE;
+			break;
+		case GSM48_CMODE_DATA_6k0:
+			*tch_mode = *tch_f_hn ? TCH_48F_MODE : TCH_48H_MODE;
+			break;
+		case GSM48_CMODE_DATA_3k6:
+			*tch_mode = *tch_f_hn ? TCH_24F_MODE : TCH_24H_MODE;
+			break;
 		default:
 			*tch_mode = SIG_ONLY_MODE;
 		}
 	}
+
+	/* enable/disable the voice decoder (Downlink) */
+	if (l1s.audio_mode & AUDIO_RX_SPEAKER)
+		dsp_api.ndb->d_tch_mode &= ~B_MUTE_VOCODEC_DL; /* unmute */
+	else
+		dsp_api.ndb->d_tch_mode |= B_MUTE_VOCODEC_DL; /* mute */
+
+	/* enable/disable the voice encoder (Uplink) */
+	if (l1s.audio_mode & AUDIO_TX_MICROPHONE)
+		dsp_api.ndb->d_tch_mode &= ~B_MUTE_VOCODEC_UL; /* unmute */
+	else
+		dsp_api.ndb->d_tch_mode |= B_MUTE_VOCODEC_UL; /* mute */
 }
 
 
@@ -149,14 +168,31 @@ static __attribute__ ((constructor)) void prim_tch_init(void)
 #define FACCH_MEAS_HIST	8	/* Up to 8 bursts history */
 struct l1s_rx_tch_state {
 	struct l1s_meas_hdr meas[FACCH_MEAS_HIST];
+	uint8_t meas_id;
 };
 
 static struct l1s_rx_tch_state rx_tch;
 
 
+static inline void l1s_tch_meas_avg(struct l1ctl_info_dl *dl,
+				    unsigned int meas_num)
+{
+	uint32_t avg_snr = 0;
+	int32_t avg_dbm8 = 0;
+	unsigned int i;
+
+	for (i = 0; i < meas_num; i++) {
+		int j = (rx_tch.meas_id + FACCH_MEAS_HIST - i) % FACCH_MEAS_HIST;
+		avg_snr += rx_tch.meas[j].snr;
+		avg_dbm8 += rx_tch.meas[j].pm_dbm8;
+	}
+
+	dl->snr = avg_snr / meas_num;
+	dl->rx_level = dbm2rxlev(avg_dbm8 / (8 * meas_num));
+}
+
 static int l1s_tch_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 {
-	static uint8_t meas_id = 0;
 	uint8_t mf_task_id = p3 & 0xff;
 	struct gsm_time rx_time;
 	uint8_t chan_nr;
@@ -172,27 +208,27 @@ static int l1s_tch_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 	chan_nr = mframe_task2chan_nr(mf_task_id, tn);
 	tch_get_params(&rx_time, chan_nr, &fn_report, &tch_f_hn, &tch_sub, NULL);
 
-	meas_id = (meas_id + 1) % FACCH_MEAS_HIST; /* absolute value doesn't matter */
+	rx_tch.meas_id = (rx_tch.meas_id + 1) % FACCH_MEAS_HIST; /* absolute value doesn't matter */
 
 	/* Collect measurements */
-	rx_tch.meas[meas_id].toa_qbit = dsp_api.db_r->a_serv_demod[D_TOA];
-	rx_tch.meas[meas_id].pm_dbm8 =
+	rx_tch.meas[rx_tch.meas_id].toa_qbit = dsp_api.db_r->a_serv_demod[D_TOA];
+	rx_tch.meas[rx_tch.meas_id].pm_dbm8 =
 		agc_inp_dbm8_by_pm(dsp_api.db_r->a_serv_demod[D_PM] >> 3);
-	rx_tch.meas[meas_id].freq_err =
+	rx_tch.meas[rx_tch.meas_id].freq_err =
 		ANGLE_TO_FREQ(dsp_api.db_r->a_serv_demod[D_ANGLE]);
-	rx_tch.meas[meas_id].snr = dsp_api.db_r->a_serv_demod[D_SNR];
+	rx_tch.meas[rx_tch.meas_id].snr = dsp_api.db_r->a_serv_demod[D_SNR];
 
 	/* feed computed frequency error into AFC loop */
-	if (rx_tch.meas[meas_id].snr > AFC_SNR_THRESHOLD)
-		afc_input(rx_tch.meas[meas_id].freq_err, arfcn, 1);
+	if (rx_tch.meas[rx_tch.meas_id].snr > AFC_SNR_THRESHOLD)
+		afc_input(rx_tch.meas[rx_tch.meas_id].freq_err, arfcn, 1);
 	else
-		afc_input(rx_tch.meas[meas_id].freq_err, arfcn, 0);
+		afc_input(rx_tch.meas[rx_tch.meas_id].freq_err, arfcn, 0);
 
 	/* feed computed TOA into TA loop */
-	toa_input(rx_tch.meas[meas_id].toa_qbit << 2, rx_tch.meas[meas_id].snr);
+	toa_input(rx_tch.meas[rx_tch.meas_id].toa_qbit << 2, rx_tch.meas[rx_tch.meas_id].snr);
 
 	/* Tell the RF frontend to set the gain appropriately */
-	rffe_compute_gain(rx_tch.meas[meas_id].pm_dbm8 / 8,
+	rffe_compute_gain(rx_tch.meas[rx_tch.meas_id].pm_dbm8 / 8,
 		CAL_DSP_TGT_BB_LVL);
 
 	/* FACCH Block end ? */
@@ -200,7 +236,7 @@ static int l1s_tch_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 		/* FACCH/F: B0(0...7),B1(4...11),B2(8...11,0...3) (mod 13) */
 		facch_rx_now = ((rx_time.fn % 13) % 4) == 3;
 	} else {
-		/* FAACH/H: See GSM 05.02 Clause 7 Table 1of9 */
+		/* FACCH/H: See GSM 05.02 Clause 7 Table 1of9 */
 		uint8_t t2_norm = rx_time.t2 - tch_sub;
 		facch_rx_now = (t2_norm == 15) ||
 		               (t2_norm == 23) ||
@@ -212,9 +248,6 @@ static int l1s_tch_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 		struct l1ctl_info_dl *dl;
 		struct l1ctl_data_ind *di;
 		uint16_t num_biterr;
-		uint32_t avg_snr = 0;
-		int32_t avg_dbm8 = 0;
-		int i, n;
 
 		/* Allocate msgb */
 			/* FIXME: we actually want all allocation out of L1S! */
@@ -234,15 +267,7 @@ static int l1s_tch_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 		dl->frame_nr = htonl(rx_time.fn);
 
 		/* Average SNR & RX level */
-		n = tch_f_hn ? 8 : 6;
-		for (i=0; i<n; i++) {
-			int j = (meas_id + FACCH_MEAS_HIST - i) % FACCH_MEAS_HIST;
-			avg_snr += rx_tch.meas[j].snr;
-			avg_dbm8 += rx_tch.meas[j].pm_dbm8;
-		}
-
-		dl->snr = avg_snr / n;
-		dl->rx_level = dbm2rxlev(avg_dbm8 / (8*n));
+		l1s_tch_meas_avg(dl, tch_f_hn ? 8 : 6);
 
 		/* Errors & CRC status */
 		num_biterr = dsp_api.ndb->a_fd[2] & 0xffff;
@@ -262,7 +287,7 @@ static int l1s_tch_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 		/* Give message to up layer */
 		l1_queue_for_l2(msg);
 
-	skip_rx_facch:
+skip_rx_facch:
 		/* Reset A_FD header (needed by DSP) */
 		/* B_FIRE1 =1, B_FIRE0 =0 , BLUD =0 */
 		dsp_api.ndb->a_fd[0] = (1<<B_FIRE1);
@@ -289,40 +314,63 @@ static int l1s_tch_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 
 	if (traffic_rx_now) {
 		volatile uint16_t *traffic_buf;
+		struct l1ctl_info_dl *dl;
+		struct l1ctl_traffic_ind *ti;
+		struct msgb *msg;
+		uint16_t num_biterr;
 
 		traffic_buf = tch_sub ? dsp_api.ndb->a_dd_1 : dsp_api.ndb->a_dd_0;
 
-		if (traffic_buf[0] & (1<<B_BLUD)) {
-			/* Send the data to upper layers (if interested and good frame) */
-			if ((l1s.audio_mode & AUDIO_RX_TRAFFIC_IND) &&
-			    !(dsp_api.ndb->a_dd_0[0] & (1<<B_BFI))) {
-				struct msgb *msg;
-				struct l1ctl_info_dl *dl;
-				struct l1ctl_traffic_ind *ti;
+		/* Send the data to upper layers (if interested and good frame) */
+		if (~l1s.audio_mode & AUDIO_RX_TRAFFIC_IND)
+			goto skip_rx_traffic;
+		if (~traffic_buf[0] & (1 << B_BLUD))
+			goto skip_rx_traffic;
 
-				/* Allocate msgb */
-				/* FIXME: we actually want all allocation out of L1S! */
-				msg = l1ctl_msgb_alloc(L1CTL_TRAFFIC_IND);
-				if(!msg) {
-					printf("TCH traffic: unable to allocate msgb\n");
-					goto skip_rx_traffic;
-				}
-
-				dl = (struct l1ctl_info_dl *) msgb_put(msg, sizeof(*dl));
-				ti = (struct l1ctl_traffic_ind *) msgb_put(msg, sizeof(*ti));
-
-				/* Copy actual data, skipping the information block [0,1,2] */
-				dsp_memcpy_from_api(ti->data, &traffic_buf[3], 33, 1);
-
-				/* Give message to up layer */
-				l1_queue_for_l2(msg);
-			}
-
-	skip_rx_traffic:
-			/* Reset traffic buffer header in NDB (needed by DSP) */
-			traffic_buf[0] = 0;
-			traffic_buf[2] = 0xffff;
+		/* Allocate msgb */
+		/* FIXME: we actually want all allocation out of L1S! */
+		msg = l1ctl_msgb_alloc(L1CTL_TRAFFIC_IND);
+		if (!msg) {
+			printf("TCH traffic: unable to allocate msgb\n");
+			goto skip_rx_traffic;
 		}
+
+		dl = (struct l1ctl_info_dl *) msgb_put(msg, sizeof(*dl));
+		ti = (struct l1ctl_traffic_ind *) msgb_put(msg, sizeof(*ti));
+
+		dl->chan_nr = chan_nr;
+		dl->band_arfcn = htons(arfcn);
+		dl->frame_nr = htonl(rx_time.fn);
+
+		/* Average SNR & RX level */
+		l1s_tch_meas_avg(dl, tch_f_hn ? 8 : 4);
+
+		/* Errors & CRC status */
+		num_biterr = traffic_buf[2] & 0xffff;
+		if (num_biterr > 0xff)
+			dl->num_biterr = 0xff;
+		else
+			dl->num_biterr = num_biterr;
+
+		dl->fire_crc = ((traffic_buf[0] & 0xffff) & ((1 << B_FIRE1) | (1 << B_FIRE0))) >> B_FIRE0;
+
+		/* Update rx level for pm report */
+		pu_update_rx_level(dl->rx_level);
+
+		/* Copy actual data, skipping the information block [0,1,2] */
+		dsp_memcpy_from_api(msgb_put(msg, 33), &traffic_buf[3], 33, 1);
+
+		/* Give message to up layer */
+		l1_queue_for_l2(msg);
+
+skip_rx_traffic:
+		/* Reset A_DD_0 header in NDB (needed by DSP) */
+		dsp_api.ndb->a_dd_0[0] = 0;
+		dsp_api.ndb->a_dd_0[2] = 0xffff;
+
+		/* Reset A_DD_1 header in NDB (needed by DSP) */
+		dsp_api.ndb->a_dd_1[0] = 0;
+		dsp_api.ndb->a_dd_1[2] = 0xffff;
 	}
 
 	/* mark READ page as being used */
@@ -363,7 +411,7 @@ static int l1s_tch_cmd(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 		/* FACCH/F: B0(0...7),B1(4...11),B2(8...11,0...3) */
 		facch_tx_now = ((l1s.next_time.fn % 13) % 4) == 3;
 	} else {
-		/* FAACH/H: See GSM 05.02 Clause 7 Table 1of9 */
+		/* FACCH/H: See GSM 05.02 Clause 7 Table 1of9 */
 		uint8_t t2_norm = l1s.next_time.t2 - tch_sub;
 		facch_tx_now = (t2_norm == 23) ||
 		               (t2_norm ==  6) ||
@@ -425,7 +473,6 @@ static int l1s_tch_cmd(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 	if (traffic_tx_now) {
 		volatile uint16_t *traffic_buf;
 		struct msgb *msg;
-		const uint8_t *data;
 
 		/* Reset play mode */
 		dsp_api.ndb->d_tch_mode &= ~B_PLAY_UL;
@@ -439,30 +486,25 @@ static int l1s_tch_cmd(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 
 		/* Pull Traffic data (if any) */
 		msg = msgb_dequeue(&l1s.tx_queue[L1S_CHAN_TRAFFIC]);
+		if (msg == NULL)
+			goto skip_tx_traffic;
 
 		/* Copy actual data, skipping the information block [0,1,2] */
-		if (msg) {
-			data = msg->l2h;
-			dsp_memcpy_to_api(&traffic_buf[3], data, 33, 1);
+		dsp_memcpy_to_api(&traffic_buf[3], msgb_l2(msg), 33, 1);
 
-			traffic_buf[0] = (1 << B_BLUD);	/* 1st word: Set B_BLU bit. */
-			traffic_buf[1] = 0;		/* 2nd word: cleared. */
-			traffic_buf[2] = 0;		/* 3nd word: cleared. */
-		}
+		traffic_buf[0] = (1 << B_BLUD);	/* 1st word: Set B_BLU bit. */
+		traffic_buf[1] = 0;		/* 2nd word: cleared. */
+		traffic_buf[2] = 0;		/* 3nd word: cleared. */
 
-		if (msg)
-			dsp_api.ndb->d_tch_mode |= B_PLAY_UL;
+		dsp_api.ndb->d_tch_mode |= B_PLAY_UL;
 
 		/* Indicate completion (FIXME: early but easier this way for now) */
-		if (msg) {
-			last_tx_tch_fn = l1s.next_time.fn;
-			last_tx_tch_type |= TX_TYPE_TRAFFIC;
-			l1s_compl_sched(L1_COMPL_TX_TCH);
-		}
+		last_tx_tch_fn = l1s.next_time.fn;
+		last_tx_tch_type |= TX_TYPE_TRAFFIC;
+		l1s_compl_sched(L1_COMPL_TX_TCH);
 
 		/* Free msg now that we're done with it */
-		if (msg)
-			msgb_free(msg);
+		msgb_free(msg);
 	}
 skip_tx_traffic:
 
@@ -472,7 +514,7 @@ skip_tx_traffic:
 	dsp_load_tch_param(
 		&l1s.next_time,
 		tch_mode, tch_f_hn ? TCH_F : TCH_H, tch_sub,
-		0, sync, tn
+		l1s.tch_loop_mode, sync, tn
 	);
 
 	dsp_load_rx_task(
@@ -480,6 +522,12 @@ skip_tx_traffic:
 		0, tsc		/* burst_id unused for TCH */
 	);
 	l1s_rx_win_ctrl(arfcn, L1_RXWIN_NB, 0);
+
+	/* If transmission is off, use dummy task for DSP and do not open TX window. */
+	if ((l1s.tch_flags & L1CTL_TCH_FLAG_RXONLY)) {
+		dsp_load_tx_task(TCHD_DSP_TASK, 0, tsc); /* burst_id unused for TCH */
+		return 0;
+	}
 
 	dsp_load_tx_task(
 		dsp_task_iq_swap(TCHT_DSP_TASK, arfcn, 1),
@@ -531,7 +579,7 @@ static int l1s_tch_d_cmd(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 	dsp_load_tch_param(
 		&l1s.next_time,
 		tch_mode, tch_f_hn ? TCH_F : TCH_H, tch_sub,
-		0, 0, tn
+		l1s.tch_loop_mode, 0, tn
 	);
 
 	dsp_load_rx_task(TCHD_DSP_TASK, 0, tsc); /* burst_id unused for TCH */
@@ -553,7 +601,7 @@ const struct tdma_sched_item tch_d_sched_set[] = {
  * ------------------------------------------------------------------------- */
 
 /*
- * SACCH data are spread over 4 bursts, however they are so far appart that
+ * SACCH data are spread over 4 bursts, however they are so far apart that
  * we can't use the normal scheduler to schedule all them at once in a single
  * set.
  * Therefore, the task code itself decides in which burst it is, if it's the
@@ -737,7 +785,7 @@ static int l1s_tch_a_cmd(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 	dsp_load_tch_param(
 		&l1s.next_time,
 		tch_mode, tch_f_hn ? TCH_F : TCH_H, tch_sub,
-		0, 0, tn
+		l1s.tch_loop_mode, 0, tn
 	);
 
 	dsp_load_rx_task(
@@ -745,6 +793,10 @@ static int l1s_tch_a_cmd(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
 		0, tsc		/* burst_id unused for TCHA */
 	);
 	l1s_rx_win_ctrl(arfcn, L1_RXWIN_NB, 0);
+
+	/* If transmission is off, schedule no task for DSP and do not open TX window. */
+	if ((l1s.tch_flags & L1CTL_TCH_FLAG_RXONLY))
+		return 0;
 
 	dsp_load_tx_task(
 		dsp_task_iq_swap(TCHA_DSP_TASK, arfcn, 1),

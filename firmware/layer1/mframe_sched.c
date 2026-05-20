@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -198,6 +194,7 @@ static const struct mframe_sched_item mf_sdcch8_7[] = {
 	{ .sched_set = NULL }
 };
 
+/* CBCH replaces sub-slot 2 of SDCCH, see GSM 05.02, section 6.4 */
 static const struct mframe_sched_item mf_sdcch8_cbch[] = {
 	{ .sched_set = NB_QUAD_FH_DL, .modulo = 51, .frame_nr = 8 },
 	{ .sched_set = NULL }
@@ -310,15 +307,49 @@ static const struct mframe_sched_item mf_neigh_pm26_odd[] = {
 	{ .sched_set = NULL }
 };
 
-/* BTS */
-static const struct mframe_sched_item mf_bts[] = {
-	{ .sched_set = bts_sched_set, .modulo = 1, .frame_nr =  0 },
+/* See 3GPP TS 45.002, table 6 */
+static const struct mframe_sched_item mf_gprs_pdtch[] = {
+	{ .sched_set = NB_QUAD_DL, .modulo = 13, .frame_nr = 0 },
+	{ .sched_set = NB_QUAD_DL, .modulo = 13, .frame_nr = 4 },
+	{ .sched_set = NB_QUAD_DL, .modulo = 13, .frame_nr = 8 },
+	/* NOTE: receive only task */
 	{ .sched_set = NULL }
 };
 
-/* BTS Sync */
-static const struct mframe_sched_item mf_bts_sync[] = {
-	{ .sched_set = bts_sync_sched_set, .modulo = 51, .frame_nr = 2 },
+static const struct mframe_sched_item mf_gprs_ptcch[] = {
+	/* TODO: implement AB_PTCCH_UL for PTCCH/U */
+	/* TODO: implement NB_PTCCH_DL for PTCCH/D */
+#if 0
+	/* PTCCH/D */
+	{ .sched_set = NB_PTCCH_DL, .modulo = 104, .frame_nr = 12, .flags = MF_F_PTCCH },
+	{ .sched_set = NB_PTCCH_DL, .modulo = 104, .frame_nr = 38, .flags = MF_F_PTCCH },
+	{ .sched_set = NB_PTCCH_DL, .modulo = 104, .frame_nr = 64, .flags = MF_F_PTCCH },
+	{ .sched_set = NB_PTCCH_DL, .modulo = 104, .frame_nr = 90, .flags = MF_F_PTCCH },
+
+	/* PTCCH/U for TAI 0 .. 3 */
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 12 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 38 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 64 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 90 },
+
+	/* PTCCH/U for TAI 4 .. 7 */
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 116 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 142 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 168 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 194 },
+
+	/* PTCCH/U for TAI 8 .. 11 */
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 220 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 246 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 272 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 298 },
+
+	/* PTCCH/U for TAI 12 .. 15 */
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 324 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 350 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 376 },
+	{ .sched_set = AB_PTCCH_UL, .modulo = 416, .frame_nr = 402 },
+#endif
 	{ .sched_set = NULL }
 };
 
@@ -356,13 +387,13 @@ static const struct mframe_sched_item *sched_set_for_task[32] = {
 	[MF_TASK_TCH_H_0]    = mf_tch_h_0,
 	[MF_TASK_TCH_H_1]    = mf_tch_h_1,
 
+	[MF_TASK_GPRS_PDTCH] = mf_gprs_pdtch,
+	[MF_TASK_GPRS_PTCCH] = mf_gprs_ptcch,
+
 	[MF_TASK_NEIGH_PM51_C0T0] = mf_neigh_pm51_c0t0,
 	[MF_TASK_NEIGH_PM51] = mf_neigh_pm51,
 	[MF_TASK_NEIGH_PM26E] = mf_neigh_pm26_even,
 	[MF_TASK_NEIGH_PM26O] = mf_neigh_pm26_odd,
-
-	[MF_TASK_BTS] = mf_bts,
-	[MF_TASK_BTS_SYNC] = mf_bts_sync,
 
 	[MF_TASK_UL_ALL_NB] = mf_tx_all_nb,
 };
@@ -388,7 +419,6 @@ uint8_t mframe_task2chan_nr(enum mframe_task mft, uint8_t ts)
 		cbits = 0x04 + 1;
 		break;
 	case MF_TASK_SDCCH4_2:
-	case MF_TASK_SDCCH4_CBCH:
 		cbits = 0x04 + 2;
 		break;
 	case MF_TASK_SDCCH4_3:
@@ -401,7 +431,6 @@ uint8_t mframe_task2chan_nr(enum mframe_task mft, uint8_t ts)
 		cbits = 0x08 + 1;
 		break;
 	case MF_TASK_SDCCH8_2:
-	case MF_TASK_SDCCH8_CBCH:
 		cbits = 0x08 + 2;
 		break;
 	case MF_TASK_SDCCH8_3:
@@ -429,10 +458,24 @@ uint8_t mframe_task2chan_nr(enum mframe_task mft, uint8_t ts)
 	case MF_TASK_TCH_H_1:
 		cbits = 0x02 + 1;
 		break;
-	case MF_TASK_UL_ALL_NB:
-		/* ERROR: cannot express as channel number */
-		cbits = 0;
+
+	/* Osmocom specific extensions */
+	case MF_TASK_GPRS_PDTCH:
+	case MF_TASK_GPRS_PTCCH:
+		cbits = 0x18;
 		break;
+	case MF_TASK_SDCCH4_CBCH:
+		cbits = 0x19;
+		break;
+	case MF_TASK_SDCCH8_CBCH:
+		cbits = 0x1a;
+		break;
+
+	case MF_TASK_UL_ALL_NB:
+	default:
+		printd("ERROR: cannot express mf_task=%d as "
+			"channel number, using 0x00\n", mft);
+		cbits = 0x00;
 	}
 
 	return (cbits << 3) | (ts & 0x7);

@@ -15,10 +15,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 /* Uncomment to debug sim */
@@ -58,7 +54,7 @@ enum {
 #define L3_MSG_HEAD 4
 
 static uint8_t sim_data[256]; /* buffer for SIM command */
-static volatile uint16_t sim_len = 0; /* lenght of data in sim_data[] */
+static volatile uint16_t sim_len = 0; /* length of data in sim_data[] */
 static volatile uint8_t sim_state = SIM_STATE_IDLE;
 	/* current state of SIM process */
 static volatile uint8_t sim_ignore_waiting_char = 0;

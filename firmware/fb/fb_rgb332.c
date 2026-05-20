@@ -17,10 +17,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <fb/framebuffer.h>
@@ -144,7 +140,7 @@ void fb_rgb332_lineto(uint16_t x2,uint16_t y2){
 
 	int t,tmax;		/* counter for steps */
 	int err_inc,err_accu=0;	/* error delta and accumulator for */
-				/* Brensenham's algorhithm */
+				/* Brensenham's algorithm */
 
 	fb_limit_fb_range(&x1,&y1);
 	fb_limit_fb_range(&x2,&y2);

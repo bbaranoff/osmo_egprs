@@ -16,10 +16,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -215,7 +211,7 @@ static void cmd_handler(uint8_t dlci, struct msgb *msg)
 		crc = msgb_pull_u16(msg);
 		address = msgb_pull_u32(msg);
 
-		data = msgb_pull(msg, nbytes);
+		data = msgb_pull(msg, nbytes) - nbytes;
 
 		mycrc = osmo_crc16(0, data, nbytes);
 
@@ -251,7 +247,7 @@ static void cmd_handler(uint8_t dlci, struct msgb *msg)
 		msgb_put_u8(reply, 1);	// nchips
 
 		// chip 1
-		msgb_put_u32(reply, the_flash.f_base);
+		msgb_put_u32(reply, (uint32_t) the_flash.f_base);
 		msgb_put_u32(reply, the_flash.f_size);
 		msgb_put_u8(reply, the_flash.f_nregions);
 
@@ -333,7 +329,7 @@ static void cmd_handler(uint8_t dlci, struct msgb *msg)
 		chip = msgb_pull_u8(msg);
 		address = msgb_pull_u32(msg);
 
-		data = msgb_pull(msg, nbytes);
+		data = msgb_pull(msg, nbytes) - nbytes;
 
 		mycrc = osmo_crc16(0, data, nbytes);
 

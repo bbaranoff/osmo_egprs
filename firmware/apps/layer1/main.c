@@ -14,14 +14,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
 #include <stdio.h>
+#include <console.h>
 
 #include <debug.h>
 #include <memory.h>
@@ -33,6 +30,7 @@
 
 #include <abb/twl3025.h>
 #include <rf/trf6151.h>
+#include <rf/readcal.h>
 
 #include <comm/sercomm.h>
 #include <comm/timer.h>
@@ -60,7 +58,6 @@ static void key_handler(enum key_codes code, enum key_states state);
 int main(void)
 {
 	uint8_t atr[20];
-	uint8_t atrLength = 0;
 
 	board_init(1);
 
@@ -104,13 +101,22 @@ int main(void)
 
 	puts("Power up simcard:\n");
 	memset(atr,0,sizeof(atr));
-	atrLength = calypso_sim_powerup(atr);
+	calypso_sim_powerup(atr);
 
-	layer1_init(0);
+	read_factory_rf_calibration();
+	layer1_init();
 
 	tpu_frame_irq_en(1, 1);
 
 	while (1) {
+		static uint32_t beacon_n = 0;
+		/* Phase 5 IrDA beacon — émet périodiquement via UART_IRDA pour que
+		   tools/irda_capture.py reçoive du trafic même si le marker initial
+		   `=== fw-irda boot OK ===` de board_init() est perdu (race window
+		   PTY/capture). Lu par tests/test_irda_channel.py. Période choisie
+		   pour donner ≥ 2 beacons / 5s sur les loops typiques du Layer 1. */
+		if (((++beacon_n) & 0x1FFFF) == 0)
+			cons_puts("[fw-beacon]\r\n");
 		l1a_compl_execute();
 		osmo_timers_update();
 		sim_handler();

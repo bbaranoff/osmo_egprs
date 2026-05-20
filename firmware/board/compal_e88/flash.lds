@@ -54,6 +54,7 @@ SECTIONS
         LONG(SIZEOF(.ctors) / 4 - 2)
         /* ctor pointers */
         KEEP(*(SORT(.ctors)))
+        KEEP(*(SORT(.init_array)))
         /* end of list */
         LONG(0)
     } > FLASH
@@ -90,8 +91,8 @@ SECTIONS
     PROVIDE(_got_end = ADDR(.got) + SIZEOF(.got));
 
     /* reserved ram  */
-    .compal.reservedram 0x800000 (NOLOAD) : {
-        . = 0xff;
+    .compal.reservedram 0x800038 (NOLOAD) : {
+        . = 0xff - 0x38;
     } > IRAM
 
     /* initialized data */

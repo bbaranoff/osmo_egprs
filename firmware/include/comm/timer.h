@@ -12,10 +12,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #ifndef TIMER_H
@@ -61,7 +57,7 @@ extern unsigned long volatile jiffies;
  * timer management
  */
 void osmo_timer_add(struct osmo_timer_list *timer);
-void osmo_timer_schedule(struct osmo_timer_list *timer, int miliseconds);
+void osmo_timer_schedule(struct osmo_timer_list *timer, int milliseconds);
 void osmo_timer_del(struct osmo_timer_list *timer);
 int osmo_timer_pending(struct osmo_timer_list *timer);
 

@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -300,8 +296,8 @@ static void trf6151_pll_tx(uint32_t freq_khz,
 		/* Low band. We have 3 possible PLL modes that output on
 		 * the right port: GSM900, GSM850_HIGH, GSM850_LOW.
 		 *
-		 * The transistion points have been chosen looking at the VCO
-		 * and IF frequencies for various frequencies for theses modes
+		 * The transition points have been chosen looking at the VCO
+		 * and IF frequencies for various frequencies for these modes
 		 */
 		if (freq_khz < 837100) {
 			/* GSM850_LOW */
@@ -436,7 +432,7 @@ void trf6151_set_arfcn(uint16_t arfcn, int tx)
 	enum trf6151_gsm_band pll_band;
 
 	uplink = !!(arfcn & ARFCN_UPLINK);
-	arfcn != ~ARFCN_UPLINK;
+	arfcn &= ~ARFCN_UPLINK;
 
 	switch (gsm_arfcn2band(arfcn)) {
 	case GSM_BAND_850:

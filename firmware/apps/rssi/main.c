@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -34,6 +30,7 @@
 #include <board.h>
 #include <abb/twl3025.h>
 #include <rf/trf6151.h>
+#include <rf/readcal.h>
 #include <calypso/clock.h>
 #include <calypso/tpu.h>
 #include <calypso/tsp.h>
@@ -81,9 +78,9 @@ char *sync_msg = "";
 static struct band {
 	int min, max, prev, next, freq_ul, freq_dl;
 } bands[] = {
-        { 128, 251, 124, 512, 8242, 8692 }, /* GSM 850 */
-        { 955, 124, 885, 128, 8762, 9212 }, /* P,E,R GSM */
-        { 512, 885, 251, 955, 17102, 18052 }, /* DCS 1800 */
+	{ 128, 251, 124, 512, 8242, 8692 }, /* GSM 850 */
+	{ 940, 124, 885, 128, 8732, 9182 }, /* P,E,(E)R GSM */
+	{ 512, 885, 251, 940, 17102, 18052 }, /* DCS 1800 */
 	{ 0, 0, 0, 0, 0, 0},
 };
 
@@ -170,7 +167,7 @@ static void print_display(char *text, int *y, int c)
 
 static void refresh_display(void)
 {
-	char text[16];
+	char text[32];
 	int bat = battery_info.battery_percent;
 
 	fb_clear();
@@ -919,12 +916,9 @@ static void handle_pm(void)
 			a = arfcn;
 			if (pcs && arfcn >= PCS_MIN && arfcn <= PCS_MAX)
 				a |= ARFCN_PCS;
-			if (uplink)
-				a |= ARFCN_UPLINK;
 			e = a;
 			pm_mode = PM_SENT;
-		}
-		if (mode == MODE_SPECTRUM) {
+		} else { /* mode == MODE_SPECTRUM */
 			if (pcs && arfcn >= PCS_MIN && arfcn <= PCS_MAX) {
 				a = PCS_MIN | ARFCN_PCS;
 				e = PCS_MAX | ARFCN_PCS;
@@ -1215,6 +1209,7 @@ static void enter_rach(void)
 	rach_req->ra = rach_ra;
 	rach_req->offset = 0;
 	rach_req->combined = (ccch_conf == 1);
+	rach_req->uic = 0xff; /* disable, use BSIC instead */
 
 	l1a_l23_rx(SC_DLCI_L1A_L23, msg1);
 	l1a_l23_rx(SC_DLCI_L1A_L23, msg2);
@@ -1260,7 +1255,7 @@ static void handle_assign(void)
 /* Main Program */
 const char *hr = "======================================================================\n";
 
-/* match request reference agains request history */
+/* match request reference against request history */
 static int gsm48_match_ra(struct gsm48_req_ref *ref)
 {
 	uint8_t ia_t1, ia_t2, ia_t3;
@@ -1528,7 +1523,8 @@ int main(void)
 	sercomm_register_rx_cb(SC_DLCI_CONSOLE, console_rx_cb);
 	sercomm_register_rx_cb(SC_DLCI_L1A_L23, l1a_l23_rx_cb);
 
-	layer1_init(0);
+	read_factory_rf_calibration();
+	layer1_init();
 	l1a_l23_tx_cb = l1a_l23_tx;
 
 //	display_unset_attr(DISP_ATTR_INVERT);

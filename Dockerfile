@@ -32,7 +32,7 @@ WORKDIR ${ROOT}
 RUN groupadd osmocom && useradd -r -g osmocom -s /sbin/nologin -d /var/lib/osmocom osmocom && \
     mkdir -p /var/lib/osmocom && chown osmocom:osmocom /var/lib/osmocom
 
-RUN cd /opt/GSM && git clone https://github.com/bbaranoff/firmware
+COPY firmware /opt/GSM/firmware
 
 # 3. Compilation de la pile Osmocom (Ordre respecté)
 RUN for repo in \

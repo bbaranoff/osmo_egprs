@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #ifndef _CALYPSO_SIM_H
@@ -160,7 +156,7 @@ void calypso_sim_powerdown(void);			/* Powerdown simcard */
 
 /* APDU transmission modes */
 #define SIM_APDU_PUT 0		/* Transmit a data body to the card */
-#define SIM_APDU_GET 1		/* Fetch data from the card eg. GET RESOPNSE */
+#define SIM_APDU_GET 1		/* Fetch data from the card eg. GET RESPONSE */
 
 
 void calypso_sim_init(void);				/* Initialize simcard interface */

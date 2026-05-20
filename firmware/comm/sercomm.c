@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -182,7 +178,7 @@ int sercomm_drv_pull(uint8_t *ch)
 			sercomm_unlock(&flags);
 			return 1;
 		} else {
-			/* no more data avilable */
+			/* no more data available */
 			sercomm_unlock(&flags);
 			return 0;
 		}

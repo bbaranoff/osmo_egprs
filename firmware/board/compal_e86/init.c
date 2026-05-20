@@ -15,10 +15,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <stdint.h>
@@ -31,6 +27,7 @@
 #include <keypad.h>
 #include <console.h>
 #include <flash/cfi_flash.h>
+#include <tiffs.h>
 
 #include <calypso/irq.h>
 #include <calypso/clock.h>
@@ -146,4 +143,7 @@ void board_init(int with_irq)
 
 	/* enable LEDB driver of Iota for keypad backlight */
 	twl3025_reg_write(AUXLED, 0x02);
+
+	/* Initialize TIFFS reader (5 sectors of 64 KiB each) */
+	tiffs_init(0x370000, 0x10000, 5);
 }
