@@ -215,7 +215,7 @@ RUN mkdir -p /opt/GSM/qemu/build \
 RUN sed -i \
     -e 's|^/etc/osmocom/status\.sh stop.*|: # status.sh stop neutralisé (osmo_egprs)|' \
     -e 's|^/etc/osmocom/osmo-start\.sh.*|: # osmo-start.sh neutralisé (osmo_egprs)|' \
-    /opt/GSM/qemu-src/run_si.sh
+    /opt/GSM/qemu-src/run.sh
 
 # ── libosmo-dsp (dépendance transceiver/burst_ind) ──────────────────────────
 RUN cd /opt/GSM \
