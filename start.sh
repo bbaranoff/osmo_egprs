@@ -862,8 +862,8 @@ start_bridge_mode() {
 
     rm -f "$all_subscribers_file"
 
-    # ── Attente relays SMS ─────────────────────────────────────────────────
-    if declare -f sms_routing_wait_ready > /dev/null 2>&1; then
+    # ── Attente relays SMS — sautée en no-process (SMSC non lancé) ──────────
+    if [ "${BRIDGE_NO_PROCESS:-0}" != "1" ] && declare -f sms_routing_wait_ready > /dev/null 2>&1; then
         for i in $(seq 1 "$n_operators"); do
             sms_routing_wait_ready "$(op_container "$i")" 90 || true
         done
