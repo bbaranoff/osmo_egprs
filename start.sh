@@ -41,7 +41,7 @@ WAN_PREFIX="66"
 WAN_SIP_BASE=5080
 WAN_RTP_BASE=20000
 WAN_RTP_PER_OP=500
-PHY_MODE="faketrx"   # faketrx | virtphy | qemu
+PHY_MODE="faketrx"   # faketrx | virtphy
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
@@ -639,12 +639,10 @@ start_bridge_mode() {
     echo -e "${CYAN}${BOLD}── PHY Mode ──${NC}"
     echo "  1) faketrx  — fake_trx + trxcon (TRXD, défaut)"
     echo "  2) virtphy  — osmo-bts-virtual + virtphy (multicast) - EXPERIMENTAL !!"
-    echo "  3) qemu     — Calypso QEMU + transceiver + osmo-bts-trx"
     local phy_choice
     read -rp "Mode PHY [1] : " phy_choice
     case "$phy_choice" in
         2) PHY_MODE="virtphy" ;;
-        3) PHY_MODE="qemu" ;;
         *) PHY_MODE="faketrx" ;;
     esac
     echo -e "  ${GREEN}PHY : ${PHY_MODE}${NC}"
@@ -1042,11 +1040,11 @@ start_qemu_mode() {
     local kvm_args=""
     [ -c /dev/kvm ] && kvm_args="--device /dev/kvm"
 
-    # On bypasse l'entrypoint systemd de l'image : run.sh est exécuté
-    # directement comme process normal. On ne lance QUE
-    # /opt/GSM/qemu-src/run.sh — rien d'autre, aucune vérif.
-    # On enchaîne sur `exec bash` : si on quitte le tmux de run.sh, on
-    # garde un shell interactif au lieu de voir le conteneur s'arrêter.
+    # On bypasse l'entrypoint systemd de l'image. Déroulé dans le conteneur :
+    #   1. /etc/osmocom/run.sh en mode RUN_NO_PROCESS=1 : applique/génère les
+    #      configs (MS, TRX, handover) SANS lancer aucun process Osmocom.
+    #   2. /opt/GSM/qemu-src/run.sh : pipeline QEMU Calypso (intact, non modifié).
+    #   3. exec bash : si on quitte le tmux de qemu run.sh, on garde un shell.
     # shellcheck disable=SC2086
     docker run --rm -it --name egprs-qemu --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
@@ -1062,7 +1060,7 @@ start_qemu_mode() {
         $vol_args \
         --entrypoint bash \
         "$IMAGE_RUN" \
-        -c '/opt/GSM/qemu-src/run.sh; exec bash'
+        -c 'RUN_NO_PROCESS=1 /etc/osmocom/run.sh; /opt/GSM/qemu-src/run.sh; exec bash'
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

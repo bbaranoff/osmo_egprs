@@ -3,9 +3,6 @@
 #
 # PHY_MODE=faketrx (défaut) : fake_trx → trxcon → mobile
 # PHY_MODE=virtphy           : osmo-bts-virtual → virtphy → mobile
-# PHY_MODE=qemu              : /opt/GSM/qemu-src/run_si.sh remplace la
-#                              dispatch PHY + mobile ; Asterisk et SMSC sont
-#                              ensuite démarrés normalement.
 #
 set -euo pipefail
 
@@ -19,8 +16,12 @@ GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC
 
 FAKETRX_PY="${FAKETRX_PY:-/opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py}"
 OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-1}"; MOBILE_MODE="${MOBILE_MODE:-combined}"
-PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy | qemu
-QEMU_RUN_SI="${QEMU_RUN_SI:-/opt/GSM/qemu-src/run_si.sh}"
+PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy
+# RUN_NO_PROCESS=1 : prépare/génère uniquement les configs (MS, TRX, handover)
+# et sort SANS lancer aucun process (ni osmo-start, ni fake_trx/trxcon, ni
+# mobile/asterisk/smsc). Utilisé par le mode QEMU de start.sh qui veut juste
+# les configs en place avant de lancer /opt/GSM/qemu-src/run.sh.
+RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
 BB_PORT_BASE=6700; BB_PORT_STEP=3; BTS_PORT_BASE=5700
 L2_SOCK_BASE="/tmp/osmocom_l2"; SAP_SOCK_BASE="/tmp/osmocom_sap"
@@ -28,10 +29,7 @@ L2_SOCK_BASE="/tmp/osmocom_l2"; SAP_SOCK_BASE="/tmp/osmocom_sap"
 [[ ! "$N_MS" =~ ^[0-9]+$ ]] || [ "$N_MS" -lt 1 ] || [ "$N_MS" -gt $MAX_MS ] && N_MS=1
 [[ ! "$OPERATOR_ID" =~ ^[0-9]+$ ]] || [ "$OPERATOR_ID" -lt 1 ] || [ "$OPERATOR_ID" -gt 24 ] && exit 1
 [[ "$MOBILE_MODE" != "combined" && "$MOBILE_MODE" != "split" ]] && MOBILE_MODE="combined"
-[[ "$PHY_MODE" != "faketrx" && "$PHY_MODE" != "virtphy" && "$PHY_MODE" != "qemu" ]] && PHY_MODE="faketrx"
-
-# qemu : 1 Calypso/conteneur (run_si.sh utilise ports UDP fixes).
-[ "$PHY_MODE" = "qemu" ] && [ "$N_MS" -gt 1 ] && N_MS=1
+[[ "$PHY_MODE" != "faketrx" && "$PHY_MODE" != "virtphy" ]] && PHY_MODE="faketrx"
 
 N_TRX=$(( (N_MS + MS_PER_TRX - 1) / MS_PER_TRX ))
 [ "$MOBILE_MODE" = "combined" ] && N_GROUPS=$(( (N_MS + MAX_MS_PER_MOBILE - 1) / MAX_MS_PER_MOBILE )) || N_GROUPS=$N_MS
@@ -231,6 +229,29 @@ inject_handover() {
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Mode no-process : configs seulement, aucun lancement ──────────────────────
+if [ "$RUN_NO_PROCESS" = "1" ]; then
+    echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : génération des configs seulement (aucun process) ===${NC}"
+
+    echo -e "${GREEN}=== [1/3] Config MS ===${NC}"
+    generate_ms_configs
+    echo ""
+
+    echo -e "${GREEN}=== [2/3] TRX ===${NC}"
+    if [ "$PHY_MODE" = "virtphy" ]; then
+        inject_extra_trx_virtual "$N_TRX"
+    else
+        inject_extra_trx "$N_TRX"
+    fi
+
+    echo -e "${GREEN}=== [3/3] Handover ===${NC}"
+    inject_handover
+    echo ""
+
+    echo -e "${GREEN}Configs prêtes (no-process). osmo-start / PHY / mobile / asterisk NON lancés.${NC}"
+    exit 0
+fi
+
 echo -e "${GREEN}=== [1/10] tmux ===${NC}"
 init_tmux
 echo ""
@@ -242,8 +263,6 @@ echo ""
 echo -e "${GREEN}=== [2b] TRX ===${NC}"
 if [ "$PHY_MODE" = "virtphy" ]; then
     inject_extra_trx_virtual "$N_TRX"
-elif [ "$PHY_MODE" = "qemu" ]; then
-    : # run_si.sh gère son BTS, pas d'injection TRX
 else
     inject_extra_trx "$N_TRX"
 fi
@@ -253,57 +272,13 @@ inject_handover
 echo ""
 
 echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
-# Toujours démarrer le core ici, y compris en mode qemu : run_si.sh est
-# patché au build (Dockerfile) pour ne plus appeler status.sh stop /
-# osmo-start.sh, sinon le HLR serait kill juste après le provisioning
-# par start.sh, perdant les abonnés.
 /etc/osmocom/osmo-start.sh
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PHY dispatch : qemu (run_si.sh) | virtphy (multicast) | faketrx (TRXD)
+# PHY : fake_trx (TRXD) OU virtphy (multicast)
 # ══════════════════════════════════════════════════════════════════════════════
 
-if [ "$PHY_MODE" = "qemu" ]; then
-    # ─────────────────────────────────────────────────────────────────────────
-    # MODE QEMU : tout le pipeline RAN (status.sh stop, osmo-start.sh, QEMU,
-    # osmocon, bridge.py, rsl_si_tap, osmo-bts-trx, mobile) est géré par
-    # run_si.sh dans sa propre session tmux "calypso". On ne fait que
-    # l'invoquer en mode batch (stdin=/dev/null) — son `tmux attach` final
-    # échouera proprement et il rendra la main, ce qui nous permet de
-    # continuer avec Asterisk + SMSC ensuite. L'utilisateur peut attacher
-    # interactivement après coup avec : tmux attach -t calypso
-    # ─────────────────────────────────────────────────────────────────────────
-
-    # generate_ms_configs a créé mobile_group1.cfg avec
-    # `layer2-socket /tmp/osmocom_l2_1` (per-MS). En mode qemu, osmocon
-    # publie le L1CTL à /tmp/osmocom_l2 (sans suffixe). On corrige le
-    # config sinon mobile ne peut pas attach et n'expose jamais sa VTY 4247.
-    cfg_qemu="/root/.osmocom/bb/mobile_group1.cfg"
-    if [ -f "$cfg_qemu" ]; then
-        # Pas de `sed -i` : si le fichier est bind-monté (docker -v), le
-        # rename atomique échoue avec EBUSY. On édite en place via une
-        # capture mémoire + truncate-rewrite sur le même inode.
-        new_cfg=$(sed 's|layer2-socket [^[:space:]]*|layer2-socket /tmp/osmocom_l2|' "$cfg_qemu") \
-            && printf '%s\n' "$new_cfg" > "$cfg_qemu"
-    fi
-
-    # systemd auto-respawn osmo-bts-trx (Restart=always). En mode qemu
-    # c'est run_si.sh (tmux window "bts") qui doit posséder le BTS, sinon
-    # le killall -9 de run_si.sh est suivi d'un respawn systemd qui
-    # conflictue sur les ports UDP TRX.
-    systemctl stop    osmo-bts-trx 2>/dev/null || true
-    systemctl disable osmo-bts-trx 2>/dev/null || true
-
-    echo -e "${GREEN}=== [4-7/10] run_si.sh (QEMU+core+mobile) ===${NC}"
-    if [ -x "$QEMU_RUN_SI" ]; then
-        "$QEMU_RUN_SI" </dev/null || true
-        echo -e "  ${GREEN}✓ run_si.sh terminé — pipeline calypso lancé${NC}"
-        echo -e "  ${CYAN}Attache :${NC} tmux attach -t calypso"
-    else
-        echo -e "  ${RED}run_si.sh introuvable : ${QEMU_RUN_SI}${NC}"
-    fi
-
-elif [ "$PHY_MODE" = "virtphy" ]; then
+if [ "$PHY_MODE" = "virtphy" ]; then
     # ─────────────────────────────────────────────────────────────────────────
     # MODE VIRTPHY : osmo-bts-virtual → virtphy → mobile
     #
@@ -387,9 +362,7 @@ fi
 echo ""
 
 echo -e "${GREEN}=== [7/10] Mobile ===${NC}"
-if [ "$PHY_MODE" = "qemu" ]; then
-    echo -e "  ${CYAN}skip — mobile lancé par run_si.sh (tmux session calypso)${NC}"
-elif [ "$MOBILE_MODE" = "split" ]; then
+if [ "$MOBILE_MODE" = "split" ]; then
     for ms in $(seq 1 "$N_MS"); do
         run_in_tmux "ue${ms}" "mobile -c /root/.osmocom/bb/mobile_ms${ms}.cfg"
     done
