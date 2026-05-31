@@ -995,6 +995,30 @@ start_host_mode() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Mode QEMU — RAN virtuel (OsmocomBB sur QEMU Calypso)
+# ══════════════════════════════════════════════════════════════════════════════
+# En mode QEMU on ne lance QUE /opt/GSM/qemu-src/run.sh dans le docker, rien
+# d'autre : pas d'apply_config_templates, pas d'alimentation HLR, et surtout
+# AUCUNE vérification (BB VTY 4247, HLR 4258, STP 4239…) — tout est shunté.
+start_qemu_mode() {
+    echo -e "${GREEN}Démarrage en mode QEMU (RAN virtuel)...${NC}"
+    echo -e "${YELLOW}QEMU : exécution directe de /opt/GSM/qemu-src/run.sh — vérifications (4247, HLR, STP…) shuntées.${NC}"
+    docker rm -f egprs-qemu &>/dev/null || true
+
+    local kvm_args=""
+    [ -c /dev/kvm ] && kvm_args="--device /dev/kvm"
+
+    # shellcheck disable=SC2086
+    docker run --rm -it --name egprs-qemu --net host \
+        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
+        --device /dev/net/tun:/dev/net/tun \
+        $kvm_args \
+        -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+        "$IMAGE_RUN" /opt/GSM/qemu-src/run.sh
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
@@ -1010,10 +1034,12 @@ choose_network_mode() {
     echo -e "${BOLD}Mode réseau :${NC}"
     echo "  1) net-host  — SDR physique, 1 opérateur - HAS TO BE REPAIRED ?"
     echo "  2) bridge    — Multi-opérateurs SS7 inter-op"
-    read -rp "Choix [1/2] : " NET_CHOICE
+    echo "  3) qemu      — RAN virtuel QEMU (run.sh seul, sans vérifications)"
+    read -rp "Choix [1/2/3] : " NET_CHOICE
     case "$NET_CHOICE" in
         1) NETWORK_MODE="host" ;;
         2) NETWORK_MODE="bridge" ;;
+        3) NETWORK_MODE="qemu" ;;
         *) echo -e "${RED}Choix invalide.${NC}"; exit 1 ;;
     esac
 }
@@ -1037,4 +1063,5 @@ check_image
 case "$NETWORK_MODE" in
     host)   start_host_mode ;;
     bridge) start_bridge_mode ;;
+    qemu)   start_qemu_mode ;;
 esac
