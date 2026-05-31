@@ -854,7 +854,7 @@ start_bridge_mode() {
 #!/usr/bin/env bash
 printf '\033]0;QEMU run.sh — ${container_name}\007'
 echo "=== /opt/GSM/qemu-src/run.sh — ${container_name} ==="
-exec sudo docker exec -ti ${container_name} /opt/GSM/qemu-src/run.sh
+exec sudo docker exec -ti ${container_name} bash -c '/opt/GSM/qemu-src/run.sh; exec bash'
 EOF
             chmod +x "$_qscript"
             echo -e "  ${CYAN}[*] qemu-src/run.sh → gnome-terminal${NC}"
@@ -960,7 +960,9 @@ EOF
 #!/usr/bin/env bash
 printf '\033]0;Op${i} — ${OP_NAME[$i]}\007'
 echo "=== Op${i} — ${OP_NAME[$i]} ==="
-exec sudo docker exec -ti ${cname} tmux -S /tmp/osmocom_tmux attach
+# Après détachement tmux (Ctrl-b d), on retombe sur un shell DANS le
+# conteneur au lieu de fermer la fenêtre.
+exec sudo docker exec -ti ${cname} bash -c 'tmux -S /tmp/osmocom_tmux attach; exec bash'
 EOF
         _open_term_script "Op${i} — ${OP_NAME[$i]}" "$tmpscript"
     done
@@ -973,8 +975,9 @@ EOF
     cat > "$tmpscript_stp" <<EOF
 #!/usr/bin/env bash
 printf '\033]0;Inter-STP — logs\007'
-echo "=== ${INTER_STP_CONTAINER} — logs ==="
-exec sudo docker logs -f --tail 100 "${INTER_STP_CONTAINER}"
+echo "=== ${INTER_STP_CONTAINER} — logs (Ctrl-C pour un shell) ==="
+sudo docker logs -f --tail 100 "${INTER_STP_CONTAINER}"
+exec sudo docker exec -ti "${INTER_STP_CONTAINER}" bash
 EOF
     _open_term_script "Inter-STP — logs" "$tmpscript_stp"
 
@@ -1037,7 +1040,23 @@ start_host_mode() {
 
     wait_bb_vty "egprs"
     sleep 3
-    docker exec -it egprs /bin/bash -c "/root/run.sh"
+
+    # run.sh dans un gnome-terminal (TTY interactif), comme les autres modes.
+    local _du="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+    local _disp="${DISPLAY:-:0}"
+    local _xauth="${XAUTHORITY:-/home/$_du/.Xauthority}"
+    local _hscript="/tmp/osmo-gnome-host.sh"
+    cat > "$_hscript" <<'EOF'
+#!/usr/bin/env bash
+printf '\033]0;net-host — egprs\007'
+echo "=== net-host — egprs run.sh ==="
+exec sudo docker exec -ti egprs /bin/bash -c "/root/run.sh; exec bash"
+EOF
+    chmod +x "$_hscript"
+    echo -e "  ${CYAN}[*] run.sh → gnome-terminal${NC}"
+    DISPLAY="$_disp" XAUTHORITY="$_xauth" \
+        gnome-terminal -- bash "$_hscript" 2>/dev/null &
+    sleep 0.3
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1080,13 +1099,11 @@ start_qemu_mode() {
     local kvm_args=""
     [ -c /dev/kvm ] && kvm_args="--device /dev/kvm"
 
-    # On bypasse l'entrypoint systemd de l'image. Déroulé dans le conteneur :
-    #   1. /etc/osmocom/run.sh en mode RUN_NO_PROCESS=1 : applique/génère les
-    #      configs (MS, TRX, handover) SANS lancer aucun process Osmocom.
-    #   2. /opt/GSM/qemu-src/run.sh : pipeline QEMU Calypso (intact, non modifié).
-    #   3. exec bash : si on quitte le tmux de qemu run.sh, on garde un shell.
+    # Conteneur lancé détaché (no-process : configs + core, aucun process
+    # radio), puis /opt/GSM/qemu-src/run.sh attaché dans un gnome-terminal
+    # (TTY interactif), comme les autres modes.
     # shellcheck disable=SC2086
-    docker run --rm -it --name egprs-qemu --net host \
+    docker run -d --name egprs-qemu --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
         --device /dev/net/tun:/dev/net/tun \
         $kvm_args \
@@ -1100,7 +1117,23 @@ start_qemu_mode() {
         $vol_args \
         --entrypoint bash \
         "$IMAGE_RUN" \
-        -c 'RUN_NO_PROCESS=1 /etc/osmocom/run.sh; /opt/GSM/qemu-src/run.sh; exec bash'
+        -c 'RUN_NO_PROCESS=1 /etc/osmocom/run.sh; sleep infinity'
+
+    local _du="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+    local _disp="${DISPLAY:-:0}"
+    local _xauth="${XAUTHORITY:-/home/$_du/.Xauthority}"
+    local _qscript="/tmp/osmo-gnome-qemu.sh"
+    cat > "$_qscript" <<'EOF'
+#!/usr/bin/env bash
+printf '\033]0;QEMU run.sh — egprs-qemu\007'
+echo "=== /opt/GSM/qemu-src/run.sh — egprs-qemu ==="
+exec sudo docker exec -ti egprs-qemu bash -c '/opt/GSM/qemu-src/run.sh; exec bash'
+EOF
+    chmod +x "$_qscript"
+    echo -e "  ${CYAN}[*] qemu-src/run.sh → gnome-terminal${NC}"
+    DISPLAY="$_disp" XAUTHORITY="$_xauth" \
+        gnome-terminal -- bash "$_qscript" 2>/dev/null &
+    sleep 0.3
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
