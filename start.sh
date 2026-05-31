@@ -1037,7 +1037,23 @@ start_host_mode() {
 
     wait_bb_vty "egprs"
     sleep 3
-    docker exec -it egprs /bin/bash -c "/root/run.sh"
+
+    # run.sh dans un gnome-terminal (TTY interactif), comme les autres modes.
+    local _du="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+    local _disp="${DISPLAY:-:0}"
+    local _xauth="${XAUTHORITY:-/home/$_du/.Xauthority}"
+    local _hscript="/tmp/osmo-gnome-host.sh"
+    cat > "$_hscript" <<'EOF'
+#!/usr/bin/env bash
+printf '\033]0;net-host — egprs\007'
+echo "=== net-host — egprs run.sh ==="
+exec sudo docker exec -ti egprs /bin/bash -c "/root/run.sh"
+EOF
+    chmod +x "$_hscript"
+    echo -e "  ${CYAN}[*] run.sh → gnome-terminal${NC}"
+    DISPLAY="$_disp" XAUTHORITY="$_xauth" \
+        gnome-terminal -- bash "$_hscript" 2>/dev/null &
+    sleep 0.3
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
