@@ -229,28 +229,10 @@ inject_handover() {
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Mode no-process : configs seulement, aucun lancement ──────────────────────
-if [ "$RUN_NO_PROCESS" = "1" ]; then
-    echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : génération des configs seulement (aucun process) ===${NC}"
-
-    echo -e "${GREEN}=== [1/3] Config MS ===${NC}"
-    generate_ms_configs
-    echo ""
-
-    echo -e "${GREEN}=== [2/3] TRX ===${NC}"
-    if [ "$PHY_MODE" = "virtphy" ]; then
-        inject_extra_trx_virtual "$N_TRX"
-    else
-        inject_extra_trx "$N_TRX"
-    fi
-
-    echo -e "${GREEN}=== [3/3] Handover ===${NC}"
-    inject_handover
-    echo ""
-
-    echo -e "${GREEN}Configs prêtes (no-process). osmo-start / PHY / mobile / asterisk NON lancés.${NC}"
-    exit 0
-fi
+# RUN_NO_PROCESS=1 : on prépare tmux + configs + core Osmocom (osmo-start :
+# STP/HLR/MGW/MSC/BSC… → le HLR est up et peut être alimenté par start.sh),
+# mais on NE lance PAS les process radio/mobile/asterisk/smsc dans le tmux.
+[ "$RUN_NO_PROCESS" = "1" ] && echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : core seul, PHY/mobile/asterisk/smsc NON lancés ===${NC}"
 
 echo -e "${GREEN}=== [1/10] tmux ===${NC}"
 init_tmux
@@ -273,6 +255,15 @@ echo ""
 
 echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
+
+# Mode no-process : le core tourne (HLR alimentable par start.sh), on
+# s'arrête ici sans lancer PHY/mobile/asterisk/smsc dans le tmux.
+if [ "$RUN_NO_PROCESS" = "1" ]; then
+    echo ""
+    echo -e "${GREEN}Core Osmocom prêt (no-process). PHY/mobile/asterisk/smsc NON lancés.${NC}"
+    echo -e "  tmux : ${CYAN}tmux -S ${TMUX_SOCKET} attach -t ${SESSION}${NC}"
+    exit 0
+fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PHY : fake_trx (TRXD) OU virtphy (multicast)
