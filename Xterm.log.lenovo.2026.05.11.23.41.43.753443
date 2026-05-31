@@ -1,0 +1,295 @@
+^C[1;23r[1;1H[3S[21dSignal 2 received.[K
+Performing shutdown with clean detach, if possible...[K
+[K[1;24r[23;1H[1;23r[1;1H[2S[21d[31m[1m<000e> l1ctl.c:268 LOSS counter for ACCH 31
+<000e> l1ctl.c:278 Dropping frame with 55 bit errors(B[m[K
+[K[1;24r[23;1H[1;23r[23;80H
+[22;1H[31m[1m<000e> l1ctl.c:268 LOSS counter for ACCH 30(B[m
+[K[1;24r[23;1H[1;23r[23;80H
+[22;1H[31m[1m<000e> l1ctl.c:278 Dropping frame with 55 bit errors(B[m
+[K[1;24r[23;1H[1;23r[1;1H[13S[9B[35m[1m<0013> app_mobile.c:217 Power off! (MS 1)
+<0013> app_mobile.c:149 MS '1' has been reset(B[m[K
+full talloc report on 'layer2 context' (total   1777 bytes in  12 blocks)[K
+    172.20.0.1                     contains     11 bytes in   1 blocks (ref 0) 0x5ca54e478230[K
+    struct sched_vty_opts          contains     72 bytes in   1 blocks (ref 0) 0x5ca54e3e8d60[K
+    utils.c:386                    contains    356 bytes in   1 blocks (ref 0) 0x5ca54e351160[K
+    utils.c:386                    contains    129 bytes in   1 blocks (ref 0) 0x5ca54e351bf0[K
+    utils.c:386                    contains    319 bytes in   1 blocks (ref 0) 0x5ca54e3ad140[K
+[K[1;24r[23;1H[1;23r[1;1H[12S[10B    utils.c:386                    contains    126 bytes in   1 blocks (ref 0) 0x5ca54e355800[K
+    utils.c:386                    contains    237 bytes in   1 blocks (ref 0) 0x5ca54e379880[K
+    utils.c:386                    contains    165 bytes in   1 blocks (ref 0) 0x5ca54e3ad030[K
+    utils.c:386                    contains    199 bytes in   1 blocks (ref 0) 0x5ca54e3791f0[K
+    utils.c:386                    contains    162 bytes in   1 blocks (ref 0) 0x5ca54e3acf20[K
+    msgb                           contains      0 bytes in   1 blocks (ref 0) 0x5ca54e317b70[K
+[K[1;24r[23;1Hroot@236e8b0159fc:/etc/osmocom# [?2004hclear[1;23r[23;80H
+[K[1;24r[23;1H[?2004l[1;23r[1;1H[2;23r[22S[1;1H[K[1;24r[1;1Hroot@236e8b0159fc:/etc/osmocom# [?2004h[?25l[30m[42m[24;1H[osmocom] <rx  2:trxcon0  3:ue_g1* 4:asterisk  5:>"236e8b0159fc" 21:42 11-May-26(B[m[?12l[?25h[1;33H[?25l[30m[42m[24;1H[osmocom] <rx  2:trxcon0  3:ue_g1* 4:asterisk  5:>"236e8b0159fc" 21:43 11-May-26(B[m[?12l[?25h[1;33Hclear[1;33Hmobile -c /root/.osmocom/bb/mobile_group1.cfg
+[?2004lCopyright (C) 2010-2015 Andreas Eversberg, Sylvain Munaut, Holger Freyther, Harald Welte
+Contributions by Alex Badea, Pablo Neira, Steve Markgraf and others[6;1HLicense GPLv2+: GNU GPL version 2 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.[10;1H[35m[1m<0013> app_mobile.c:295 Mobile '1' initialized, please start phone now!
+(B[m<001e> telnet_interface.c:88 Available via telnet 127.0.0.1 4247
+[31m[1m<000e> l1ctl.c:278 Dropping frame with 55 bit errors
+(B[m[31m[1m<000e> l1ctl.c:278 Dropping frame with 55 bit errors
+(B[m[31m[1m<000e> l1ctl.c:278 Dropping frame with 55 bit errors
+(B[m[31m[1m<000e> l1ctl.c:278 Dropping frame with 55 bit errors
+(B[m[31m[1m<000e> l1ctl.c:278 Dropping frame with 55 bit errors
+(B[m[31m[1m<000e> l1ctl.c:278 Dropping frame with 55 bit errors
+(B[m[34m[1m<0001> gsm48_rr.c:2878 Changing CCCH_MODE to 2
+(B[m[34m[1m<0001> sysinfo.c:860 Now updating previously received SYSTEM INFORMATION 4
+(B[m[34m[1m<0001> gsm48_rr.c:2688 Complete set of SI5* for BA(1)
+(B[m[32m[1m<0005> gsm48_mm.c:4618 Message unhandled at this state.
+(B[m[1;23r[23;80H
+[21;1H[31m[1m<000e> l1ctl.c:268 LOSS counter for ACCH 31
+<000e> l1ctl.c:278 Dropping frame with 61 bit errors(B[m
+[K[1;24r[23;1H[1;23r[23;80H
+[22;1H[31m[1m<000e> l1ctl.c:278 Dropping frame with 59 bit errors(B[m
+[K[1;24r[23;1H[1;23r[1;1H[2S[21d[32m[1m<0005> subscriber.c:312 Updating LOCI on test SIM: not implemented!
+<0005> subscriber.c:312 Updating LOCI on test SIM: not implemented!(B[m[K
+[K[1;24r[23;1H[1;23r[1;1H[2S[21d[31m[1m<000e> l1ctl.c:268 LOSS counter for ACCH 31
+<000e> l1ctl.c:278 Dropping frame with 59 bit errors(B[m[K
+[K[1;24r[23;1H[1;23r[1;1H[2S[21d[31m[1m<000e> l1ctl.c:268 LOSS counter for ACCH 30
+<000e> l1ctl.c:278 Dropping frame with 60 bit errors(B[m[K
+[K[1;24r[23;1H[1;23r[23;80H
+[22;1H[32m<0002> gsm322.c:3783 Event EVENT_REG_SUCCESS unhandled in state A2 on PLMN.[39m
+[K[1;24r[23;1H[?25l[30m[42m
+[osmocom] <rx  2:trxcon0  3:ue_g1* 4:asterisk  5:>"236e8b0159fc" 21:44 11-May-26(B[m[?12l[?25h[23;1H[?25l[H<0000> gsup_rx.c:115 Unhandled GSUP message type OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT[K
+2026-05-11T21:32:06 [RELAY-OP2] INFO Incoming interop MT: 10001 _ 20001[K
+2026-05-11T21:32:06 [RELAY-OP2] INFO HLR match: MSISDN 20001 _ IMSI 001020002000001[K
+<0000> send_mt.c:41 forwarding msg of 55 bytes from local socket[K
+2026-05-11T21:32:06 [RELAY-OP2] INFO MT SMS injected: IMSI=001020002000001[K
+<0000> gsup_rx.c:104 Rx GSUP OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT: [L1]> 00 2b ee 05 [L2]> 2a 01 08 00 01 02 00 02 00 00 f1 40 01 00 0a 01 02 60 0c 56 4c 52 2d 53 44 52 2d 4f 50 32 00 61 09 53 4d 53 43 2d 4f 50 32 00 [K
+<0000> gsup_rx.c:115 Unhandled GSUP message type OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT[K
+2026-05-11T21:40:07 [RELAY-OP2] INFO Incoming interop MT: 10001 _ 20001[K
+2026-05-11T21:40:07 [RELAY-OP2] INFO HLR match: MSISDN 20001 _ IMSI 001020002000001[K
+<0000> send_mt.c:41 forwarding msg of 63 bytes from local socket[K
+2026-05-11T21:40:07 [RELAY-OP2] INFO MT SMS injected: IMSI=001020002000001[K
+<0000> gsup_rx.c:104 Rx GSUP OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT: [L1]> 00 2b ee 05 [L2]> 2a 01 08 00 01 02 00 02 00 00 f1 40 01 00 0a 01 02 60 0c 56 4c 52 2d 53 44 52 2d 4f 50 32 00 61 09 53 4d 53 43 2d 4f 50 32 00 [K
+<0000> gsup_rx.c:115 Unhandled GSUP message type OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT[K
+[K[30m[42m
+[osmocom] <2:trxcon0  3:ue_g1- 4:asterisk  5:smsc*"236e8b0159fc" 21:44 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[43m
+Can't find window: 6                                                            (B[m[23;1H[H<0000> gsup_rx.c:115 Unhandled GSUP message type OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT[K
+2026-05-11T21:32:06 [RELAY-OP2] INFO Incoming interop MT: 10001 _ 20001[K
+2026-05-11T21:32:06 [RELAY-OP2] INFO HLR match: MSISDN 20001 _ IMSI 001020002000001[K
+<0000> send_mt.c:41 forwarding msg of 55 bytes from local socket[K
+2026-05-11T21:32:06 [RELAY-OP2] INFO MT SMS injected: IMSI=001020002000001[K
+<0000> gsup_rx.c:104 Rx GSUP OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT: [L1]> 00 2b ee 05 [L2]> 2a 01 08 00 01 02 00 02 00 00 f1 40 01 00 0a 01 02 60 0c 56 4c 52 2d 53 44 52 2d 4f 50 32 00 61 09 53 4d 53 43 2d 4f 50 32 00 [K
+<0000> gsup_rx.c:115 Unhandled GSUP message type OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT[K
+2026-05-11T21:40:07 [RELAY-OP2] INFO Incoming interop MT: 10001 _ 20001[K
+2026-05-11T21:40:07 [RELAY-OP2] INFO HLR match: MSISDN 20001 _ IMSI 001020002000001[K
+<0000> send_mt.c:41 forwarding msg of 63 bytes from local socket[K
+2026-05-11T21:40:07 [RELAY-OP2] INFO MT SMS injected: IMSI=001020002000001[K
+<0000> gsup_rx.c:104 Rx GSUP OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT: [L1]> 00 2b ee 05 [L2]> 2a 01 08 00 01 02 00 02 00 00 f1 40 01 00 0a 01 02 60 0c 56 4c 52 2d 53 44 52 2d 4f 50 32 00 61 09 53 4d 53 43 2d 4f 50 32 00 [K
+<0000> gsup_rx.c:115 Unhandled GSUP message type OSMO_GSUP_MSGT_MT_FORWARD_SM_RESULT[K
+[K[30m[42m
+[osmocom] <2:trxcon0  3:ue_g1- 4:asterisk  5:smsc*"236e8b0159fc" 21:44 11-May-26(B[m[23;1H[?12l[?25h[?25l[H[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[osmocom] <0  3:ue_g1  4:asterisk  5:smsc- 6:bash*"236e8b0159fc" 21:44 11-May-26(B[m[?12l[?25h[1;1Hroot@236e8b0159fc:/etc/osmocom# [?2004htelnet 0 442  32  247
+[?2004lTrying 0.0.0.0...
+Connected to 0.
+Escape character is '^]'.
+Welcome to the OsmocomBB(mobile) VTY interface[7;1HOsmocomBB(mobile)> [?25l[30m[42m[24;1H[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:44 11-May-26(B[m[?12l[?25h[7;20Hen
+OsmocomBB(mobile)# 
+% (MS 1)
+% SMS from 10001: 'Hello wasssaaaa'
+
+% (MS 1)
+% On Network, normal service: Test, 02
+
+% (MS 1)
+% Incoming call (from 10001)
+[?25l[30m[42m[24d[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:45 11-May-26(B[m[?12l[?25h[17;1H
+OsmocomBB(mobile)# call 1 ans
+OsmocomBB(mobile)# call 1 answer 
+OsmocomBB(mobile)# 
+% (MS 1)
+% Call is connected
+[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:46 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:47 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:48 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:49 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:50 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:51 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:52 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:53 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:54 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:55 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:56 11-May-26(B[m[?12l[?25h[23;1H[1;23r[23;80H
+OsmocomBB(mobile)# [K[1;24r[23;20Hcall 1 han[1;23r[23;80H
+OsmocomBB(mobile)# call 1 hangup [K[1;24r[23;34H[1;23r[23;80H
+OsmocomBB(mobile)# [K[1;24r[23;20H[1;23r[1;1H[3S[21d% (MS 1)[K
+% Call has been released[K
+[K[1;24r[23;1H[1;23r[1;1H[3S[21d% (MS 1)[K
+% On Network, normal service: Test, 02[K
+[K[1;24r[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:57 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:58 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 21:59 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:00 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:01 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:02 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:03 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:04 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:05 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:06 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:07 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:08 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:09 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:10 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:11 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:12 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:13 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:14 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:15 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:16 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:17 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:18 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:19 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:20 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:21 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:22 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:23 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:24 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:25 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:26 11-May-26(B[m[?12l[?25h[23;1H[1;23r[1;1H[3S[21d% (MS 1)[K
+% On Network, normal service: Test, 02[K
+[K[1;24r[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:27 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:28 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:29 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:30 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:31 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:32 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:33 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:34 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:35 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:36 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:37 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:38 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:39 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:40 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:41 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:42 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:43 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:44 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:45 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:46 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:47 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:48 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:49 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:50 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:51 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:52 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:53 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:54 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:55 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:56 11-May-26(B[m[?12l[?25h[23;1H[1;23r[1;1H[3S[21d% (MS 1)[K
+% On Network, normal service: Test, 02[K
+[K[1;24r[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:57 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:58 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 22:59 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:00 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:01 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:02 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:03 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:04 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:05 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:06 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:07 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:08 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:09 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:10 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:11 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:12 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:13 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:14 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:15 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:16 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:17 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:18 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:19 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:20 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:21 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:22 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:23 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:24 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:25 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:26 11-May-26(B[m[?12l[?25h[23;1H[1;23r[1;1H[3S[21d% (MS 1)[K
+% On Network, normal service: Test, 02[K
+[K[1;24r[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:27 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:28 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:29 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:30 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:31 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:32 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:33 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:34 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:35 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:36 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:37 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:38 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:39 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:40 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:41 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:42 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:43 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:44 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:45 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:46 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:47 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:48 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:49 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:50 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:51 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:52 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:53 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:54 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:55 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:56 11-May-26(B[m[?12l[?25h[23;1H[1;23r[1;1H[3S[21d% (MS 1)[K
+% On Network, normal service: Test, 02[K
+[K[1;24r[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:57 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:58 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 23:59 11-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:00 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:01 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:02 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:03 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:04 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:05 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:06 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:07 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:08 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:09 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:10 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:11 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:12 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:13 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:14 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:15 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:16 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:17 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:18 12-May-26(B[m[?12l[?25h[23;1H[?25l[30m[42m
+[osmocom] < 3:ue_g1  4:asterisk  5:smsc- 6:telnet*"236e8b0159fc" 00:19 12-May-26(B[m[?12l[?25h[23;1H

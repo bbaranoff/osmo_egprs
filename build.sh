@@ -1,8 +1,27 @@
 #!/bin/bash
+set -euo pipefail
+
+# 0. Parsing des arguments
+NO_CACHE=""
+for arg in "$@"; do
+    case "$arg" in
+        --no-cache)
+            NO_CACHE="--no-cache"
+            ;;
+        -h|--help)
+            echo "Usage: sudo $0 [--no-cache]"
+            echo "  --no-cache   Force la reconstruction complète de l'image (paquets propres)."
+            exit 0
+            ;;
+        *)
+            echo -e "\033[0;33m[WARN] Argument inconnu ignoré : $arg\033[0m"
+            ;;
+    esac
+done
 
 # 1. Vérification des privilèges ROOT
 if [[ $EUID -ne 0 ]]; then
-   echo -e "\033[0;31m[ERREUR] Ce script doit être lancé en tant que root (sudo).\033[0m" 
+   echo -e "\033[0;31m[ERREUR] Ce script doit être lancé en tant que root (sudo).\033[0m"
    exit 1
 fi
 
@@ -12,24 +31,25 @@ echo "--- Préparation complète de l'hôte (SDR & Docker) ---"
 if ! command -v docker &> /dev/null; then
     echo "[*] Docker n'est pas installé. Installation en cours..."
     apt-get update
-    apt-get install -y docker.io docker-compose-v2 wireshark 
-    linphone-desktop xterm whiptail expect netcat-openbsd telnet 
-    iproute2 pulseaudio-utils
+    apt-get install -y docker.io docker-compose-v2
 fi
 
 # 3. Installation des dépendances critiques sur l'hôte
 # SCTP est vital pour les protocoles de signalisation Osmocom
 echo "[*] Installation de SCTP, TUN et D-Bus sur l'hôte..."
 apt-get update
-apt-get install -y lksctp-tools libsctp-dev dbus tunctl libusb-1.0-0-dev
+apt-get install -y lksctp-tools libsctp-dev dbus uml-utilities libusb-1.0-0-dev \
+     wireshark linphone-desktop xterm whiptail expect netcat-openbsd \
+     telnet iproute2 pulseaudio-utils
 
 # 4. Chargement des modules noyau
 echo "[*] Chargement des modules noyau (SCTP & TUN)..."
 modprobe sctp
 modprobe tun
 
-# Vérification du module SCTP
-if lsmod | grep -q sctp; then
+# Vérification du module SCTP (lecture directe de /proc/modules : pas de tube,
+# donc pas de SIGPIPE/pipefail, et ancrage sur le nom de module exact)
+if grep -q '^sctp ' /proc/modules; then
     echo -e "\033[0;32m[OK] Module SCTP chargé sur l'hôte.\033[0m"
 else
     echo -e "\033[0;31m[ERREUR] Impossible de charger SCTP.\033[0m"
@@ -37,11 +57,10 @@ fi
 
 # 5. Lancement du build Docker
 echo "--- Lancement du build de l'image osmocom-nitb ---"
-# On utilise --no-cache si tu veux une installation propre des paquets dans le container
-docker build . -t osmocom-nitb
-
-# 6. Vérification du succès
-if [ $? -eq 0 ]; then
+if [[ -n "$NO_CACHE" ]]; then
+    echo "[*] Mode --no-cache actif : reconstruction complète, paquets propres."
+fi
+if docker build $NO_CACHE . -t osmocom-nitb; then
     echo -e "\033[0;32m[OK] Image osmocom-nitb construite avec succès.\033[0m"
 else
     echo -e "\033[0;31m[ERREUR] Le build Docker a échoué.\033[0m"

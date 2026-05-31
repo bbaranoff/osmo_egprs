@@ -32,6 +32,8 @@ WORKDIR ${ROOT}
 RUN groupadd osmocom && useradd -r -g osmocom -s /sbin/nologin -d /var/lib/osmocom osmocom && \
     mkdir -p /var/lib/osmocom && chown osmocom:osmocom /var/lib/osmocom
 
+COPY firmware /opt/GSM/firmware
+
 # 3. Compilation de la pile Osmocom (Ordre respecté)
 RUN for repo in \
     libosmocore:1.12.1 \
@@ -46,8 +48,9 @@ RUN for repo in \
     osmo-sgsn:1.13.1 \
     osmo-msc:1.15.0 \
     osmo-bsc:1.14.0 \
-    osmo-pcu:1.5.2 \
+    osmo-trx:1.7.2 \
     osmo-bts:1.10.0 \
+    osmo-pcu:1.5.2 \
     osmo-sip-connector:1.7.2 \
     libosmo-gprs:0.2.1; \
     do \
@@ -71,6 +74,7 @@ RUN for repo in \
     if [ "$name" = "libosmo-abis" ]; then EXTRA_FLAGS="--disable-dahdi"; fi && \
     if [ "$name" = "osmo-msc" ]; then EXTRA_FLAGS="--enable-smpp"; fi && \
     if [ "$name" = "osmo-mgw" ]; then EXTRA_FLAGS="--enable-alsa"; fi && \
+    if [ "$name" = "osmo-trx" ]; then EXTRA_FLAGS="--with-ipc"; fi && \
     if [ "$name" = "osmo-bts" ]; then EXTRA_FLAGS="--enable-virtual --enable-trx"; fi && \
     if [ "$name" = "osmo-ggsn" ]; then EXTRA_FLAGS="--enable-gtp-linux"; fi && \
     \
@@ -90,11 +94,15 @@ RUN cd ${ROOT} && \
     ldconfig
 
     
+# ── Calypso build ─────────────────────────────
+
 RUN cd ${ROOT} && \
     git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
     cd osmocom-bb/src && \
-    # nofirmware désactive la compilation des firmwares .bin pour les téléphones
-    make nofirmware -j$(nproc)
+    # Build complet : firmware (layer1.bin/.elf pour Calypso) + outils host
+    # (mobile, trxcon, virtphy, ccch_scan). Le firmware est nécessaire pour
+    # le mode PHY_MODE=qemu où QEMU émule un Calypso et exécute layer1.
+    make nofirmware
 
 # ── gsup-smsc-proto : SMSC externe connecté à OsmoHLR via GSUP ────────────────
 # Programmes : proto-smsc-daemon (réception MO SMS + relai MT via GSUP)
@@ -161,5 +169,90 @@ RUN chmod +x /root/run.sh
 
 # Répertoires pour le proto-SMSC
 RUN mkdir -p /var/log/osmocom /var/run/smsc
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QEMU Calypso — RAN virtuel (baseband émulé)
+# ─────────────────────────────────────────────────────────────────────────────
+# Architecture :
+#   - QEMU émule un SoC Calypso (ARM7TDMI + DSP TMS320C54x)
+#   - L'ARM exécute le vrai firmware osmocom-bb layer1.highram.elf
+#   - Le DSP charge le ROM réel (calypso_dsp.txt) au boot
+#   - bridge.py relaie les bursts entre osmo-bts-trx (UDP 5700-5702)
+#     et la BSP du DSP (UDP 6702), avec QEMU comme maître d'horloge TDMA
+#   - Le mobile (layer23) se connecte directement au socket L1CTL
+#     publié par le firmware via la PTY série de QEMU
+#
+# Voir scripts/run.sh PHY_MODE=qemu pour l'orchestration runtime.
+# ─────────────────────────────────────────────────────────────────────────────
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-venv python3-pip python3-numpy python3-scipy \
+    libglib2.0-dev libpixman-1-dev libslirp-dev \
+    socat ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build QEMU fork bbaranoff/qemu (cible arm-softmmu, machine "calypso")
+RUN cd /opt/GSM \
+    && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
+    && cd /opt/GSM/qemu-src \
+    && python3 -m venv /root/.venv-qemu \
+    && . /root/.venv-qemu/bin/activate \
+    && pip install --no-cache-dir tomli \
+    && mkdir build && cd build \
+    && ../configure --target-list=arm-softmmu --prefix=/opt/GSM/qemu-install --disable-werror \
+    && make -j$(nproc) \
+    && make install \
+    && cp /opt/GSM/qemu-install/bin/qemu-system-arm /usr/local/bin/qemu-system-arm
+
+# Layout stable attendu par scripts/run.sh : /opt/GSM/qemu/{build,bridge.py,sercomm_udp.py,...}
+RUN mkdir -p /opt/GSM/qemu/build \
+    && cp /opt/GSM/qemu-src/*.py /opt/GSM/qemu/ 2>/dev/null || true \
+    && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
+    && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
+
+# ── libosmo-dsp (dépendance transceiver/burst_ind) ──────────────────────────
+RUN cd /opt/GSM \
+    && git clone https://gitea.osmocom.org/sdr/libosmo-dsp.git \
+    && cd libosmo-dsp \
+    && autoreconf -fi \
+    && ./configure \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig
+
+# ── GCC 9 pour osmocom-bb branches expérimentales (jolly/testing, burst_ind) ─
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc-9 g++-9 gcc-11 g++-11 \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 \
+       --slave /usr/bin/g++ g++ /usr/bin/g++-9 \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110 \
+       --slave /usr/bin/g++ g++ /usr/bin/g++-11
+
+RUN update-alternatives --set gcc /usr/bin/gcc-9
+
+# osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
+RUN git clone --branch jolly/testing --depth 1 \
+        https://gitea.osmocom.org/phone-side/osmocom-bb.git \
+        /opt/GSM/osmocom-bb-transceiver \
+    && cd /opt/GSM/osmocom-bb-transceiver/src \
+    && make HOST_layer23_CONFARGS=--enable-transceiver nofirmware -j$(nproc) \
+    && cp /opt/GSM/osmocom-bb-transceiver/src/host/layer23/src/transceiver/transceiver \
+       /usr/local/bin/transceiver
+
+# osmocom-bb fixeria/burst_ind → ccch_scan / bcch_scan / cell_log
+RUN git clone --branch fixeria/burst_ind --depth 1 \
+        https://gitea.osmocom.org/phone-side/osmocom-bb.git \
+        /opt/GSM/osmocom-bb-burst_ind \
+    && cd /opt/GSM/osmocom-bb-burst_ind/src \
+    && make nofirmware -j$(nproc) \
+    && cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/ccch_scan \
+       /usr/local/bin/ccch_scan \
+    && cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/bcch_scan \
+       /usr/local/bin/bcch_scan 2>/dev/null || true \
+    && cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/cell_log \
+       /usr/local/bin/cell_log 2>/dev/null || true
+
+RUN update-alternatives --set gcc /usr/bin/gcc-11
 
 CMD ["/bin/bash"]

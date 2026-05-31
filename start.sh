@@ -77,6 +77,7 @@ banner() {
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
+
 # ── Loopback audio côté session utilisateur ───────────────────────────────
 enable_user_loopback() {
     local target_user target_uid target_runtime loopback_script
@@ -176,10 +177,10 @@ build_alsa_args() {
 # ══════════════════════════════════════════════════════════════════════════════
 build_run_image() {
     echo -e "${GREEN}Build de l'image run...${NC}"
-    docker build --no-cache -f Dockerfile.run -t "$IMAGE_RUN" . \
-        < /dev/null > /tmp/docker-build.log 2>&1
+    docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
 }
+
 check_image() {
     if ! docker image inspect "$IMAGE_RUN" &>/dev/null; then
         echo -e "${RED}Image '$IMAGE_RUN' introuvable — build en cours...${NC}"
@@ -321,8 +322,10 @@ apply_config_templates() {
     # mobile.cfg
     if [ -f "configs/mobile.cfg.template" ]; then
         cp "configs/mobile.cfg.template" "$dest/bb/mobile.cfg"
+        cp "configs/mobile.cfg.template" "$dest/bb/mobile_group1.cfg"
     elif [ -f "configs/mobile.cfg" ]; then
         cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
+        cp "configs/mobile.cfg" "$dest/bb/mobile_group1.cfg"
     fi
 
     # Calculs dérivés
@@ -427,6 +430,9 @@ build_vol_args() {
     done
     if [ -f "$tmpdir/bb/mobile.cfg" ]; then
         vol_args="$vol_args -v $tmpdir/bb/mobile.cfg:/root/.osmocom/bb/mobile.cfg"
+    fi
+    if [ -f "$tmpdir/bb/mobile_group1.cfg" ]; then
+        vol_args="$vol_args -v $tmpdir/bb/mobile_group1.cfg:/root/.osmocom/bb/mobile_group1.cfg"
     fi
     echo "$vol_args"
 }
@@ -772,7 +778,7 @@ start_bridge_mode() {
             $port_args \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             -v /tmp/osmocom-logs/op${i}:/var/log/osmocom \
-            --tmpfs /tmp \
+            --tmpfs /tmp:exec,mode=1777,size=512m \
             --tmpfs /run:exec,size=64m \
             --tmpfs /run/lock \
             -e OPERATOR_ID="$i" \
@@ -980,7 +986,7 @@ start_host_mode() {
         --device /dev/net/tun:/dev/net/tun \
         $alsa_args \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec,mode=1777,size=512m \
         -e CONTAINER_IP="$src_ip" -e GATEWAY_IP="$gw_ip" \
         -e OPERATOR_ID="1" -e N_MS="$n_ms" \
         -e INTER_STP_IP="127.0.0.1" \
@@ -1086,10 +1092,14 @@ choose_network_mode() {
 # ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
-# Main
 banner
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
+
+# Cleanup résiduel
+docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
+docker rm -f $(docker ps -aq --filter "name=egprs") 2>/dev/null || true
+docker network ls --filter "name=gsm-" -q | xargs -r docker network rm 2>/dev/null || true
 
 # 1. Toutes les questions d'abord (avant tout restart)
 choose_network_mode
