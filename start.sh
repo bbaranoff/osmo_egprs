@@ -1003,6 +1003,63 @@ start_host_mode() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Mode QEMU — RAN virtuel (OsmocomBB sur QEMU Calypso)
+# ══════════════════════════════════════════════════════════════════════════════
+# En mode QEMU on applique bien les templates de config (comme net-host),
+# mais on ne lance QUE /opt/GSM/qemu-src/run.sh dans le docker — rien d'autre :
+# pas d'alimentation HLR, et surtout AUCUNE vérification (BB VTY 4247, HLR 4258,
+# STP 4239…) — tout est shunté.
+start_qemu_mode() {
+    echo -e "${GREEN}Démarrage en mode QEMU (RAN virtuel)...${NC}"
+    echo -e "${YELLOW}QEMU : run.sh seul — vérifications (4247, HLR, STP…) shuntées.${NC}"
+
+    local src_ip gw_ip
+    gw_ip=$(ip route get 1 | awk '{print $3; exit}')
+    src_ip=$(ip route get 1 | awk '{print $7; exit}')
+    [ -z "$src_ip" ] && { echo -e "${RED}Impossible de détecter l'IP hôte.${NC}"; exit 1; }
+    HOST_IP="$src_ip"
+    ENCRYPTION="${ENCRYPTION:-a5 0}"
+
+    docker rm -f egprs-qemu &>/dev/null || true
+
+    SMS_ROUTING_DIR=$(mktemp -d)
+    if declare -f sms_routing_generate > /dev/null 2>&1; then
+        sms_routing_generate 1 1 "$SMS_ROUTING_DIR" "1"
+    fi
+
+    # Application des templates (configs Osmocom / Asterisk / mobile.cfg)
+    local tmpdir; tmpdir=$(mktemp -d)
+    apply_config_templates "$tmpdir" \
+        "$src_ip" "$gw_ip" \
+        "1" "1.1.1" "1.1.2" "1.1.3" \
+        "001" "01" "OsmoGSM" \
+        "127.0.0.1" "shutdown" "1"
+
+    local vol_args alsa_args
+    vol_args=$(build_vol_args "$tmpdir")
+    alsa_args=$(build_alsa_args)
+
+    local kvm_args=""
+    [ -c /dev/kvm ] && kvm_args="--device /dev/kvm"
+
+    # On ne lance QUE /opt/GSM/qemu-src/run.sh — rien d'autre, aucune vérif.
+    # shellcheck disable=SC2086
+    docker run --rm -it --name egprs-qemu --net host \
+        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
+        --device /dev/net/tun:/dev/net/tun \
+        $kvm_args \
+        $alsa_args \
+        -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+        -e CONTAINER_IP="$src_ip" -e GATEWAY_IP="$gw_ip" \
+        -e OPERATOR_ID="1" -e N_MS="1" \
+        -e INTER_STP_IP="127.0.0.1" \
+        -e HOST_IP="${HOST_IP}" -e SIP_HOST_PORT="5060" \
+        $vol_args \
+        "$IMAGE_RUN" /opt/GSM/qemu-src/run.sh
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
@@ -1018,10 +1075,12 @@ choose_network_mode() {
     echo -e "${BOLD}Mode réseau :${NC}"
     echo "  1) net-host  — SDR physique, 1 opérateur - HAS TO BE REPAIRED ?"
     echo "  2) bridge    — Multi-opérateurs SS7 inter-op"
-    read -rp "Choix [1/2] : " NET_CHOICE
+    echo "  3) qemu      — RAN virtuel QEMU (run.sh seul, sans vérifications)"
+    read -rp "Choix [1/2/3] : " NET_CHOICE
     case "$NET_CHOICE" in
         1) NETWORK_MODE="host" ;;
         2) NETWORK_MODE="bridge" ;;
+        3) NETWORK_MODE="qemu" ;;
         *) echo -e "${RED}Choix invalide.${NC}"; exit 1 ;;
     esac
 }
@@ -1049,4 +1108,5 @@ check_image
 case "$NETWORK_MODE" in
     host)   start_host_mode ;;
     bridge) start_bridge_mode ;;
+    qemu)   start_qemu_mode ;;
 esac
