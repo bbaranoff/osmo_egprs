@@ -567,17 +567,6 @@ start_bridge_mode() {
         echo -e "${RED}Nombre invalide (1–36).${NC}"; exit 1
     fi
 
-    # Mode no-process : conteneurs lancés, configs générées, mais run.sh
-    # ne démarre AUCUN process (RUN_NO_PROCESS=1). Utile pour lancer le
-    # pipeline soi-même ensuite (ex. /opt/GSM/qemu-src/run.sh).
-    local no_process_choice
-    read -rp "Mode no-process (configs seules, aucun process lancé) ? [o/N] : " no_process_choice
-    if [[ "$no_process_choice" =~ ^[OoYy]$ ]]; then
-        BRIDGE_NO_PROCESS=1
-    else
-        BRIDGE_NO_PROCESS=0
-    fi
-
     local use_defaults
     read -rp "Valeurs par défaut pour tous (MCC=001, MNC=01/02/…) ? [o/N] : " use_defaults
 
@@ -648,15 +637,21 @@ start_bridge_mode() {
     # ── PHY Mode ──
     echo ""
     echo -e "${CYAN}${BOLD}── PHY Mode ──${NC}"
-    echo "  1) faketrx  — fake_trx + trxcon (TRXD, défaut)"
-    echo "  2) virtphy  — osmo-bts-virtual + virtphy (multicast) - EXPERIMENTAL !!"
+    echo "  1) faketrx     — fake_trx + trxcon (TRXD, défaut)"
+    echo "  2) virtphy     — osmo-bts-virtual + virtphy (multicast) - EXPERIMENTAL !!"
+    echo "  3) no-process  — core seul (configs + HLR), aucun process radio/mobile"
+    echo "  4) qemu        — comme no-process puis lance /opt/GSM/qemu-src/run.sh"
     local phy_choice
     read -rp "Mode PHY [1] : " phy_choice
+    BRIDGE_NO_PROCESS=0
+    BRIDGE_QEMU=0
     case "$phy_choice" in
         2) PHY_MODE="virtphy" ;;
+        3) PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1 ;;
+        4) PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1 ;;
         *) PHY_MODE="faketrx" ;;
     esac
-    echo -e "  ${GREEN}PHY : ${PHY_MODE}${NC}"
+    echo -e "  ${GREEN}PHY : ${PHY_MODE}${NC}$([ "$BRIDGE_NO_PROCESS" = 1 ] && echo -e "  ${YELLOW}(no-process)${NC}")$([ "$BRIDGE_QEMU" = 1 ] && echo -e "  ${CYAN}(qemu)${NC}")"
     # ── Encryption ──
     echo ""
     echo -e "${CYAN}${BOLD}── Encryption A5 ──${NC}"
@@ -805,8 +800,12 @@ start_bridge_mode() {
             sleep infinity
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
 
-        echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
-        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} /etc/osmocom/run.sh > /var/log/osmocom/run.sh.log 2>&1"
+        # En qemu : run.sh no-process (core seul) PUIS /opt/GSM/qemu-src/run.sh.
+        # Sinon : run.sh selon le mode no-process choisi.
+        local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} /etc/osmocom/run.sh"
+        [ "${BRIDGE_QEMU:-0}" = "1" ] && run_cmd="${run_cmd}; /opt/GSM/qemu-src/run.sh"
+        echo -e "  ${GREEN}[*] Lancement run.sh...${NC}$([ "${BRIDGE_QEMU:-0}" = 1 ] && echo -e " ${CYAN}+ qemu-src/run.sh${NC}")"
+        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
 
         # Attente HLR
         echo -ne "  ${GREEN}[*] Attente HLR (4258)${NC}"
@@ -914,17 +913,18 @@ start_bridge_mode() {
         echo -e "  Wireshark sur ${CYAN}br-${bridge_if}${NC}"
     fi
 
-    # ── Terminaux xterm ───────────────────────────────────────────────────
+    # ── Terminaux gnome-terminal ───────────────────────────────────────────
     TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
     DISPLAY="${DISPLAY:-:0}"
     XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
 
+    # Le titre est posé via séquence d'échappement dans le script (--title
+    # est déprécié/retiré sur les gnome-terminal récents).
     _open_term_script() {
         local title="$1" script_file="$2"
         chmod +x "$script_file"
         DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-        xterm -title "$title" -fa 'Monospace' -fs 10 \
-              -bg '#1e1e1e' -fg '#d4d4d4' -e bash "$script_file" 2>/dev/null &
+        gnome-terminal -- bash "$script_file" 2>/dev/null &
         sleep 0.3
     }
 
@@ -934,9 +934,10 @@ start_bridge_mode() {
         while ! sudo docker exec "${cname}" [ -S /tmp/osmocom_tmux ] 2>/dev/null; do sleep 1; echo -n "."; done
         echo -e " ${GREEN}OK${NC}"
 
-        local tmpscript="/tmp/osmo-xterm-op${i}.sh"
+        local tmpscript="/tmp/osmo-gnome-op${i}.sh"
         cat > "$tmpscript" <<EOF
 #!/usr/bin/env bash
+printf '\033]0;Op${i} — ${OP_NAME[$i]}\007'
 echo "=== Op${i} — ${OP_NAME[$i]} ==="
 exec sudo docker exec -ti ${cname} tmux -S /tmp/osmocom_tmux attach
 EOF
@@ -946,12 +947,15 @@ EOF
     echo "=== ${INTER_STP_CONTAINER} ==="
     wait_stp_vty "$INTER_STP_CONTAINER"
 
-    local tmpscript_stp="/tmp/osmo-xterm-stp.sh"
+    # Terminal inter-STP : logs en direct du conteneur inter-STP.
+    local tmpscript_stp="/tmp/osmo-gnome-stp.sh"
     cat > "$tmpscript_stp" <<EOF
 #!/usr/bin/env bash
-exec sudo docker logs -f --tail 50 "${INTER_STP_CONTAINER}"
+printf '\033]0;Inter-STP — logs\007'
+echo "=== ${INTER_STP_CONTAINER} — logs ==="
+exec sudo docker logs -f --tail 100 "${INTER_STP_CONTAINER}"
 EOF
-    _open_term_script "Inter-STP" "$tmpscript_stp"
+    _open_term_script "Inter-STP — logs" "$tmpscript_stp"
 
     echo -e "\n${GREEN}${BOLD}Stack prête !${NC}"
     enable_user_loopback
