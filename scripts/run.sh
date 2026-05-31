@@ -17,6 +17,11 @@ GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC
 FAKETRX_PY="${FAKETRX_PY:-/opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py}"
 OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-1}"; MOBILE_MODE="${MOBILE_MODE:-combined}"
 PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy
+# RUN_NO_PROCESS=1 : prépare/génère uniquement les configs (MS, TRX, handover)
+# et sort SANS lancer aucun process (ni osmo-start, ni fake_trx/trxcon, ni
+# mobile/asterisk/smsc). Utilisé par le mode QEMU de start.sh qui veut juste
+# les configs en place avant de lancer /opt/GSM/qemu-src/run.sh.
+RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
 BB_PORT_BASE=6700; BB_PORT_STEP=3; BTS_PORT_BASE=5700
 L2_SOCK_BASE="/tmp/osmocom_l2"; SAP_SOCK_BASE="/tmp/osmocom_sap"
@@ -214,6 +219,29 @@ inject_handover() {
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ── Mode no-process : configs seulement, aucun lancement ──────────────────────
+if [ "$RUN_NO_PROCESS" = "1" ]; then
+    echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : génération des configs seulement (aucun process) ===${NC}"
+
+    echo -e "${GREEN}=== [1/3] Config MS ===${NC}"
+    generate_ms_configs
+    echo ""
+
+    echo -e "${GREEN}=== [2/3] TRX ===${NC}"
+    if [ "$PHY_MODE" = "virtphy" ]; then
+        inject_extra_trx_virtual "$N_TRX"
+    else
+        inject_extra_trx "$N_TRX"
+    fi
+
+    echo -e "${GREEN}=== [3/3] Handover ===${NC}"
+    inject_handover
+    echo ""
+
+    echo -e "${GREEN}Configs prêtes (no-process). osmo-start / PHY / mobile / asterisk NON lancés.${NC}"
+    exit 0
+fi
 
 echo -e "${GREEN}=== [1/10] tmux ===${NC}"
 init_tmux

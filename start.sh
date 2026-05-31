@@ -1034,11 +1034,11 @@ start_qemu_mode() {
     local kvm_args=""
     [ -c /dev/kvm ] && kvm_args="--device /dev/kvm"
 
-    # On bypasse l'entrypoint systemd de l'image : run.sh est exécuté
-    # directement comme process normal. On ne lance QUE
-    # /opt/GSM/qemu-src/run.sh — rien d'autre, aucune vérif.
-    # On enchaîne sur `exec bash` : si on quitte le tmux de run.sh, on
-    # garde un shell interactif au lieu de voir le conteneur s'arrêter.
+    # On bypasse l'entrypoint systemd de l'image. Déroulé dans le conteneur :
+    #   1. /etc/osmocom/run.sh en mode RUN_NO_PROCESS=1 : applique/génère les
+    #      configs (MS, TRX, handover) SANS lancer aucun process Osmocom.
+    #   2. /opt/GSM/qemu-src/run.sh : pipeline QEMU Calypso (intact, non modifié).
+    #   3. exec bash : si on quitte le tmux de qemu run.sh, on garde un shell.
     # shellcheck disable=SC2086
     docker run --rm -it --name egprs-qemu --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
@@ -1054,7 +1054,7 @@ start_qemu_mode() {
         $vol_args \
         --entrypoint bash \
         "$IMAGE_RUN" \
-        -c '/opt/GSM/qemu-src/run.sh; exec bash'
+        -c 'RUN_NO_PROCESS=1 /etc/osmocom/run.sh; /opt/GSM/qemu-src/run.sh; exec bash'
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
