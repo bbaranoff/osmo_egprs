@@ -567,6 +567,17 @@ start_bridge_mode() {
         echo -e "${RED}Nombre invalide (1–36).${NC}"; exit 1
     fi
 
+    # Mode no-process : conteneurs lancés, configs générées, mais run.sh
+    # ne démarre AUCUN process (RUN_NO_PROCESS=1). Utile pour lancer le
+    # pipeline soi-même ensuite (ex. /opt/GSM/qemu-src/run.sh).
+    local no_process_choice
+    read -rp "Mode no-process (configs seules, aucun process lancé) ? [o/N] : " no_process_choice
+    if [[ "$no_process_choice" =~ ^[OoYy]$ ]]; then
+        BRIDGE_NO_PROCESS=1
+    else
+        BRIDGE_NO_PROCESS=0
+    fi
+
     local use_defaults
     read -rp "Valeurs par défaut pour tous (MCC=001, MNC=01/02/…) ? [o/N] : " use_defaults
 
@@ -795,7 +806,7 @@ start_bridge_mode() {
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
 
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
-        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && /etc/osmocom/run.sh > /var/log/osmocom/run.sh.log 2>&1"
+        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} /etc/osmocom/run.sh > /var/log/osmocom/run.sh.log 2>&1"
 
         # Attente HLR
         echo -ne "  ${GREEN}[*] Attente HLR (4258)${NC}"
@@ -832,15 +843,19 @@ start_bridge_mode() {
         '
         echo -e "  ${GREEN}✓ HLR Op${i} alimenté${NC}"
 
-        # Attente dernier groupe
-        echo -ne "  ${GREEN}[*] Attente groupe (${last_group_ip}:4247)${NC}"
-        retry=0
-        while ! docker exec "$container_name" bash -c "echo >/dev/tcp/${last_group_ip}/4247" 2>/dev/null; do
-            sleep 2; echo -n "."; retry=$((retry + 1))
-            if [ $retry -ge 90 ]; then echo -e " ${RED}TIMEOUT${NC}"; break; fi
-        done
-        echo -e " ${GREEN}OK${NC}"
-        sleep 3
+        # Attente dernier groupe — sautée en no-process (pas de mobile → 4247 absent)
+        if [ "${BRIDGE_NO_PROCESS:-0}" = "1" ]; then
+            echo -e "  ${YELLOW}[no-process] mobile non lancé — attente 4247 sautée${NC}"
+        else
+            echo -ne "  ${GREEN}[*] Attente groupe (${last_group_ip}:4247)${NC}"
+            retry=0
+            while ! docker exec "$container_name" bash -c "echo >/dev/tcp/${last_group_ip}/4247" 2>/dev/null; do
+                sleep 2; echo -n "."; retry=$((retry + 1))
+                if [ $retry -ge 90 ]; then echo -e " ${RED}TIMEOUT${NC}"; break; fi
+            done
+            echo -e " ${GREEN}OK${NC}"
+            sleep 3
+        fi
         echo -e "  ${GREEN}✓${NC} ${container_name} prêt"
         echo ""
     done
