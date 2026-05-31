@@ -1042,7 +1042,9 @@ start_qemu_mode() {
     local kvm_args=""
     [ -c /dev/kvm ] && kvm_args="--device /dev/kvm"
 
-    # On ne lance QUE /opt/GSM/qemu-src/run.sh — rien d'autre, aucune vérif.
+    # On bypasse l'entrypoint systemd de l'image : run.sh est exécuté
+    # directement comme process normal (PID 1). On ne lance QUE
+    # /opt/GSM/qemu-src/run.sh — rien d'autre, aucune vérif.
     # shellcheck disable=SC2086
     docker run --rm -it --name egprs-qemu --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
@@ -1056,7 +1058,8 @@ start_qemu_mode() {
         -e INTER_STP_IP="127.0.0.1" \
         -e HOST_IP="${HOST_IP}" -e SIP_HOST_PORT="5060" \
         $vol_args \
-        "$IMAGE_RUN" /opt/GSM/qemu-src/run.sh
+        --entrypoint /opt/GSM/qemu-src/run.sh \
+        "$IMAGE_RUN"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
