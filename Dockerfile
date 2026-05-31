@@ -48,8 +48,9 @@ RUN for repo in \
     osmo-sgsn:1.13.1 \
     osmo-msc:1.15.0 \
     osmo-bsc:1.14.0 \
-    osmo-pcu:1.5.2 \
+    osmo-trx:1.7.2 \
     osmo-bts:1.10.0 \
+    osmo-pcu:1.5.2 \
     osmo-sip-connector:1.7.2 \
     libosmo-gprs:0.2.1; \
     do \
@@ -73,6 +74,7 @@ RUN for repo in \
     if [ "$name" = "libosmo-abis" ]; then EXTRA_FLAGS="--disable-dahdi"; fi && \
     if [ "$name" = "osmo-msc" ]; then EXTRA_FLAGS="--enable-smpp"; fi && \
     if [ "$name" = "osmo-mgw" ]; then EXTRA_FLAGS="--enable-alsa"; fi && \
+    if [ "$name" = "osmo-trx" ]; then EXTRA_FLAGS="--enable-virtual --enable-trx"; fi && \
     if [ "$name" = "osmo-bts" ]; then EXTRA_FLAGS="--enable-virtual --enable-trx"; fi && \
     if [ "$name" = "osmo-ggsn" ]; then EXTRA_FLAGS="--enable-gtp-linux"; fi && \
     \
