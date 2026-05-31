@@ -800,11 +800,11 @@ start_bridge_mode() {
             sleep infinity
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
 
-        # En qemu : run.sh no-process (core seul) PUIS /opt/GSM/qemu-src/run.sh.
-        # Sinon : run.sh selon le mode no-process choisi.
+        # run.sh selon le mode no-process choisi. En qemu, on NE chaîne PAS
+        # ici le run.sh de qemu-src : il sera lancé dans un gnome-terminal
+        # (TTY) après que le core soit prêt, pour avoir un accès interactif.
         local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} /etc/osmocom/run.sh"
-        [ "${BRIDGE_QEMU:-0}" = "1" ] && run_cmd="${run_cmd}; /opt/GSM/qemu-src/run.sh"
-        echo -e "  ${GREEN}[*] Lancement run.sh...${NC}$([ "${BRIDGE_QEMU:-0}" = 1 ] && echo -e " ${CYAN}+ qemu-src/run.sh${NC}")"
+        echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
         docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
 
         # Attente HLR
@@ -841,6 +841,27 @@ start_bridge_mode() {
             rm -f /tmp/hlr_feed.vty
         '
         echo -e "  ${GREEN}✓ HLR Op${i} alimenté${NC}"
+
+        # En qemu : lancer /opt/GSM/qemu-src/run.sh dans un gnome-terminal
+        # (TTY interactif) une fois le core prêt. Sans TTY, son `tmux attach`
+        # final échoue et on retombe sur le shell hôte.
+        if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
+            local _du="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+            local _disp="${DISPLAY:-:0}"
+            local _xauth="${XAUTHORITY:-/home/$_du/.Xauthority}"
+            local _qscript="/tmp/osmo-gnome-qemu-op${i}.sh"
+            cat > "$_qscript" <<EOF
+#!/usr/bin/env bash
+printf '\033]0;QEMU run.sh — ${container_name}\007'
+echo "=== /opt/GSM/qemu-src/run.sh — ${container_name} ==="
+exec sudo docker exec -ti ${container_name} /opt/GSM/qemu-src/run.sh
+EOF
+            chmod +x "$_qscript"
+            echo -e "  ${CYAN}[*] qemu-src/run.sh → gnome-terminal${NC}"
+            DISPLAY="$_disp" XAUTHORITY="$_xauth" \
+                gnome-terminal -- bash "$_qscript" 2>/dev/null &
+            sleep 0.3
+        fi
 
         # Attente dernier groupe — sautée en no-process (pas de mobile → 4247 absent)
         if [ "${BRIDGE_NO_PROCESS:-0}" = "1" ]; then
