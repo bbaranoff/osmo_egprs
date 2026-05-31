@@ -854,7 +854,7 @@ start_bridge_mode() {
 #!/usr/bin/env bash
 printf '\033]0;QEMU run.sh — ${container_name}\007'
 echo "=== /opt/GSM/qemu-src/run.sh — ${container_name} ==="
-exec sudo docker exec -ti ${container_name} /opt/GSM/qemu-src/run.sh
+exec sudo docker exec -ti ${container_name} bash -c '/opt/GSM/qemu-src/run.sh; exec bash'
 EOF
             chmod +x "$_qscript"
             echo -e "  ${CYAN}[*] qemu-src/run.sh → gnome-terminal${NC}"
@@ -960,7 +960,9 @@ EOF
 #!/usr/bin/env bash
 printf '\033]0;Op${i} — ${OP_NAME[$i]}\007'
 echo "=== Op${i} — ${OP_NAME[$i]} ==="
-exec sudo docker exec -ti ${cname} tmux -S /tmp/osmocom_tmux attach
+# Après détachement tmux (Ctrl-b d), on retombe sur un shell DANS le
+# conteneur au lieu de fermer la fenêtre.
+exec sudo docker exec -ti ${cname} bash -c 'tmux -S /tmp/osmocom_tmux attach; exec bash'
 EOF
         _open_term_script "Op${i} — ${OP_NAME[$i]}" "$tmpscript"
     done
@@ -973,8 +975,9 @@ EOF
     cat > "$tmpscript_stp" <<EOF
 #!/usr/bin/env bash
 printf '\033]0;Inter-STP — logs\007'
-echo "=== ${INTER_STP_CONTAINER} — logs ==="
-exec sudo docker logs -f --tail 100 "${INTER_STP_CONTAINER}"
+echo "=== ${INTER_STP_CONTAINER} — logs (Ctrl-C pour un shell) ==="
+sudo docker logs -f --tail 100 "${INTER_STP_CONTAINER}"
+exec sudo docker exec -ti "${INTER_STP_CONTAINER}" bash
 EOF
     _open_term_script "Inter-STP — logs" "$tmpscript_stp"
 
@@ -1047,7 +1050,7 @@ start_host_mode() {
 #!/usr/bin/env bash
 printf '\033]0;net-host — egprs\007'
 echo "=== net-host — egprs run.sh ==="
-exec sudo docker exec -ti egprs /bin/bash -c "/root/run.sh"
+exec sudo docker exec -ti egprs /bin/bash -c "/root/run.sh; exec bash"
 EOF
     chmod +x "$_hscript"
     echo -e "  ${CYAN}[*] run.sh → gnome-terminal${NC}"
