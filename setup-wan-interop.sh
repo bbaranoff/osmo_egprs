@@ -421,12 +421,14 @@ EXTEOF"
 \\
 ; -- WAN : prefixe '"${WAN_PREFIX}"' -> serveur distant --\\
 exten => _'"${WAN_PREFIX}"'.,1,NoOp(=== GSM -> WAN: strip '"${WAN_PREFIX}"' ===)\\
+ same => n,Gosub(sub-record,s,1(\${EXTEN:2}))\\
  same => n,Goto(wan_out,\${EXTEN:2},1)" /tmp/_ext.work
 
             sed -i "/^\[internal\]$/a\\
 \\
 ; -- WAN : prefixe '"${WAN_PREFIX}"' -> serveur distant --\\
 exten => _'"${WAN_PREFIX}"'.,1,NoOp(=== SIP -> WAN: strip '"${WAN_PREFIX}"' ===)\\
+ same => n,Gosub(sub-record,s,1(\${EXTEN:2}))\\
  same => n,Goto(wan_out,\${EXTEN:2},1)" /tmp/_ext.work
 
             cp /tmp/_ext.work "$EXT"
