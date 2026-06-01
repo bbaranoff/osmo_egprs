@@ -849,6 +849,7 @@ start_bridge_mode() {
         # final échoue et on retombe sur le shell hôte.
         if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
             local _du="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+            local _duid; _duid=$(id -u "$_du" 2>/dev/null)
             local _disp="${DISPLAY:-:0}"
             local _xauth="${XAUTHORITY:-/home/$_du/.Xauthority}"
             local _qscript="/tmp/osmo-gnome-qemu-op${i}.sh"
@@ -860,8 +861,11 @@ exec sudo docker exec -ti ${container_name} bash -c '/opt/GSM/qemu-src/run.sh; e
 EOF
             chmod +x "$_qscript"
             echo -e "  ${CYAN}[*] qemu-src/run.sh → gnome-terminal${NC}"
-            DISPLAY="$_disp" XAUTHORITY="$_xauth" \
-                gnome-terminal -- bash "$_qscript" 2>/dev/null &
+            sudo -u "$_du" \
+                DISPLAY="$_disp" XAUTHORITY="$_xauth" \
+                XDG_RUNTIME_DIR="/run/user/${_duid}" \
+                DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${_duid}/bus" \
+                gnome-terminal -- bash "$_qscript" &
             sleep 0.3
         fi
 
@@ -941,13 +945,20 @@ EOF
     DISPLAY="${DISPLAY:-:0}"
     XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
 
-    # Le titre est posé via séquence d'échappement dans le script (--title
-    # est déprécié/retiré sur les gnome-terminal récents).
+    # gnome-terminal NE se lance PAS en root : il parle à gnome-terminal-server
+    # via le bus D-Bus de session de l'utilisateur. On l'exécute donc en tant
+    # que l'utilisateur cible avec son XDG_RUNTIME_DIR + DBUS_SESSION_BUS_ADDRESS.
+    # Le titre est posé via séquence d'échappement dans le script (--title est
+    # déprécié/retiré sur les gnome-terminal récents).
+    local _term_uid; _term_uid=$(id -u "$TARGET_USER" 2>/dev/null)
     _open_term_script() {
         local title="$1" script_file="$2"
         chmod +x "$script_file"
-        DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-        gnome-terminal -- bash "$script_file" 2>/dev/null &
+        sudo -u "$TARGET_USER" \
+            DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+            XDG_RUNTIME_DIR="/run/user/${_term_uid}" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${_term_uid}/bus" \
+            gnome-terminal -- bash "$script_file" &
         sleep 0.3
     }
 
@@ -1045,7 +1056,9 @@ start_host_mode() {
     sleep 3
 
     # run.sh dans un gnome-terminal (TTY interactif), comme les autres modes.
+    # gnome-terminal doit tourner sous l'utilisateur (bus D-Bus de session).
     local _du="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+    local _duid; _duid=$(id -u "$_du" 2>/dev/null)
     local _disp="${DISPLAY:-:0}"
     local _xauth="${XAUTHORITY:-/home/$_du/.Xauthority}"
     local _hscript="/tmp/osmo-gnome-host.sh"
@@ -1057,8 +1070,11 @@ exec sudo docker exec -ti egprs /bin/bash -c "/root/run.sh; exec bash"
 EOF
     chmod +x "$_hscript"
     echo -e "  ${CYAN}[*] run.sh → gnome-terminal${NC}"
-    DISPLAY="$_disp" XAUTHORITY="$_xauth" \
-        gnome-terminal -- bash "$_hscript" 2>/dev/null &
+    sudo -u "$_du" \
+        DISPLAY="$_disp" XAUTHORITY="$_xauth" \
+        XDG_RUNTIME_DIR="/run/user/${_duid}" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${_duid}/bus" \
+        gnome-terminal -- bash "$_hscript" &
     sleep 0.3
 }
 
