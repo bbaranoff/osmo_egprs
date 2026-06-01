@@ -274,6 +274,15 @@ PJSIPEOF"
 
     # ── Dialplan : contextes [wan_out] et [wan_in] ────────────────────────
 
+    # ── Softphones SIP : numéro → endpoint, extraits DYNAMIQUEMENT de pjsip.conf ──
+    # Tout endpoint portant un "callerid=... <NNN>" (ex: linphone_A <100>) devient
+    # routable SIP→SIP over WAN dans les deux sens, sans hardcoder les numéros.
+    softphones=$(docker exec "$cname" cat /etc/asterisk/pjsip.conf | awk '
+        /^\[/                 { s=$0; gsub(/[][]/,"",s); ep=s }
+        /callerid=.*<[0-9]+>/ { n=$0; sub(/.*</,"",n); sub(/>.*/,"",n); print n":"ep }
+    ')
+    echo -e "  ${CYAN}Op${i}${NC} Softphones SIP détectés: $(echo "$softphones" | tr '\n' ' ')"
+
     # Générer le contexte wan_out (appels sortants vers le distant)
     wan_dialplan="
 ; ══════════════════════════════════════════════════════════════════════════════
@@ -317,6 +326,22 @@ exten => _${j}XXXX,1,NoOp(=== WAN OUT Op${j}: \${EXTEN} → ${REMOTE_IP} ===)
         fi
     done
 
+    # → Softphones SIP distants (SIP→SIP over WAN) — générés dynamiquement.
+    #   Un Linphone local compose ${WAN_PREFIX}<num> ; le ${WAN_PREFIX} est strippé
+    #   en amont (Goto wan_out,\${EXTEN:2}), on route donc <num> vers le softphone
+    #   homologue du même opérateur sur le serveur distant.
+    for sp in $softphones; do
+        sp_num="${sp%%:*}"
+        wan_dialplan+="
+; → Softphone SIP distant ${sp_num} (Op${i})
+exten => ${sp_num},1,NoOp(=== WAN OUT SIP Op${i}: ${sp_num} → ${REMOTE_IP} ===)
+ same => n,Dial(PJSIP/${sp_num}@wan_trunk_op${i},,rT)
+ same => n,NoOp(WAN: \${DIALSTATUS})
+ same => n,Congestion()
+ same => n,Hangup()
+"
+    done
+
     wan_dialplan+="
 ; Fallback WAN
 exten => _X.,1,NoOp(=== WAN OUT: destination inconnue \${EXTEN} ===)
@@ -331,18 +356,37 @@ exten => _X.,1,NoOp(=== WAN OUT: destination inconnue \${EXTEN} ===)
 ; Appel distant → MS local (même opérateur)
 exten => _${i}XXXX,1,NoOp(=== WAN IN → GSM local Op${i}: \${EXTEN} ===)
  same => n,Set(CALLERID(all)=<\${CALLERID(num)}>)
+ same => n,Gosub(sub-record,s,1(\${EXTEN}))
  same => n,Dial(PJSIP/\${EXTEN}@gsm_msc,,rT)
  same => n,Congestion()
  same => n,Hangup()
 
 exten => _${i}XXXXX,1,NoOp(=== WAN IN → GSM local Op${i}: \${EXTEN} ===)
  same => n,Set(CALLERID(all)=<\${CALLERID(num)}>)
+ same => n,Gosub(sub-record,s,1(\${EXTEN}))
  same => n,Dial(PJSIP/\${EXTEN}@gsm_msc,,rT)
  same => n,Congestion()
  same => n,Hangup()
+"
 
+    # Softphones SIP locaux (appels entrants depuis le serveur distant) — dynamiques
+    for sp in $softphones; do
+        sp_num="${sp%%:*}"
+        sp_ep="${sp#*:}"
+        wan_dialplan+="
+; Softphone SIP local ${sp_num} → ${sp_ep}
+exten => ${sp_num},1,NoOp(=== WAN IN → ${sp_ep} local (${sp_num}) ===)
+ same => n,Gosub(sub-record,s,1(${sp_num}))
+ same => n,Dial(PJSIP/${sp_ep},,rT)
+ same => n,Congestion()
+ same => n,Hangup()
+"
+    done
+
+    wan_dialplan+="
 ; Appel distant → autre opérateur local (re-route via interop_out)
 exten => _X.,1,NoOp(=== WAN IN → routage local: \${EXTEN} ===)
+ same => n,Gosub(sub-record,s,1(\${EXTEN}))
  same => n,Goto(interop_out,\${EXTEN},1)
 
 ; Echo test depuis le distant
