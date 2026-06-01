@@ -257,8 +257,15 @@ echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 
 # Mode no-process : le core tourne (HLR alimentable par start.sh), on
-# s'arrête ici sans lancer PHY/mobile/asterisk/smsc dans le tmux.
+# s'arrête ici sans lancer PHY/mobile/asterisk/smsc dans le tmux. On
+# configure tout de même PulseAudio (sink gsm_audio) car le pipeline lancé
+# ensuite (ex. /opt/GSM/qemu-src/run.sh) en a besoin pour l'audio gapk.
 if [ "$RUN_NO_PROCESS" = "1" ]; then
+    echo ""
+    echo -e "${GREEN}=== Audio PulseAudio (no-process) ===${NC}"
+    if [ -f /scripts/pulse-gsm-setup.sh ]; then
+        /scripts/pulse-gsm-setup.sh || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo)${NC}"
+    fi
     echo ""
     echo -e "${GREEN}Core Osmocom prêt (no-process). PHY/mobile/asterisk/smsc NON lancés.${NC}"
     echo -e "  tmux : ${CYAN}tmux -S ${TMUX_SOCKET} attach -t ${SESSION}${NC}"
