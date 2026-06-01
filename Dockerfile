@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS osmocom-nitb
+FROM ubuntu:26.04 AS osmocom-nitb
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ROOT=/opt/GSM
@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Debug — gdb-multiarch pour attacher au gdb-stub QEMU (ARM Calypso)
     gdb-multiarch \
     # ALSA — requis par osmo-gapk pour l'I/O audio matériel
-    libasound2-dev libasound2 alsa-utils \
+    libasound2-dev libasound2t64 alsa-utils \
     # libgsm — codec GSM-FR natif (accélère gapk en mode gsmfr)
     libgsm1-dev libgsm1 \
     iptables iproute2 asterisk ffmpeg
