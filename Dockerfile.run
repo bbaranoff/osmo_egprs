@@ -20,7 +20,7 @@ RUN mkdir -p \
     /var/log/osmocom
 
 RUN apt-get update && apt-get install -y --no-install-recommends telnet nano iproute2 tmux \
-    libasound2-plugins pulseaudio-utils psmisc && \
+    libasound2-plugins pulseaudio-utils psmisc whiptail && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Patch fake_trx : forcer TRXD v0 ─────────────────────────────────────────
@@ -30,7 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends telnet nano ipr
 # Fix : forcer ver_req=0 dans la réponse SETFORMAT → le BTS reste en v0.
 RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/' \
     /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
-
+RUN rm -rf /opt/GSM/firmware
+RUN git clone https://github.com/bbaranoff/firmware
 # ── Scripts ────────────────────────────────────────────────────────────────────
 COPY scripts/* /scripts/
 RUN chmod +x /scripts/*.sh
