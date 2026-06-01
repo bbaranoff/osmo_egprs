@@ -778,6 +778,8 @@ start_bridge_mode() {
             --ip "$inter_local_ip" \
             --cap-add NET_ADMIN \
             --cap-add SYS_ADMIN \
+            --cap-add NET_RAW \
+            --ulimit rtprio=18 \
             --cgroupns host \
             --device /dev/net/tun:/dev/net/tun \
             $alsa_args \
@@ -1025,7 +1027,8 @@ start_host_mode() {
 
     # shellcheck disable=SC2086
     docker run -d --rm --name egprs --net host \
-        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
+        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW \
+        --ulimit rtprio=18 --cgroupns host \
         --device /dev/net/tun:/dev/net/tun \
         $alsa_args \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
@@ -1104,7 +1107,8 @@ start_qemu_mode() {
     # (TTY interactif), comme les autres modes.
     # shellcheck disable=SC2086
     docker run -d --name egprs-qemu --net host \
-        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cgroupns host \
+        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW \
+        --ulimit rtprio=18 --cgroupns host \
         --device /dev/net/tun:/dev/net/tun \
         $kvm_args \
         $alsa_args \

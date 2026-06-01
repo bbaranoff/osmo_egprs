@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
     # Python & Outils système
     python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv \
+    # Debug — gdb-multiarch pour attacher au gdb-stub QEMU (ARM Calypso)
+    gdb-multiarch \
     # ALSA — requis par osmo-gapk pour l'I/O audio matériel
     libasound2-dev libasound2 alsa-utils \
     # libgsm — codec GSM-FR natif (accélère gapk en mode gsmfr)
