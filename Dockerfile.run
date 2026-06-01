@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends telnet nano ipr
 RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/' \
     /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
 RUN rm -rf /opt/GSM/firmware
-RUN git clone https://github.com/bbaranoff/firmware
+RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
 # ── Scripts ────────────────────────────────────────────────────────────────────
 COPY scripts/* /scripts/
 RUN chmod +x /scripts/*.sh
