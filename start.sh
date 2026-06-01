@@ -779,6 +779,7 @@ start_bridge_mode() {
             --cap-add NET_ADMIN \
             --cap-add SYS_ADMIN \
             --cap-add NET_RAW \
+            --ulimit rtprio=18 \
             --cgroupns host \
             --device /dev/net/tun:/dev/net/tun \
             $alsa_args \
