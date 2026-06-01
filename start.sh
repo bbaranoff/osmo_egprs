@@ -779,7 +779,6 @@ start_bridge_mode() {
             --cap-add NET_ADMIN \
             --cap-add SYS_ADMIN \
             --cap-add NET_RAW \
-            --ulimit rtprio=18 \
             --cgroupns host \
             --device /dev/net/tun:/dev/net/tun \
             $alsa_args \
@@ -1039,7 +1038,7 @@ start_host_mode() {
     # shellcheck disable=SC2086
     docker run -d --rm --name egprs --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW \
-        --ulimit rtprio=18 --cgroupns host \
+        --cgroupns host \
         --device /dev/net/tun:/dev/net/tun \
         $alsa_args \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
