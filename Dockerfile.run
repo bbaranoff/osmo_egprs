@@ -75,6 +75,12 @@ RUN cd /opt/GSM/qemu-src && \
     cp qemu-system-arm /usr/local/bin/qemu-system-arm && \
     cp qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm
     
+# ── Prompt interactif (root rouge / hostname bleu / cwd vert / ☎️#) ───────────
+RUN printf '%s\n' '' \
+    '### calypso-prompt ###' \
+    "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️# '" \
+    '### end calypso-prompt ###' >> /root/.bashrc
+
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]
