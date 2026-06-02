@@ -476,6 +476,7 @@ start_inter_stp() {
     docker run -d \
         --rm \
         --name "$INTER_STP_CONTAINER" \
+        --hostname "$INTER_STP_CONTAINER" \
         --network "$INTER_NET" \
         --ip "$INTER_STP_IP" \
         --cap-add NET_ADMIN \
@@ -774,6 +775,7 @@ start_bridge_mode() {
         docker run -d \
             --rm \
             --name "$container_name" \
+            --hostname "$container_name" \
             --network "$INTER_NET" \
             --ip "$inter_local_ip" \
             --cap-add NET_ADMIN \
