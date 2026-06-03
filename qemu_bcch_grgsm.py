@@ -40,6 +40,15 @@ GSMTAP_TYPE_UM_BURST = 0x03
 GSMTAP_BURST_NORMAL  = 0x06
 BURST_SIZE           = 148
 
+# Les 8 training sequences GSM (26 bits) — pour valider le démod live.
+ALL_TSC = [
+    "00100101110000100010010111", "00101101110111100010110111",
+    "01000011101110100100001110", "01000111101101000100011110",
+    "00011010111001000001101011", "01001110101100000100111010",
+    "10100111110110001010011111", "11101111000100101110111100",
+]
+dbg_tsc = [0]   # compteur de bursts BCCH instrumentés (mutable)
+
 def demod_burst(iq):
     """iq : np.complex (>=148) -> string de 148 bits durs '0'/'1', ou None.
 
@@ -111,6 +120,26 @@ def udp_loop():
         nfed += 1
         if nfed <= 5 or nfed % 1000 == 0:
             print(f"[grgsm] burst #{nfed} fn={fn} mf={fn%51} pwr={np.mean(np.abs(raw)):.0f}", flush=True)
+        # DEBUG : valide le démod sur les bursts BCCH live (TSC7 @61). Si le
+        # match n'est pas ~26/26, le démod est faux sur le signal courant →
+        # explique 0 GSMTAP. Compare aussi les 8 TSC pour repérer un décalage.
+        if (fn % 51) in (2, 3, 4, 5) and dbg_tsc[0] < 24:
+            dbg_tsc[0] += 1
+            mid = bits[61:87]
+            best = max((sum(a == b for a, b in zip(mid, t)), i)
+                       for i, t in enumerate(ALL_TSC))
+            print(f"[grgsm][TSC] fn={fn} mf={fn%51} best TSC{best[1]}={best[0]}/26 "
+                  f"(TSC7={sum(a==b for a,b in zip(mid, ALL_TSC[7]))}/26) mid={mid}", flush=True)
+            # DUMP I/Q brut des bursts BCCH pour brute-force offline du démod.
+            dbg_dump.append((int(fn), raw.copy()))
+            if len(dbg_dump) >= 8:
+                import numpy as _np
+                d = {}
+                for i, (f, r) in enumerate(dbg_dump):
+                    d[f"b{i}_iq"] = r.astype(_np.int16); d[f"b{i}_fn"] = f
+                _np.savez("/opt/GSM/live_bursts.npz", **d)
+                print(f"[grgsm][DUMP] 8 bursts BCCH live -> /opt/GSM/live_bursts.npz", flush=True)
+                dbg_dump.clear()
         mfi = fn // 51
         if cur_mf is None:
             cur_mf = mfi
