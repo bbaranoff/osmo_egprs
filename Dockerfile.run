@@ -68,12 +68,6 @@ RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
     echo "WARNING: proto-smsc binaries not found in PATH"
 
 # ── Rebuild QEMU (pull latest from GitHub + rebuild) ─────────────────────────
-ARG QEMU_CACHE_BUST=1
-RUN cd /opt/GSM/qemu-src && \
-    git pull && \
-    cd build && ninja -j$(nproc) && \
-    cp qemu-system-arm /usr/local/bin/qemu-system-arm && \
-    cp qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm
     
 # ── Prompt interactif (root rouge / hostname bleu / cwd vert / ☎️#) ───────────
 RUN printf '%s\n' '' \

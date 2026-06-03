@@ -213,6 +213,21 @@ RUN mkdir -p /opt/GSM/qemu/build \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
     && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
+# ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
+# (= moteur de démod du SI réel ; grgsm_decode CLI utilisé par si_bridge.py).
+# build_gr.sh = le gist bbaranoff/3683811057933af0954b661821e950d1 avec
+# BUILD_APPS=ON. Deps GNU Radio manquantes (boost/gmp/log4cpp/spdlog) ajoutées.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libboost-all-dev libgmp-dev liblog4cpp5-dev libspdlog-dev libsndfile1-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY build_gr.sh /root/build_gr.sh
+RUN bash /root/build_gr.sh
+
+# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qemu-src/run.sh casse) :
+# si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
+# record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
+COPY opt-gsm/. /opt/GSM/
+
 # ── libosmo-dsp (dépendance transceiver/burst_ind) ──────────────────────────
 RUN cd /opt/GSM \
     && git clone https://gitea.osmocom.org/sdr/libosmo-dsp.git \
