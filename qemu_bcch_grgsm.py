@@ -87,9 +87,15 @@ def udp_loop():
     # COMPLET (toutes positions). Le demapper gr-gsm mappe lui-même BCCH/CCCH
     # selon fn%51 et extrait SI1/2/3/4 à la vraie position planifiée (TC).
     # (Le démod produit du bruit aux positions FCCH/SCH, que le demapper ignore.)
+    # On décode par FENÊTRE de WINDOW_MF multiframes (pas 1 seul) : le demapper
+    # gr-gsm a besoin d'un run CONTIGU de plusieurs 51-multiframes pour locker
+    # son compteur TC et extraire les blocs BCCH. 1 multiframe isolé → 0 décode
+    # (régression). 12 mf couvrent un cycle TC complet (0..7) → SI1/2/3/4 inclus.
+    WINDOW_MF = int(os.environ.get("WINDOW_MF", "12"))
     cur_mf  = None                         # index multiframe courant (fn//51)
     fns, datas = [], []
-    npkt = nfed = nmf = 0
+    mf_count = 0
+    npkt = nfed = ndec = 0
     while True:
         pkt, _ = rx.recvfrom(4096)
         npkt += 1
@@ -103,21 +109,25 @@ def udp_loop():
         if bits is None:
             continue
         nfed += 1
-        if nfed <= 5 or nfed % 500 == 0:
+        if nfed <= 5 or nfed % 1000 == 0:
             print(f"[grgsm] burst #{nfed} fn={fn} mf={fn%51} pwr={np.mean(np.abs(raw)):.0f}", flush=True)
         mfi = fn // 51
         if cur_mf is None:
             cur_mf = mfi
-        if mfi != cur_mf and fns:          # frontière de multiframe -> flush le précédent
-            nmf += 1
-            try:
-                decode_block(fns, datas)   # demapper extrait BCCH/CCCH -> GSMTAP si CRC ok
-                if nmf <= 5 or nmf % 50 == 0:
-                    print(f"[grgsm] multiframe #{nmf} (mf={cur_mf}, {len(fns)} bursts) décodé", flush=True)
-            except Exception as e:
-                print(f"[grgsm] decode_block err: {e}", flush=True)
-            fns, datas = [], []
+        if mfi != cur_mf:                  # nouvelle frontière de multiframe
+            mf_count += 1
             cur_mf = mfi
+            if mf_count >= WINDOW_MF and fns:   # assez de contexte -> décode le lot
+                ndec += 1
+                try:
+                    decode_block(fns, datas)    # demapper -> GSMTAP (SI) si CRC ok
+                    if ndec <= 5 or ndec % 20 == 0:
+                        print(f"[grgsm] décode #{ndec} ({len(fns)} bursts / {mf_count} mf, "
+                              f"fn {fns[0]}..{fns[-1]})", flush=True)
+                except Exception as e:
+                    print(f"[grgsm] decode_block err: {e}", flush=True)
+                fns, datas = [], []
+                mf_count = 0
         fns.append(fn)
         datas.append(bits)
 
