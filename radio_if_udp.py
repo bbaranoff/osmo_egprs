@@ -27,13 +27,21 @@
 
 import os
 
-from gnuradio import blocks
+from gnuradio import network
 from gnuradio import gr
 
 from .radio_if import RadioInterface
 
+# 625 samples complexes fc32 = 5000 octets = le chunk du device (CALYPSO_SHM_BUFSIZE).
+_UDP_PAYLOAD = 5000
+
 
 class RadioInterfaceUDP(RadioInterface):
+    # osr = oversampling ratio, DOIT matcher le SPS d'osmo-trx (tx-sps).
+    # osmo-trx-ipc défaut tx-sps=1 → osr=1 (I/Q à 270833 Hz). Réglable via
+    # CALYPSO_TRX_OSR si on passe osmo-trx en SPS=4 (alors osr=4, -s 1083333).
+    osr = int(os.environ.get("CALYPSO_TRX_OSR", "1"))
+
     # Description humaine
     def __str__(self):
         return "UDP"
@@ -49,19 +57,27 @@ class RadioInterfaceUDP(RadioInterface):
         return int(v) if (v and v.isdigit()) else default
 
     def phy_init_source(self):
-        # I/Q DL du BTS (fc32 complexe @ sample_rate). Le device relaye l'I/Q
-        # continu d'osmo-trx ici. eof=False, mtu 1472 (≈183 samples fc32/dgram).
-        host = os.environ.get("CALYPSO_TRX_IQ_HOST", "127.0.0.1")
+        # I/Q DL du BTS (fc32 @ sample_rate). udp_source ÉCOUTE sur le port ;
+        # le device relaie l'I/Q continu d'osmo-trx ici. src_zeros=True →
+        # sort des zéros si pas de data → flux continu, gsm.receiver ne stalle pas.
         port = self._udp("CALYPSO_TRX_IQ_RX_PORT", 5810)
-        self._phy_src = blocks.udp_source(gr.sizeof_gr_complex, host, port,
-                                          1472, False)
+        self._phy_src = network.udp_source(
+            gr.sizeof_gr_complex, 1, port,
+            0,            # header type NONE
+            _UDP_PAYLOAD, # 5000 o = 625 samples/datagram
+            False,        # notify_missed
+            True,         # src_zeros (continu)
+            False)        # ipv6
 
     def phy_init_sink(self):
-        # I/Q UL du mobile → device → osmo-trx.
+        # I/Q UL du mobile → device → osmo-trx (udp_sink envoie vers addr:port).
         host = os.environ.get("CALYPSO_TRX_IQ_HOST", "127.0.0.1")
         port = self._udp("CALYPSO_TRX_IQ_TX_PORT", 5811)
-        self._phy_sink = blocks.udp_sink(gr.sizeof_gr_complex, host, port,
-                                         1472, False)
+        self._phy_sink = network.udp_sink(
+            gr.sizeof_gr_complex, 1, host, port,
+            0,            # header type NONE
+            _UDP_PAYLOAD, # 5000 o
+            False)        # send_eof
 
     # Pas de hardware : les contrôles freq/gain sont des no-op (le BTS fixe
     # la fréquence ; ici on est en bande de base, l'I/Q est déjà à la bonne fc).
