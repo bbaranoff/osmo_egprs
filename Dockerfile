@@ -214,14 +214,19 @@ RUN mkdir -p /opt/GSM/qemu/build \
     && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
-# (= moteur de démod du SI réel ; grgsm_decode CLI utilisé par si_bridge.py).
-# build_gr.sh = le gist bbaranoff/3683811057933af0954b661821e950d1 avec
-# BUILD_APPS=ON. Deps GNU Radio manquantes (boost/gmp/log4cpp/spdlog) ajoutées.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libboost-all-dev libgmp-dev liblog4cpp5-dev libspdlog-dev libsndfile1-dev \
+# (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
+# Deps GNU Radio via apt build-dep : on génère les lignes deb-src à partir des
+# deb, avec TOUS les composants (main restricted universe multiverse — gnuradio
+# est dans universe), pour chaque suite (jammy, -updates, -security, -backports).
+RUN sed -nE 's|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p' \
+        /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list \
+    && apt-get update \
+    && apt-get build-dep -y gnuradio \
+    && apt-get install -y --no-install-recommends liblog4cpp5-dev \
     && rm -rf /var/lib/apt/lists/*
-COPY build_gr.sh /root/build_gr.sh
-RUN bash /root/build_gr.sh
+
+# On TÉLÉCHARGE et on exécute CE script (le gist, pinné au commit fcdb409).
+RUN curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash
 
 # ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qemu-src/run.sh casse) :
 # si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
