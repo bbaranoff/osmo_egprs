@@ -11,7 +11,7 @@ if [[ -n "$DEBUG" ]]; then
 fi
 
 IMAGE_BASE="osmocom-nitb"
-IMAGE_RUN="bastienbaranoff/osmo-operator-1:camping"
+IMAGE_RUN="osmocom-run"
 
 INTER_NET="gsm-inter"
 INTER_NET_SUBNET="172.20.0.0/24"

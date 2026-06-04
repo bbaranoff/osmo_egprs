@@ -213,6 +213,12 @@ RUN mkdir -p /opt/GSM/qemu/build \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
     && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
+# Build le DEVICE IPC calypso-ipc-device (tools/) — le Dockerfile ne le buildait
+# PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS
+# dépend de info_cnf compilé avec CALYPSO_TRX_OSR=4 (sinon il s'annonce 1 SPS →
+# osmo-trx alloue buffer_size=1250 → troncature → OML BTS meurt → pas de camping).
+RUN cd /opt/GSM/qemu-src/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
+
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
 # (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
 # Deps GNU Radio via apt build-dep : on génère les lignes deb-src à partir des
