@@ -1,22 +1,31 @@
 #!/usr/bin/env bash
-# fft.sh — FFT live "jolie" du flux I/Q Calypso, lue DIRECTEMENT dans le docker.
+# fft.sh — FFT "jolie" du flux I/Q Calypso, lue DIRECTEMENT dans le docker.
 #
-# Lit le tail de /tmp/relay_continu.cfile (le chunk relay CONTINU, tous TS, le
-# meme que grgsm_decode -s 1083333 decode) DANS le container, le rapatrie en
-# fc32 (complex64), et affiche sur le X de l'HOTE : PSD moyennee (Welch maison)
-# + waterfall/spectrogramme defilant. Rafraichi en boucle (FuncAnimation).
+# Lit /tmp/record.cfile (le ring record CONTINU, ecrit par record_drain.py qui
+# draine iq_record.fifo en O_RDWR — DECOUPLE de la boucle relay temps-reel) DANS
+# le container, le rapatrie en fc32 (complex64), et affiche sur le X de l'HOTE :
+# PSD moyennee (Welch maison) + waterfall defilant. Boucle (FuncAnimation).
+#
+# /!\ Le mode 'fifo' (tap LIVE de /tmp/iq_fft.fifo) a ete RETIRE : ouvrir ce fifo
+#     en lecture force l'IPC device a l'ecrire et perturbe le relai temps-reel ->
+#     le decode grgsm s'arrete (si-bridge 'fini') et le camping fige. record.cfile
+#     est near-live et n'a AUCUN effet sur le pipeline.
 #
 # Usage :
-#   ./fft.sh                      # live, parametres par defaut
+#   ./fft.sh                      # tail de record.cfile (defaut, non-perturbant)
+#   FFT_SRC=sweep ./fft.sh        # balaye tout le ring record
 #   ./fft.sh --save spectre.png   # une capture PNG (si pas de X)
-#   CONTAINER=osmo-operator-1 CFILE=/tmp/relay_continu.cfile RATE=1083333 \
+#   CONTAINER=osmo-operator-1 CFILE=/tmp/record.cfile RATE=1083333 \
 #   NSAMP=262144 REFRESH=1.0 ARFCN=514 ./fft.sh
 #
 set -euo pipefail
 export CONTAINER="${CONTAINER:-osmo-operator-1}"
-export FFT_SRC="${FFT_SRC:-fifo}"   # fifo (LIVE, defaut) | sweep | tail
-export FIFO="${FIFO:-/tmp/iq_fft.fifo}"          # FIFO live (qemu y pousse chaque trame)
-export CFILE="${CFILE:-/tmp/record.cfile}"       # fichier record (fallback sweep/tail)
+export FFT_SRC="${FFT_SRC:-tail}"   # tail (defaut, NON-perturbant) | sweep — lisent record.cfile
+# NB: le mode 'fifo' (tap LIVE de /tmp/iq_fft.fifo) a ete RETIRE : ouvrir ce
+# fifo en lecture force l'IPC device a l'ecrire, ce qui perturbe la boucle relay
+# temps-reel et COUPE le decode grgsm (si-bridge 'fini') -> camping fige. On lit
+# desormais record.cfile, alimente par record_drain.py (decouple, always-on).
+export CFILE="${CFILE:-/tmp/record.cfile}"       # fichier record (record_drain -> sweep/tail)
 export RATE="${RATE:-1083333}"      # 4 SPS natif = 26e6/24
 export NSAMP="${NSAMP:-32768}"      # complex samples par fenetre (256 KB) — court = ca gigote
 export REFRESH="${REFRESH:-0.25}"   # periode de rafraichissement (s) — court = fluide
@@ -27,17 +36,14 @@ export FFT_SAVE=""
 
 # garde-fous
 command -v docker >/dev/null || { echo "docker introuvable"; exit 1; }
-if [ "$FFT_SRC" = "fifo" ]; then
-  docker exec "$CONTAINER" sh -c "[ -p '$FIFO' ] || mkfifo '$FIFO'" 2>/dev/null \
-    || { echo "impossible de creer le FIFO $CONTAINER:$FIFO"; exit 1; }
-  # UN SEUL lecteur : tuer les cat perimes sur ce FIFO (sinon le flux se PARTAGE
-  # entre lecteurs et la FFT est hachee/figee). On lit le flux complet => ca gigote.
-  docker exec "$CONTAINER" pkill -f "cat $FIFO" 2>/dev/null || true
-  sleep 0.3
-else
-  docker exec "$CONTAINER" test -f "$CFILE" \
-    || { echo "record absent $CONTAINER:$CFILE (lance ./run.sh d'abord)"; exit 1; }
-fi
+case "$FFT_SRC" in
+  sweep|tail) ;;
+  *) echo "[fft] FFT_SRC='$FFT_SRC' invalide. Le mode 'fifo' (tap live) a ete retire"
+     echo "[fft] (il perturbe le relai temps-reel et coupe le decode grgsm). -> tail."
+     export FFT_SRC=tail ;;
+esac
+docker exec "$CONTAINER" test -f "$CFILE" \
+  || { echo "record absent $CONTAINER:$CFILE (lance ./run.sh d'abord ; record_drain.py alimente record.cfile)"; exit 1; }
 
 python3 - <<'PYEOF'
 import os, sys, subprocess, numpy as np
@@ -62,58 +68,24 @@ WROWS = 120                        # lignes du waterfall
 win = np.hanning(NFFT).astype(np.float32)
 freqs = np.fft.fftshift(np.fft.fftfreq(NFFT, 1.0/RATE)) / 1e3   # kHz
 
-import threading
-SRC  = os.environ.get("FFT_SRC","fifo")    # fifo (LIVE, defaut) | sweep | tail
-FIFO = os.environ.get("FIFO","/tmp/iq_fft.fifo")
+SRC  = os.environ.get("FFT_SRC","tail")    # tail (defaut) | sweep — lisent record.cfile
+if SRC not in ("sweep","tail"): SRC = "tail"   # 'fifo' retire (tap live nocif)
 BS   = 4096; NBLK = max(1, NBYTES//BS)
 
-# ---- mode FIFO (LIVE) : thread qui draine le FIFO dans le docker en continu,
-#      garde le dernier bloc de NBYTES => grab() rend toujours le PLUS FRAIS.
-_latest = [None]; _lk = threading.Lock()
-def _readexact(f, n):
-    b = bytearray()
-    while len(b) < n:
-        c = f.read(n - len(b))
-        if not c: return None
-        b += c
-    return bytes(b)
-def _reader():
-    while True:
-        try:
-            p = subprocess.Popen(["docker","exec",CONT,"cat",FIFO],
-                                 stdout=subprocess.PIPE, bufsize=0)
-        except Exception:
-            return
-        roll = bytearray()
-        while True:
-            c = p.stdout.read(1 << 16)
-            if not c: break                      # writer parti -> on reouvre cat
-            roll += c
-            if len(roll) >= NBYTES:              # LILO : on garde la QUEUE = le PLUS FRAIS
-                tail = bytes(roll[-NBYTES:])
-                with _lk: _latest[0] = np.frombuffer(tail, dtype=np.complex64).copy()
-                del roll[:-NBYTES]
-        try: p.kill()
-        except Exception: pass
-if SRC == "fifo":
-    threading.Thread(target=_reader, daemon=True).start()
-
-# ---- modes fichier (fallback) : balaye le ring (sweep) ou lit le tail.
+# ---- modes fichier : balaye le ring (sweep) ou lit le tail de record.cfile
+#      (alimente par record_drain.py, decouple de la boucle relay temps-reel).
 def _filesize():
     try:
         return int(subprocess.run(["docker","exec",CONT,"stat","-c","%s",CFILE],
                                   capture_output=True,timeout=5).stdout or 0)
     except Exception: return NBYTES
-RING = _filesize() if SRC!="fifo" else NBYTES
+RING = _filesize()
 _off = [0]
 
 def grab():
-    """Rend NBYTES d'I/Q complex64 (le plus frais).
-    SRC=fifo  : LIVE, lit le dernier bloc draine du FIFO (defaut).
-    SRC=sweep : balaye le ring record (offset qui avance).
-    SRC=tail  : derniers octets (fichier en append)."""
-    if SRC == "fifo":
-        with _lk: return _latest[0]
+    """Rend NBYTES d'I/Q complex64 (le plus frais), depuis record.cfile.
+    SRC=tail  : derniers octets (defaut, near-live, non-perturbant).
+    SRC=sweep : balaye le ring record (offset qui avance)."""
     if SRC == "sweep":
         skip = _off[0] // BS
         try:
