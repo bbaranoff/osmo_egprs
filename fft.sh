@@ -79,8 +79,21 @@ def _filesize():
         return int(subprocess.run(["docker","exec",CONT,"stat","-c","%s",CFILE],
                                   capture_output=True,timeout=5).stdout or 0)
     except Exception: return NBYTES
-RING = _filesize()
+def _ringsize():
+    # taille du ring publiee par record_drain (modulo pour le wrap LIVE)
+    try:
+        v = int(subprocess.run(["docker","exec",CONT,"cat",CFILE+".ring"],
+                               capture_output=True,timeout=5).stdout or 0)
+        if v > 0: return v
+    except Exception: pass
+    return _filesize()
+RING = _ringsize()
 _off = [0]
+
+def _dd(skip_blk, count_blk):
+    return subprocess.run(["docker","exec",CONT,"dd","if="+CFILE,"bs="+str(BS),
+        "skip="+str(skip_blk),"count="+str(count_blk),"status=none"],
+        capture_output=True, timeout=8).stdout
 
 def grab():
     """Rend NBYTES d'I/Q complex64 (le plus frais), depuis record.cfile.
@@ -97,9 +110,25 @@ def grab():
         _off[0] += NBYTES
         if _off[0] + NBYTES > RING: _off[0] = 0
     else:
+        # LIVE (tail) : lit la fenetre fraiche FINISSANT a l'offset d'ecriture
+        # publie par record_drain (<cfile>.off). Corrige le freeze : avec le ring
+        # seek(0) le frais est a `w` (milieu), PAS au tail. Aligne blocs + wrap.
         try:
-            raw = subprocess.run(["docker","exec",CONT,"tail","-c",str(NBYTES),CFILE],
-                                 capture_output=True, timeout=8).stdout
+            w = int(subprocess.run(["docker","exec",CONT,"cat",CFILE+".off"],
+                                   capture_output=True, timeout=5).stdout or -1)
+        except Exception:
+            w = -1
+        try:
+            if w >= 0:
+                wblk = w // BS; start_blk = wblk - NBLK
+                if start_blk >= 0:
+                    raw = _dd(start_blk, NBLK)
+                else:                              # fenetre a cheval sur le wrap
+                    ring_blk = RING // BS; n_end = -start_blk
+                    raw = _dd(ring_blk - n_end, n_end) + _dd(0, wblk)
+            else:                                   # repli : pas d'offset publie
+                raw = subprocess.run(["docker","exec",CONT,"tail","-c",str(NBYTES),CFILE],
+                                     capture_output=True, timeout=8).stdout
         except Exception:
             return None
     n = (len(raw)//8)*8
