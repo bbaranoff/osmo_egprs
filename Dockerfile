@@ -234,6 +234,18 @@ RUN sed -nE 's|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe mu
 # On TÉLÉCHARGE et on exécute CE script (le gist, pinné au commit fcdb409).
 RUN curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash
 
+# ── Patch gr-gsm : le receiver poste le BSIC/FN du SCH (decode_sch) sur le port
+# `measurements` ET sur stdout ("SCHBSIC <bsic> <fn>"). Le shunt DSP le recoit
+# (si_bridge.py parse le stdout de grgsm_decode -> UDP 4731 -> feed_sb) et encode
+# le VRAI BSIC dans dispatch_sb (remplace SHUNT_CANNED_BSIC 63). Applique APRES le
+# gist (qui clone+build gr-gsm propre), puis recompile/reinstalle dans le venv.
+# Patch maintenu dans patches/ (regenere a chaque changement gr-gsm).
+COPY patches/grgsm-receiver-publish-bsic-fn.patch /tmp/grgsm-receiver-publish-bsic-fn.patch
+RUN git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
+    && cd /opt/GSM/gr-gsm/build \
+    && make -j"$(nproc)" \
+    && make install
+
 # ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qemu-src/run.sh casse) :
 # si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
 # record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.

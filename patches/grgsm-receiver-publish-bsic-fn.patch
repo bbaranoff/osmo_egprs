@@ -1,0 +1,29 @@
+diff --git a/lib/receiver/receiver_impl.cc b/lib/receiver/receiver_impl.cc
+index 558e276..2776c3a 100644
+--- a/lib/receiver/receiver_impl.cc
++++ b/lib/receiver/receiver_impl.cc
+@@ -377,6 +377,24 @@ namespace gr
+           send_burst(d_burst_nr, output_binary,
+             GSMTAP_BURST_SCH, input_nr, d_c0_burst_start);
+ 
++          /* gr-gsm = le DSP : publier le BSIC/FN REELS decodes du SCH sur le
++           * port `measurements` (le "DSP" poste son resultat de sync, comme un
++           * vrai DSP ecrit dans le NDB). Consomme par grgsm_relay_decode.py ->
++           * shunt -> shunt_dispatch_sb (remplace SHUNT_CANNED_BSIC 63). */
++          {
++            int bsic = ((ncc & 0x7) << 3) | (bcc & 0x7);
++            pmt::pmt_t msg = pmt::make_tuple(pmt::mp("sch"),
++              pmt::from_long(bsic),
++              pmt::from_long((long)d_burst_nr.get_frame_nr()));
++            message_port_pub(pmt::mp("measurements"), msg);
++            /* Et sur stdout : le CLI grgsm_decode avale le port measurements,
++             * donc on imprime aussi le SCH pour que si_bridge.py (qui parse le
++             * stdout de grgsm_decode) le forwarde au shunt (UDP 4731 -> feed_sb).
++             * Prefixe distinctif "SCHBSIC " (ne collisionne pas avec les hex SI). */
++            printf("SCHBSIC %d %u\n", bsic, (unsigned)d_burst_nr.get_frame_nr());
++            fflush(stdout);
++          }
++
+           /**
+            * Decoding was successful, now
+            * compute offset from burst_start,
