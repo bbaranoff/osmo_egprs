@@ -78,6 +78,45 @@ banner() {
     echo -e "${NC}"
 }
 
+# ── Whiptail helpers ────────────────────────────────────────────────────────
+WT_BACKTITLE="Osmocom GSM/EGPRS Virtual Network"
+WT_WIDTH=72
+
+# Vérifie la présence de whiptail
+check_whiptail() {
+    if ! command -v whiptail >/dev/null 2>&1; then
+        echo -e "${RED}whiptail introuvable.${NC} Installez-le :" >&2
+        echo -e "  ${CYAN}apt-get install -y whiptail${NC}  (Debian/Ubuntu)" >&2
+        echo -e "  ${CYAN}dnf install -y newt${NC}          (Fedora/RHEL)" >&2
+        exit 1
+    fi
+}
+
+# wt_input <titre> <message> <defaut>  → valeur sur stdout, exit non nul si annulé
+wt_input() {
+    whiptail --backtitle "$WT_BACKTITLE" --title "$1" \
+        --inputbox "$2" 10 "$WT_WIDTH" "$3" 3>&1 1>&2 2>&3
+}
+
+# wt_yesno <titre> <message>  → 0 (oui) / 1 (non), défaut Non
+wt_yesno() {
+    whiptail --backtitle "$WT_BACKTITLE" --title "$1" \
+        --defaultno --yesno "$2" 11 "$WT_WIDTH" 3>&1 1>&2 2>&3
+}
+
+# wt_menu <titre> <message> <tag1> <item1> ...  → tag choisi sur stdout
+wt_menu() {
+    local title="$1" prompt="$2"; shift 2
+    local nitems=$(( $# / 2 ))
+    whiptail --backtitle "$WT_BACKTITLE" --title "$title" \
+        --menu "$prompt" 20 "$WT_WIDTH" "$nitems" "$@" 3>&1 1>&2 2>&3
+}
+
+# wt_msg <message>  → boîte d'information
+wt_msg() {
+    whiptail --backtitle "$WT_BACKTITLE" --msgbox "$1" 10 "$WT_WIDTH"
+}
+
 # ── Loopback audio côté session utilisateur ───────────────────────────────
 enable_user_loopback() {
     local target_user target_uid target_runtime loopback_script
@@ -562,25 +601,25 @@ setup_wan_interop() {
 # ══════════════════════════════════════════════════════════════════════════════
 start_bridge_mode() {
     local n_operators
-    read -rp "Nombre d'opérateurs [2] : " n_operators
+    n_operators=$(wt_input "Opérateurs" "Nombre d'opérateurs (1-36) :" "2") || exit 1
     n_operators=${n_operators:-2}
     if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 36 ]; then
-        echo -e "${RED}Nombre invalide (1–36).${NC}"; exit 1
+        wt_msg "Nombre invalide (1–36)."; exit 1
     fi
 
-    local use_defaults
-    read -rp "Valeurs par défaut pour tous (MCC=001, MNC=01/02/…) ? [o/N] : " use_defaults
+    local use_defaults="N"
+    wt_yesno "Valeurs par défaut" "Valeurs par défaut pour tous (MCC=001, MNC=01/02/…) ?" && use_defaults="O"
 
     local same_ms_all="N"
-    if [[ ! "$use_defaults" =~ ^[OoYy]$ ]]; then
-        read -rp "Même nombre de MS pour tous ? [o/N] : " same_ms_all
+    if [ "$use_defaults" != "O" ]; then
+        wt_yesno "MS" "Même nombre de MS pour tous les opérateurs ?" && same_ms_all="O"
     fi
 
     declare -A OP_MCC OP_MNC OP_NAME OP_MS
 
-    if [[ "$use_defaults" =~ ^[OoYy]$ ]]; then
+    if [ "$use_defaults" = "O" ]; then
         local common_ms
-        read -rp "  MS par opérateur [8] : " common_ms
+        common_ms=$(wt_input "MS" "MS par opérateur (1-64) :" "8") || exit 1
         common_ms=${common_ms:-8}
         if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
         for i in $(seq 1 "$n_operators"); do
@@ -588,62 +627,61 @@ start_bridge_mode() {
             OP_NAME[$i]="OsmoOP${i}"; OP_MS[$i]=$common_ms
         done
     else
-        if [[ "$same_ms_all" =~ ^[OoYy]$ ]]; then
+        if [ "$same_ms_all" = "O" ]; then
             local common_ms
-            read -rp "  MS par opérateur [8] : " common_ms
+            common_ms=$(wt_input "MS" "MS par opérateur (1-64) :" "8") || exit 1
             common_ms=${common_ms:-8}
             if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
             for i in $(seq 1 "$n_operators"); do
-                echo -e "${CYAN}── Opérateur ${i} ──${NC}"
-                read -rp "  MCC [001] : " mcc; OP_MCC[$i]=${mcc:-001}
-                read -rp "  MNC [$(printf '%02d' "$i")] : " mnc; OP_MNC[$i]=${mnc:-$(printf '%02d' "$i")}
-                read -rp "  Nom [OsmoOP${i}] : " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                local mcc mnc name dmnc; dmnc=$(printf '%02d' "$i")
+                mcc=$(wt_input "Opérateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
+                mnc=$(wt_input "Opérateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
+                name=$(wt_input "Opérateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
                 OP_MS[$i]=$common_ms
             done
         else
             for i in $(seq 1 "$n_operators"); do
-                echo -e "${CYAN}── Opérateur ${i} ──${NC}"
-                read -rp "  MCC [001] : " mcc; OP_MCC[$i]=${mcc:-001}
-                read -rp "  MNC [$(printf '%02d' "$i")] : " mnc; OP_MNC[$i]=${mnc:-$(printf '%02d' "$i")}
-                read -rp "  Nom [OsmoOP${i}] : " name; OP_NAME[$i]=${name:-"OsmoOP${i}"}
-                read -rp "  MS  [1] : " n_ms; OP_MS[$i]=${n_ms:-1}
+                local mcc mnc name n_ms dmnc; dmnc=$(printf '%02d' "$i")
+                mcc=$(wt_input "Opérateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
+                mnc=$(wt_input "Opérateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
+                name=$(wt_input "Opérateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                n_ms=$(wt_input "Opérateur ${i}" "Nombre de MS (1-64) :" "1") || exit 1; OP_MS[$i]=${n_ms:-1}
                 if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then OP_MS[$i]=1; fi
             done
         fi
     fi
 
     # ── WAN Interop ──
-    echo ""
-    echo -e "${CYAN}${BOLD}── WAN Interop ──${NC}"
-    local wan_choice
-    read -rp "Activer WAN vers un serveur distant ? [o/N] : " wan_choice
-    if [[ "$wan_choice" =~ ^[OoYy]$ ]]; then
+    if wt_yesno "WAN Interop" "Activer WAN vers un serveur distant ?"; then
         WAN_ENABLED="true"
         local auto_ip=""
         auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
         [ -z "$auto_ip" ] && auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
-        read -rp "  IP publique locale [${auto_ip}] : " wan_local; WAN_LOCAL_IP="${wan_local:-$auto_ip}"
+        local wan_local wan_remote wan_nremote wan_pfx
+        wan_local=$(wt_input "WAN" "IP publique locale :" "$auto_ip") || exit 1
+        WAN_LOCAL_IP="${wan_local:-$auto_ip}"
         [ -z "$WAN_LOCAL_IP" ] && WAN_ENABLED="false"
         if [ "$WAN_ENABLED" = "true" ]; then
-            read -rp "  IP publique distante : " wan_remote; WAN_REMOTE_IP="$wan_remote"
+            wan_remote=$(wt_input "WAN" "IP publique distante :" "") || exit 1
+            WAN_REMOTE_IP="$wan_remote"
             [ -z "$WAN_REMOTE_IP" ] && WAN_ENABLED="false"
         fi
         if [ "$WAN_ENABLED" = "true" ]; then
-            read -rp "  Nb opérateurs distants [${n_operators}] : " wan_nremote
+            wan_nremote=$(wt_input "WAN" "Nb opérateurs distants :" "$n_operators") || exit 1
             WAN_N_REMOTE="${wan_nremote:-$n_operators}"
-            read -rp "  Préfixe WAN [${WAN_PREFIX}] : " wan_pfx; WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
+            wan_pfx=$(wt_input "WAN" "Préfixe WAN :" "$WAN_PREFIX") || exit 1
+            WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
             echo -e "  ${GREEN}WAN: ${WAN_LOCAL_IP} ↔ ${WAN_REMOTE_IP} (local=${n_operators} remote=${WAN_N_REMOTE} prefix=${WAN_PREFIX})${NC}"
         fi
     fi
+
     # ── PHY Mode ──
-    echo ""
-    echo -e "${CYAN}${BOLD}── PHY Mode ──${NC}"
-    echo "  1) faketrx     — fake_trx + trxcon (TRXD, défaut)"
-    echo "  2) virtphy     — osmo-bts-virtual + virtphy (multicast) - EXPERIMENTAL !!"
-    echo "  3) no-process  — core seul (configs + HLR), aucun process radio/mobile"
-    echo "  4) qemu        — comme no-process puis lance /opt/GSM/qemu-src/run.sh"
     local phy_choice
-    read -rp "Mode PHY [1] : " phy_choice
+    phy_choice=$(wt_menu "PHY Mode" "Mode PHY :" \
+        "1" "faketrx     — fake_trx + trxcon (TRXD, défaut)" \
+        "2" "virtphy     — osmo-bts-virtual + virtphy (EXPERIMENTAL)" \
+        "3" "no-process  — core seul (configs + HLR)" \
+        "4" "qemu        — no-process puis qemu-src/run.sh") || exit 1
     BRIDGE_NO_PROCESS=0
     BRIDGE_QEMU=0
     case "$phy_choice" in
@@ -653,14 +691,13 @@ start_bridge_mode() {
         *) PHY_MODE="faketrx" ;;
     esac
     echo -e "  ${GREEN}PHY : ${PHY_MODE}${NC}$([ "$BRIDGE_NO_PROCESS" = 1 ] && echo -e "  ${YELLOW}(no-process)${NC}")$([ "$BRIDGE_QEMU" = 1 ] && echo -e "  ${CYAN}(qemu)${NC}")"
+
     # ── Encryption ──
-    echo ""
-    echo -e "${CYAN}${BOLD}── Encryption A5 ──${NC}"
-    echo "  0) A5/0  — pas de chiffrement"
-    echo "  1) A5/1  — chiffrement legacy"
-    echo "  2) A5/2  — (cassé, usage test)"
     local enc_choice
-    read -rp "Choix A5 [0] : " enc_choice
+    enc_choice=$(wt_menu "Encryption A5" "Choix du chiffrement :" \
+        "0" "A5/0 — pas de chiffrement" \
+        "1" "A5/1 — chiffrement legacy" \
+        "2" "A5/2 — (cassé, usage test)") || exit 1
     case "$enc_choice" in
         1) ENCRYPTION="a5 1" ;;
         2) ENCRYPTION="a5 2" ;;
@@ -1016,7 +1053,7 @@ start_host_mode() {
     HOST_IP="$src_ip"
 
     local n_ms
-    read -rp "Nombre de MS [1] : " n_ms
+    n_ms=$(wt_input "net-host" "Nombre de MS :" "1") || exit 1
     n_ms=${n_ms:-1}
 
     prepare_host_tun
@@ -1093,11 +1130,11 @@ stop_all() {
 }
 
 choose_network_mode() {
-    echo -e "${BOLD}Mode réseau :${NC}"
-    echo "  1) net-host  — SDR physique, 1 opérateur - HAS TO BE REPAIRED ?"
-    echo "  2) bridge    — Multi-opérateurs SS7 inter-op"
-    read -rp "Choix [1/2] : " NET_CHOICE
-    case "$NET_CHOICE" in
+    local choice
+    choice=$(wt_menu "Mode réseau" "Sélectionnez le mode réseau :" \
+        "1" "net-host  — SDR physique, 1 opérateur (à réparer ?)" \
+        "2" "bridge    — Multi-opérateurs SS7 inter-op") || { echo "Annulé."; exit 1; }
+    case "$choice" in
         1) NETWORK_MODE="host" ;;
         2) NETWORK_MODE="bridge" ;;
         *) echo -e "${RED}Choix invalide.${NC}"; exit 1 ;;
@@ -1110,6 +1147,7 @@ choose_network_mode() {
 banner
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
+check_whiptail
 
 # Cleanup résiduel
 docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
