@@ -10,18 +10,18 @@ p = subprocess.Popen(["grgsm_decode","-m","BCCH","-t","0","-a","514","-c",CF,"-s
 SI={0x1b:"SI3",0x1a:"SI2",0x1c:"SI4",0x21:"SI13",0x19:"SI1",0x1d:"SI2bis",0x1e:"SI2ter",0x06:"RR"}
 n=0; nsch=0
 for line in p.stdout:
-    # SCH/BSIC REEL : le receiver gr-gsm patche imprime "SCHBSIC <bsic> <fn>" sur
+    # SCH REEL : le receiver gr-gsm patche imprime "SCHBSIC <bsic> <fn> <toa>" sur
     # stdout (le port measurements est avale par le CLI grgsm_decode). On le
-    # forwarde au shunt en UDP 4731 {magic 'SCH1', int32 bsic, int32 fn} ->
-    # feed_sb -> shunt_dispatch_sb (remplace SHUNT_CANNED_BSIC 63).
-    msch = re.search(r"SCHBSIC\s+(\d+)\s+(\d+)", line)
+    # forwarde au shunt en UDP 4731 {magic 'SCH1', int32 bsic, int32 fn, int32 toa}
+    # -> feed_sb -> shunt_dispatch_sb (BSIC reel; TOA reel si hors CALYPSO_CANNED).
+    msch = re.search(r"SCHBSIC\s+(\d+)\s+(\d+)\s+(-?\d+)", line)
     if msch:
-        bsic, fn = int(msch.group(1)), int(msch.group(2))
-        s.sendto(b"SCH1" + struct.pack("<ii", bsic, fn), ("127.0.0.1", 4731))
+        bsic, fn, toa = int(msch.group(1)), int(msch.group(2)), int(msch.group(3))
+        s.sendto(b"SCH1" + struct.pack("<iii", bsic, fn, toa), ("127.0.0.1", 4731))
         nsch += 1
         if nsch<=10 or nsch%100==0:
-            print("[si-bridge] SCH -> shunt 4731 : BSIC=%d (ncc=%d bcc=%d) FN=%d  #%d"
-                  %(bsic,(bsic>>3)&7,bsic&7,fn,nsch),flush=True)
+            print("[si-bridge] SCH -> shunt 4731 : BSIC=%d (ncc=%d bcc=%d) FN=%d TOA=%d  #%d"
+                  %(bsic,(bsic>>3)&7,bsic&7,fn,toa,nsch),flush=True)
         continue
     m = re.search(r":\s+([0-9a-fA-F][0-9a-fA-F ]+)$", line.strip())
     if not m: continue
