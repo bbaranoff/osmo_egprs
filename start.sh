@@ -597,10 +597,33 @@ setup_wan_interop() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Mode bridge
+# PoC QEMU — entrée par défaut du premier menu
+# ══════════════════════════════════════════════════════════════════════════════
+# Réutilise le flux 'virtual' (start_bridge_mode) en mode non-interactif :
+# 1 opérateur, no-process + qemu, A5/0. Le bring-up lance ensuite
+# /opt/GSM/qemu-src/run.sh dans un gnome-terminal (bloc BRIDGE_QEMU).
+start_qemu_poc() {
+    echo -e "${GREEN}PoC QEMU Calypso — bring-up minimal + qemu-src/run.sh...${NC}"
+    QEMU_POC=1
+    start_bridge_mode
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Mode virtual (multi-opérateurs SS7 — ex-bridge)
 # ══════════════════════════════════════════════════════════════════════════════
 start_bridge_mode() {
     local n_operators
+    declare -A OP_MCC OP_MNC OP_NAME OP_MS
+    if [ "${QEMU_POC:-0}" = "1" ]; then
+        # ── PoC QEMU (entrée par défaut du premier menu) : 1 opérateur, valeurs
+        #    par défaut, no-process + qemu-src/run.sh, A5/0, sans WAN. AUCUN prompt. ──
+        n_operators=1
+        OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=1
+        WAN_ENABLED="false"
+        PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
+        ENCRYPTION="a5 0"
+        echo -e "  ${CYAN}[PoC QEMU] 1 opérateur · no-process + qemu-src/run.sh · A5/0${NC}"
+    else
     n_operators=$(wt_input "Opérateurs" "Nombre d'opérateurs (1-36) :" "2") || exit 1
     n_operators=${n_operators:-2}
     if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 36 ]; then
@@ -704,6 +727,7 @@ start_bridge_mode() {
         *) ENCRYPTION="a5 0" ;;
     esac
     echo -e "  ${GREEN}Encryption : ${ENCRYPTION}${NC}"
+    fi   # ── fin des prompts interactifs (intégralement sautés en PoC QEMU) ──
     # ── Détection IP hôte pour Linphone ────────────────────────────────────
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
         | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
@@ -1131,12 +1155,16 @@ stop_all() {
 
 choose_network_mode() {
     local choice
-    choice=$(wt_menu "Mode réseau" "Sélectionnez le mode réseau :" \
-        "1" "net-host  — SDR physique, 1 opérateur (à réparer ?)" \
-        "2" "bridge    — Multi-opérateurs SS7 inter-op") || { echo "Annulé."; exit 1; }
+    # Premier menu. Défaut = PoC QEMU (1ʳᵉ entrée = surlignée par whiptail).
+    # 'virtual' = ex-mode bridge (sa config est le 2ᵉ niveau, après sélection).
+    choice=$(wt_menu "Que lancer ?" "Premier choix :" \
+        "qemu"    "PoC QEMU Calypso — qemu-src/run.sh (défaut)" \
+        "virtual" "Réseau VIRTUEL multi-opérateurs SS7 (config niveau 2)" \
+        "hw"      "SDR physique (net-host) — hw (in dev)") || { echo "Annulé."; exit 1; }
     case "$choice" in
-        1) NETWORK_MODE="host" ;;
-        2) NETWORK_MODE="bridge" ;;
+        qemu)    NETWORK_MODE="qemu" ;;
+        virtual) NETWORK_MODE="bridge" ;;
+        hw)      NETWORK_MODE="host" ;;
         *) echo -e "${RED}Choix invalide.${NC}"; exit 1 ;;
     esac
 }
@@ -1163,6 +1191,7 @@ check_image
 
 # 3. Lancement
 case "$NETWORK_MODE" in
+    qemu)   start_qemu_poc ;;
     host)   start_host_mode ;;
     bridge) start_bridge_mode ;;
 esac
