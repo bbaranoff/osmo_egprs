@@ -1,0 +1,18 @@
+diff --git a/Transceiver52M/device/ipc/IPCDevice.cpp b/Transceiver52M/device/ipc/IPCDevice.cpp
+index 1d2b89a..b0161a7 100644
+--- a/Transceiver52M/device/ipc/IPCDevice.cpp
++++ b/Transceiver52M/device/ipc/IPCDevice.cpp
+@@ -1073,6 +1073,13 @@ bool IPCDevice::flush_recv(size_t num_pkts)
+ 			read = ipc_shm_read(shm_io_rx_streams[i], (uint16_t *)&tmp.front(), 4096 / 2, &tmps, 3);
+ 	}
+ 	ts_initial = tmps + read;
++	/* FIX LU 2026-06-05 : aligner ts_initial sur une frontiere de TRAME TDMA
++	 * (8 slots * 625 samples @ 4 SPS = 5000). Le device IPC commit des buffers a
++	 * des timestamps multiples de 2500 (CALYPSO_SHM_BUFSIZE), donc ts_initial%5000
++	 * valait 0 OU 2500 -> quand 2500, device-TN0 mappe sur osmo-TN4 et la RACH
++	 * (placee a l'offset 0 = device-TN0) ratait le slot TS0/RACH -> NOPE/-110.
++	 * Arrondir a la trame met les deux grilles en phase. (5000 = 8*625 @ rx-sps 4) */
++	ts_initial -= ts_initial % 5000;
+ 
+ 	LOGC(DDEV, INFO) << "Initial timestamp " << ts_initial << std::endl;
+ 	return true;

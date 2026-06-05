@@ -84,6 +84,31 @@ RUN for repo in \
     ldconfig; \
     done
 
+# ── Patch osmo-trx IPC : alignement ts_initial sur la trame TDMA (fix RACH/LU) ──
+# Le device IPC (calypso-ipc-device) commit des buffers RX a des timestamps
+# multiples de 2500 (CALYPSO_SHM_BUFSIZE) ; sans arrondi, ts_initial%5000 valait
+# 0 ou 2500 -> device-TN0 mappe sur osmo-TN4 -> la RACH (UL) ratait le slot
+# TS0/RACH -> NOPE/-110 -> Location Update bloquee. Le patch arrondit ts_initial
+# a la frontiere de trame (8*625=5000 @ 4 SPS). Patch maintenu dans patches/.
+# ── Patch osmo-trx RACH UL : table de modulation per-RA (fix LU, no-hardcode) ──
+# La vraie RA du mobile (d_rach@0x0474, plombee via /dev/shm/calypso_rach par QEMU)
+# varie a chaque burst ; le device rejouait un RA=3 fixe -> request-reference de
+# l'IMM ASSIGN jamais matchee -> LU en boucle. sigProcLib pre-genere la modulation
+# Laurent EXACTE d'osmo-trx pour chaque RA 0x00..0x0f (-> /root/rach_ref_RA<nn>.cs16),
+# le device selectionne le ref de la VRAIE RA. Ajoute aussi les logs RACH-DET
+# (Transceiver.cpp) + le lien libosmocoding dans COMMON_LDADD (Makefile.am, requis
+# pour gsm0503_rach_ext_encode). Touche Makefile.am -> autoreconf+configure requis.
+COPY patches/osmo-trx-ipc-ts-frame-align.patch /tmp/osmo-trx-ipc-ts-frame-align.patch
+COPY patches/osmo-trx-rach-per-ra-table.patch /tmp/osmo-trx-rach-per-ra-table.patch
+RUN git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-ipc-ts-frame-align.patch \
+    && git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-rach-per-ra-table.patch \
+    && cd ${ROOT}/osmo-trx \
+    && autoreconf -fi \
+    && ./configure --with-ipc \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig
+
 RUN cd ${ROOT} && \
     git clone https://gitea.osmocom.org/osmocom/gapk osmo-gapk && \
     cd osmo-gapk && \
