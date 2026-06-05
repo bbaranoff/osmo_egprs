@@ -13,10 +13,34 @@ index 0b63b16..fa260f5 100644
  if ENABLE_MS_TRX
  AM_CPPFLAGS += -I$(top_srcdir)/osmocom-bb/src/host/trxcon/include/
 diff --git a/Transceiver52M/Transceiver.cpp b/Transceiver52M/Transceiver.cpp
-index f5ddd9b..bbaf396 100644
+index f5ddd9b..9c6b76a 100644
 --- a/Transceiver52M/Transceiver.cpp
 +++ b/Transceiver52M/Transceiver.cpp
-@@ -741,6 +741,13 @@ int Transceiver::pullRadioVector(size_t chan, struct trx_ul_burst_ind *bi)
+@@ -24,6 +24,7 @@
+ */
+ 
+ #include <stdio.h>
++#include <stdlib.h>     // getenv/atoi (debug SDCCH UL Calypso)
+ #include <netinet/in.h>
+ #include <iomanip>      // std::setprecision
+ #include <fstream>
+@@ -258,8 +259,13 @@ bool Transceiver::init()
+     mStates[i].init(filler, cfg->tx_sps, txFullScale, cfg->rtsc, cfg->rach_delay);
+   }
+ 
+-  /* Randomize the central clock */
+-  GSM::Time startTime(random() % gHyperframe, 0);
++  /* Horloge centrale : random par defaut. CALYPSO_START_FN=N force un FN de
++   * depart DETERMINISTE -> tue la run-variance tn=0/tn=5 de l'injection UL Calypso
++   * (mClock demarrait a un FN aleatoire -> l'etiquette TN glissait). */
++  unsigned _start_fn;
++  { const char *e = getenv("CALYPSO_START_FN");
++    _start_fn = e ? (unsigned)(atol(e) % gHyperframe) : (unsigned)(random() % gHyperframe); }
++  GSM::Time startTime(_start_fn, 0);
+   mRadioInterface->getClock()->set(startTime);
+   mTransmitDeadlineClock = startTime;
+   mLastClockUpdateTime = startTime;
+@@ -741,6 +747,13 @@ int Transceiver::pullRadioVector(size_t chan, struct trx_ul_burst_ind *bi)
    burst = radio_burst->getVector(max_i);
    avg = sqrt(avg / radio_burst->chans());
  
@@ -30,16 +54,71 @@ index f5ddd9b..bbaf396 100644
    if (type == IDLE) {
      /* Update noise levels */
      state->mNoises.insert(avg);
-@@ -766,6 +773,9 @@ int Transceiver::pullRadioVector(size_t chan, struct trx_ul_burst_ind *bi)
+@@ -756,6 +769,14 @@ int Transceiver::pullRadioVector(size_t chan, struct trx_ul_burst_ind *bi)
+ 
+   max_toa = (type == RACH || type == EXT_RACH) ?
+             mMaxExpectedDelayAB : mMaxExpectedDelayNB;
++  /* DEBUG SDCCH UL (Calypso) : osmo-bts n'envoie pas SETMAXDLYNB -> mMaxExpectedDelayNB=0
++   * -> fenetre TOA du burst normal trop etroite pour le burst injecte par qemu_wrap.
++   * CALYPSO_NB_MAXDLY=N (symboles) elargit la fenetre TOA late du burst normal. */
++  if (type != RACH && type != EXT_RACH) {
++    static int nb_maxdly = -1;
++    if (nb_maxdly < 0) { const char *e = getenv("CALYPSO_NB_MAXDLY"); nb_maxdly = e ? atoi(e) : 0; }
++    if (nb_maxdly > 0) max_toa = nb_maxdly;
++  }
+ 
+   if (cfg->use_va) {
+     // shifted burst copy to make the old demod and detection happy
+@@ -766,6 +787,15 @@ int Transceiver::pullRadioVector(size_t chan, struct trx_ul_burst_ind *bi)
  
    /* Detect normal or RACH bursts */
    rc = detectAnyBurst(*shvec_ptr, mTSC, BURST_THRESH, cfg->rx_sps, type, max_toa, &ebp);
 +  if ((type == RACH || type == EXT_RACH) && avg > 800.0)
 +    LOGCHAN(chan, DTRXDUL, NOTICE) << "RACH-DET fn=" << burstTime.FN()
 +      << " rc=" << rc << " toa=" << ebp.toa << " tsc=" << ebp.tsc;
++  /* DEBUG SDCCH UL (Calypso) : sonde symetrique a RACH-DET pour le burst NORMAL,
++   * limitee a TN0 (le slot CCCH+SDCCH4) pour ne pas flooder. rc>0 = NB detecte,
++   * toa = decalage mesure -> dit si c'est detection (offset) ou demod. */
++  if ((type != RACH && type != EXT_RACH) && avg > 800.0 && burstTime.TN() == 0)
++    LOGCHAN(chan, DTRXDUL, NOTICE) << "NB-DET fn=" << burstTime.FN()
++      << " rc=" << rc << " toa=" << ebp.toa << " tsc=" << ebp.tsc << " avg=" << avg;
    if (rc <= 0) {
      if (rc == -SIGERR_CLIP) {
        LOGCHAN(chan, DTRXDUL, INFO) << "Clipping detected on received RACH or Normal Burst";
+@@ -790,6 +820,33 @@ int Transceiver::pullRadioVector(size_t chan, struct trx_ul_burst_ind *bi)
+   bi->tsc = ebp.tsc;
+   bi->ci = ebp.ci;
+ 
++  /* SONDE SDCCH (Calypso) : |soft| moyen des bits DATA (3..60, 87..144) vs
++   * MIDAMBLE (61..86) sur les bursts NORMAUX tn=0. Discrimine la cause du BER
++   * 456/456 : data_re~0 + data_im>>data_re => bits data sur l'axe imaginaire
++   * (rotation pi/2 fausse, jetee par .real()) ; data_re~mid_re => data OK ailleurs ;
++   * data_re~0 & data_im~0 => pas de signal data. */
++  if ((type != RACH && type != EXT_RACH) && avg > 800.0 && burstTime.TN() == 0 && rxBurst) {
++    double dabs = 0, mabs = 0; int nd = 0, nm = 0;
++    int Nsb = (int)rxBurst->size();
++    for (int i = 0; i < Nsb && i < 148; i++) {
++      float v = rxBurst->begin()[i];   /* SoftVector = float (re deja extrait) */
++      if (i >= 61 && i <= 86) { mabs += fabsf(v); nm++; }
++      else if (i >= 3 && i <= 144) { dabs += fabsf(v); nd++; }
++    }
++    /* bits durs démodulés aux positions TSC (61..86) : référence CONNUE = TSC7
++     * 11101111000100101110111100. Match=correct ; complément=inversion ;
++     * décalé=alignement ; garbage=démod faux. Idem 1ers bits data (3..12). */
++    char tscb[32]; int tj = 0;
++    for (int i = 61; i <= 86 && tj < 31; i++) tscb[tj++] = (rxBurst->begin()[i] > 0) ? '1' : '0';
++    tscb[tj] = 0;
++    char datb[16]; int dj = 0;
++    for (int i = 3; i <= 12 && dj < 15; i++) datb[dj++] = (rxBurst->begin()[i] > 0) ? '1' : '0';
++    datb[dj] = 0;
++    LOGCHAN(chan, DTRXDUL, NOTICE) << "SOFT-DBG fn=" << burstTime.FN()
++      << " data_abs=" << (nd ? dabs / nd : 0.0) << " mid_abs=" << (nm ? mabs / nm : 0.0)
++      << " tsc=" << tscb << " dat0=" << datb;
++  }
++
+   /* EDGE demodulator returns 444 (gSlotLen * 3) bits */
+   if (rxBurst->size() == EDGE_BURST_NBITS) {
+     bi->modulation = MODULATION_8PSK;
 diff --git a/Transceiver52M/sigProcLib.cpp b/Transceiver52M/sigProcLib.cpp
 index 5fac365..b34851a 100644
 --- a/Transceiver52M/sigProcLib.cpp

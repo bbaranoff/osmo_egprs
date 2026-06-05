@@ -147,24 +147,33 @@ def welch_psd(iq):
     psd = acc/max(1,nseg)
     return 10*np.log10(psd/ (NFFT*RATE) + 1e-20)
 
-# ---- figure "jolie" ----
+# ---- figure "jolie" : PSD (haut) + waterfall (bas) ALIGNEES verticalement.
+#      GridSpec 2x2 : col 0 = les 2 plots (MEME largeur), col 1 = colorbar (seulement
+#      sur la ligne waterfall) -> la colorbar ne retrecit plus la waterfall, donc x=0
+#      tombe sur la MEME verticale dans la PSD et la waterfall. sharex lie les axes. ----
 plt.style.use("dark_background")
-fig, (axp, axw) = plt.subplots(2,1, figsize=(11,8),
-                               gridspec_kw=dict(height_ratios=[1,1.4]))
+fig = plt.figure(figsize=(11,8))
+gs = fig.add_gridspec(2, 2, width_ratios=[40, 1], height_ratios=[1, 1.4],
+                      hspace=0.18, wspace=0.015)
+axp = fig.add_subplot(gs[0, 0])
+axw = fig.add_subplot(gs[1, 0], sharex=axp)   # x partage -> aligne avec la PSD
+cax = fig.add_subplot(gs[1, 1])               # colorbar dans sa colonne (n'affecte pas axw)
 fig.suptitle(f"Calypso I/Q live — {CONT}:{CFILE}  |  ARFCN={ARFCN}  Fs={RATE/1e6:.4f} MHz",
              fontsize=11, color="#7fd")
 (line,) = axp.plot(freqs, np.full(NFFT,-120), lw=0.5, color="#39f")
 axp.set_xlim(freqs[0],freqs[-1]); axp.set_ylim(-130,-30)
-axp.set_ylabel("PSD (dB)"); axp.grid(alpha=0.25); axp.set_xlabel("offset (kHz)")
-axp.axvline(0, color="#f55", lw=0.4, alpha=0.5)
+axp.set_ylabel("PSD (dB)"); axp.grid(alpha=0.25)
+axp.axvline(0, color="#f55", lw=0.7, alpha=0.7)
+plt.setp(axp.get_xticklabels(), visible=False)   # l'axe x est porte par la waterfall en bas
 
 wf = np.full((WROWS,NFFT), -120.0)
 im = axw.imshow(wf, aspect="auto", origin="upper", cmap="turbo",
                 extent=[freqs[0],freqs[-1],0,WROWS], vmin=-120, vmax=-50,
                 interpolation="bilinear")
 axw.set_ylabel("temps (frames)"); axw.set_xlabel("offset (kHz)")
-fig.colorbar(im, ax=axw, label="dB", pad=0.01)
-fig.tight_layout(rect=[0,0,1,0.96])
+axw.axvline(0, color="#fff", lw=0.7, alpha=0.5)  # meme 0 vertical que la PSD
+fig.colorbar(im, cax=cax, label="dB")
+fig.subplots_adjust(left=0.08, right=0.92, top=0.92, bottom=0.08)
 
 def update(_):
     iq = grab()
