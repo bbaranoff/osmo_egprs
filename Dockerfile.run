@@ -20,7 +20,7 @@ RUN mkdir -p \
     /var/log/osmocom
 
 RUN apt-get update && apt-get install -y --no-install-recommends telnet nano iproute2 tmux \
-    libasound2-plugins pulseaudio-utils psmisc whiptail && \
+    libasound2-plugins pulseaudio-utils psmisc whiptail tcpdump && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Patch fake_trx : forcer TRXD v0 ─────────────────────────────────────────
