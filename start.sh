@@ -1009,7 +1009,7 @@ start_bridge_mode() {
     # de l'operateur 1 pour garder un acces au shell de la stack.
     if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
         _u_tmux new-session -d -s "$_tmux_sess" -n qemu \
-            "sudo docker exec -ti ${_qemu_container} bash -c 'cd /opt/GSM/qemu-src && CALYPSO_MODE=full-grgsm CALYPSO_UL_BSIC=7 CALYPSO_UL_SLOT_OFFSET=1875 CALYPSO_L2_CLIENT=mobile CALYPSO_UL_FN_GATE=0 CALYPSO_UL_RA=3 CALYPSO_UL_DEBUG=1 CALYPSO_REQREF_REWRITE=1 CALYPSO_REQREF_ADJ=1 CALYPSO_NB_MAXDLY=40 CALYPSO_START_FN=0 CALYPSO_UL_SDCCH_OFS=19 CALYPSO_UL_SABM_TTL=200 CALYPSO_SHUNT_IQ_CFILE=/dev/shm/dsp_iq.cfile CALYPSO_RECORD_FILE=/dev/shm/record.cfile ./run.sh; exec bash'"
+            "sudo docker exec -ti ${_qemu_container} bash -c 'cd /opt/GSM/qemu-src && CALYPSO_MODE=full-grgsm CALYPSO_UL_SLOT_OFFSET=1875 CALYPSO_L2_CLIENT=mobile CALYPSO_UL_FN_GATE=0 CALYPSO_UL_RA= CALYPSO_UL_DEBUG=1 CALYPSO_REQREF_REWRITE=1 CALYPSO_REQREF_ADJ=1 CALYPSO_NB_MAXDLY=40 CALYPSO_START_FN=0 CALYPSO_UL_SDCCH_OFS=19 CALYPSO_UL_SABM_TTL=2 CALYPSO_SHUNT_IQ_CFILE=/dev/shm/dsp_iq.cfile CALYPSO_RECORD_FILE=/dev/shm/record.cfile ./run.sh; exec bash'"
     else
         _u_tmux new-session -d -s "$_tmux_sess" -n stack \
             "sudo docker exec -ti ${_qemu_container} bash -c 'tmux -S /tmp/osmocom_tmux attach 2>/dev/null; exec bash'"
