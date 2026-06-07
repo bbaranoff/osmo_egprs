@@ -25,7 +25,7 @@ export FFT_SRC="${FFT_SRC:-tail}"   # tail (defaut, NON-perturbant) | sweep — 
 # fifo en lecture force l'IPC device a l'ecrire, ce qui perturbe la boucle relay
 # temps-reel et COUPE le decode grgsm (si-bridge 'fini') -> camping fige. On lit
 # desormais record.cfile, alimente par record_drain.py (decouple, always-on).
-export CFILE="${CFILE:-/root/dsp_iq.cfile}"       # I/Q d'entree du DSP shunte (cfile fc32, ecrit par QEMU dans /root). Fichier qui GRANDIT -> tail-c lit le frais. (override CFILE=/tmp/record.cfile pour le ring record_drain)
+export CFILE="${CFILE:-/dev/shm/dsp_iq.cfile}"    # entree DSP shunt = MS (le mobile qui repond a la BTS ; cfile fc32 en /dev/shm RAM). Fichier qui GRANDIT -> tail-c lit le frais. (override CFILE=/dev/shm/record.cfile = BTS)
 export RATE="${RATE:-1083333}"      # 4 SPS natif = 26e6/24
 export NSAMP="${NSAMP:-32768}"      # complex samples par fenetre (256 KB) — court = ca gigote
 export REFRESH="${REFRESH:-0.25}"   # periode de rafraichissement (s) — court = fluide

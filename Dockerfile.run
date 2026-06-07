@@ -1,5 +1,5 @@
 # Dockerfile.run — Image d'exécution ; repose sur l'image de base 
-FROM osmocom-nitb AS osmocom-run
+FROM monimage AS osmocom-run
 
 # ── Répertoires nécessaires ────────────────────────────────────────────────────
 RUN mkdir -p \
@@ -75,7 +75,7 @@ RUN printf '%s\n' '' \
     "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️# '" \
     '### end calypso-prompt ###' >> /root/.bashrc
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
-RUN source ~/.bashrc && pip install matplotlib
+RUN pip install matplotlib
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]

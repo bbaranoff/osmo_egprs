@@ -10,7 +10,7 @@ if [[ -n "$DEBUG" ]]; then
     echo "=== MODE DEBUG ACTIVÉ ==="
 fi
 
-IMAGE_BASE="osmocom-nitb"
+IMAGE_BASE="monimage"
 IMAGE_RUN="osmocom-run"
 
 INTER_NET="gsm-inter"
@@ -843,6 +843,7 @@ start_bridge_mode() {
             --cap-add SYS_ADMIN \
             --cap-add NET_RAW \
             --ulimit rtprio=18 \
+            --shm-size=8g \
             --cgroupns host \
             --device /dev/net/tun:/dev/net/tun \
             $alsa_args \
@@ -907,30 +908,10 @@ start_bridge_mode() {
         '
         echo -e "  ${GREEN}✓ HLR Op${i} alimenté${NC}"
 
-        # En qemu : lancer /opt/GSM/qemu-src/run.sh dans un gnome-terminal
-        # (TTY interactif) une fois le core prêt. Sans TTY, son `tmux attach`
-        # final échoue et on retombe sur le shell hôte.
-        if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
-            local _du="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
-            local _duid; _duid=$(id -u "$_du" 2>/dev/null)
-            local _disp="${DISPLAY:-:0}"
-            local _xauth="${XAUTHORITY:-/home/$_du/.Xauthority}"
-            local _qscript="/tmp/osmo-gnome-qemu-op${i}.sh"
-            cat > "$_qscript" <<EOF
-#!/usr/bin/env bash
-printf '\033]0;QEMU run.sh — ${container_name}\007'
-echo "=== /opt/GSM/qemu-src/run.sh — ${container_name} ==="
-exec sudo docker exec -ti ${container_name} bash -c '/opt/GSM/qemu-src/run.sh; exec bash'
-EOF
-            chmod +x "$_qscript"
-            echo -e "  ${CYAN}[*] qemu-src/run.sh → gnome-terminal${NC}"
-            sudo -u "$_du" \
-                DISPLAY="$_disp" XAUTHORITY="$_xauth" \
-                XDG_RUNTIME_DIR="/run/user/${_duid}" \
-                DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${_duid}/bus" \
-                gnome-terminal -- bash "$_qscript" &
-            sleep 0.3
-        fi
+        # En qemu : /opt/GSM/qemu-src/run.sh n'est PLUS lance ici dans un
+        # gnome-terminal dedie. Il devient la fenetre 'qemu' de la session tmux
+        # UNIQUE construite apres la boucle (cf. section "Terminal unique").
+        # -> un seul gnome-terminal au lieu de plusieurs fenetres qui poppent.
 
         # Attente dernier groupe — sautée en no-process (pas de mobile → 4247 absent)
         if [ "${BRIDGE_NO_PROCESS:-0}" = "1" ]; then
@@ -990,76 +971,92 @@ EOF
     fi
     echo ""
 
-    # ── Wireshark ─────────────────────────────────────────────────────────
-    local bridge_if
-    bridge_if=$(docker network inspect "$INTER_NET" -f '{{.Id}}' 2>/dev/null | cut -c1-12)
-    if [ -n "$bridge_if" ] && command -v wireshark &>/dev/null; then
-        TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
-        DISPLAY="${DISPLAY:-:0}"
-        XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
-        DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-            wireshark -k -i "br-${bridge_if}" -f "sctp or udp port 4729" \
-            >/dev/null 2>&1 & true
-        echo -e "  Wireshark sur ${CYAN}br-${bridge_if}${NC}"
-    fi
-
-    # ── Terminaux gnome-terminal ───────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════
+    # Terminal unique : le terminal COURANT -> 1 session tmux HOTE
+    # ══════════════════════════════════════════════════════════════════════
+    # Toutes les vues (run.sh qemu, wireshark, FFT MS, FFT BTS) dans UNE
+    # seule session tmux. Le terminal courant s'y attache en fin (exec) : pas
+    # de nouvelle fenetre, pas de vty-menu. Fini les fenetres X qui poppent.
+    # La session tmux tourne en tant que
+    # l'utilisateur cible (DISPLAY/XAUTHORITY herites) pour que wireshark et
+    # les FFT (apps GUI lancees DEPUIS le tmux) s'affichent correctement.
     TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
     DISPLAY="${DISPLAY:-:0}"
     XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
-
-    # gnome-terminal NE se lance PAS en root : il parle à gnome-terminal-server
-    # via le bus D-Bus de session de l'utilisateur. On l'exécute donc en tant
-    # que l'utilisateur cible avec son XDG_RUNTIME_DIR + DBUS_SESSION_BUS_ADDRESS.
-    # Le titre est posé via séquence d'échappement dans le script (--title est
-    # déprécié/retiré sur les gnome-terminal récents).
     local _term_uid; _term_uid=$(id -u "$TARGET_USER" 2>/dev/null)
-    _open_term_script() {
-        local title="$1" script_file="$2"
-        chmod +x "$script_file"
+    local _runtime="/run/user/${_term_uid}"
+    local _egprs_dir; _egprs_dir="$(cd "$(dirname "$0")" && pwd)"
+    local _tmux_sess="osmo"
+    # Conteneur cible des fenetres (qemu run.sh / FFT). Defaut = operateur 1
+    # (ce que start.sh cree). Surchargeable : QEMU_CONTAINER=osmo-operator-777 ./start.sh
+    local _qemu_container; _qemu_container="${QEMU_CONTAINER:-$(op_container 1)}"
+
+    # helper : execute `tmux ...` sur le serveur tmux de l'utilisateur cible.
+    # (toutes les commandes partagent le meme socket via XDG_RUNTIME_DIR.)
+    _u_tmux() {
         sudo -u "$TARGET_USER" \
             DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-            XDG_RUNTIME_DIR="/run/user/${_term_uid}" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${_term_uid}/bus" \
-            gnome-terminal -- bash "$script_file" &
-        sleep 0.3
+            XDG_RUNTIME_DIR="$_runtime" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime}/bus" \
+            tmux "$@"
     }
 
-    for i in $(seq 1 "$n_operators"); do
-        local cname; cname=$(op_container "$i")
-        echo -ne "${YELLOW}Attente tmux ${cname}...${NC}"
-        while ! sudo docker exec "${cname}" [ -S /tmp/osmocom_tmux ] 2>/dev/null; do sleep 1; echo -n "."; done
-        echo -e " ${GREEN}OK${NC}"
+    # repartir d'une session propre
+    _u_tmux kill-session -t "$_tmux_sess" 2>/dev/null || true
 
-        local tmpscript="/tmp/osmo-gnome-op${i}.sh"
-        cat > "$tmpscript" <<EOF
-#!/usr/bin/env bash
-printf '\033]0;Op${i} — ${OP_NAME[$i]}\007'
-echo "=== Op${i} — ${OP_NAME[$i]} ==="
-# Après détachement tmux (Ctrl-b d), on retombe sur un shell DANS le
-# conteneur au lieu de fermer la fenêtre.
-exec sudo docker exec -ti ${cname} bash -c 'tmux -S /tmp/osmocom_tmux attach; exec bash'
-EOF
-        _open_term_script "Op${i} — ${OP_NAME[$i]}" "$tmpscript"
-    done
+    # fenetre 'qemu' = la stack qui tourne ("celui qui run").
+    # En mode non-qemu (virtual avec process), on attache plutot le tmux interne
+    # de l'operateur 1 pour garder un acces au shell de la stack.
+    if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
+        _u_tmux new-session -d -s "$_tmux_sess" -n qemu \
+            "sudo docker exec -ti ${_qemu_container} bash -c '/opt/GSM/qemu-src/run.sh; exec bash'"
+    else
+        _u_tmux new-session -d -s "$_tmux_sess" -n stack \
+            "sudo docker exec -ti ${_qemu_container} bash -c 'tmux -S /tmp/osmocom_tmux attach 2>/dev/null; exec bash'"
+    fi
 
-    echo "=== ${INTER_STP_CONTAINER} ==="
-    wait_stp_vty "$INTER_STP_CONTAINER"
+    # fenetre 'wireshark' (GUI lancee DEPUIS tmux) sur le bridge backbone.
+    local bridge_if
+    bridge_if=$(docker network inspect "$INTER_NET" -f '{{.Id}}' 2>/dev/null | cut -c1-12)
+    if false && [ -n "$bridge_if" ] && command -v wireshark >/dev/null 2>&1; then   # DISABLED: pas de fenetre wireshark tmux
+        _u_tmux new-window -t "$_tmux_sess" -n wireshark \
+            "wireshark -k -i br-${bridge_if} -f 'sctp or udp port 4729'; exec bash"
+        echo -e "  Wireshark sur ${CYAN}br-${bridge_if}${NC} (fenetre tmux 'wireshark')"
+    fi
 
-    # Terminal inter-STP : logs en direct du conteneur inter-STP.
-    local tmpscript_stp="/tmp/osmo-gnome-stp.sh"
-    cat > "$tmpscript_stp" <<EOF
-#!/usr/bin/env bash
-printf '\033]0;Inter-STP — logs\007'
-echo "=== ${INTER_STP_CONTAINER} — logs (Ctrl-C pour un shell) ==="
-sudo docker logs -f --tail 100 "${INTER_STP_CONTAINER}"
-exec sudo docker exec -ti "${INTER_STP_CONTAINER}" bash
-EOF
-    _open_term_script "Inter-STP — logs" "$tmpscript_stp"
+    # fenetres 'fft' (MS = dsp_iq.cfile) et 'fft2' (BTS = record.cfile).
+    # GUI matplotlib lancee DEPUIS tmux. On attend que run.sh ait produit le
+    # cfile (sinon fft.sh sort tout de suite) avant de lancer.
+    if false && [ -x "${_egprs_dir}/fft.sh" ]; then   # DISABLED: pas de fenetre fft tmux
+        _u_tmux new-window -t "$_tmux_sess" -n fft \
+            "cd '${_egprs_dir}'; echo '[fft] attente I/Q MS (dsp_iq.cfile)...'; until sudo docker exec ${_qemu_container} test -f /dev/shm/dsp_iq.cfile 2>/dev/null; do sleep 2; done; CONTAINER='${_qemu_container}' ./fft.sh; exec bash"
+    fi
+    if false && [ -x "${_egprs_dir}/fft2.sh" ]; then   # DISABLED: pas de fenetre fft2 tmux
+        _u_tmux new-window -t "$_tmux_sess" -n fft2 \
+            "cd '${_egprs_dir}'; echo '[fft2] attente I/Q BTS (record.cfile)...'; until sudo docker exec ${_qemu_container} test -f /dev/shm/record.cfile 2>/dev/null; do sleep 2; done; CONTAINER='${_qemu_container}' ./fft2.sh; exec bash"
+    fi
+
+    # (pas de fenetre 'bash' : l'utilisateur ne veut pas de shell osmo_egprs qui pop.)
+
+    # selectionne la fenetre principale (qemu = run.sh).
+    _u_tmux select-window -t "${_tmux_sess}:0"
+    echo -e "  ${CYAN}[*] session tmux '${_tmux_sess}'${NC} : ${CYAN}qemu/stack${NC}"
 
     echo -e "\n${GREEN}${BOLD}Stack prête !${NC}"
     enable_user_loopback
-    if [ -f "./vty-menu.sh" ]; then
+
+    # PAS de vty-menu, PAS de nouvelle fenetre gnome-terminal : le terminal
+    # COURANT (celui ou tourne start.sh) DEVIENT la session tmux 'osmo' -> on y
+    # voit directement le run.sh de qemu. wireshark/fft (GUI) tournent deja dans
+    # leurs fenetres tmux et s'affichent en X. (Mode virtual : OSMO_MENU=1 ->
+    # ancien vty-menu conserve.)
+    if [ "${BRIDGE_QEMU:-0}" = "1" ] || [ ! -f "./vty-menu.sh" ]; then
+        exec sudo -u "$TARGET_USER" \
+            DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
+            XDG_RUNTIME_DIR="$_runtime" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime}/bus" \
+            tmux attach -t "$_tmux_sess"
+    else
         chmod +x ./vty-menu.sh
         exec ./vty-menu.sh
     fi
@@ -1102,6 +1099,7 @@ start_host_mode() {
     # shellcheck disable=SC2086
     docker run -d --rm --name egprs --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW \
+        --shm-size=8g \
         --cgroupns host \
         --device /dev/net/tun:/dev/net/tun \
         $alsa_args \
@@ -1175,15 +1173,21 @@ choose_network_mode() {
 banner
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
-check_whiptail
 
 # Cleanup résiduel
 docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
 docker rm -f $(docker ps -aq --filter "name=egprs") 2>/dev/null || true
 docker network ls --filter "name=gsm-" -q | xargs -r docker network rm 2>/dev/null || true
 
-# 1. Toutes les questions d'abord (avant tout restart)
-choose_network_mode
+# 1. Mode : QEMU direct par defaut (PAS de menu core/infra/operateurs).
+#    Menu complet (qemu/virtual/hw + prompts) : OSMO_MENU=1 ./start.sh
+if [ "${OSMO_MENU:-0}" = "1" ]; then
+    check_whiptail
+    choose_network_mode
+else
+    NETWORK_MODE="qemu"
+    echo -e "${GREEN}Mode : ${CYAN}qemu${NC} ${YELLOW}(menu desactive — OSMO_MENU=1 pour l'afficher)${NC}"
+fi
 # 2. Ensuite le restart docker + build
 ./helpers/prepare_host.sh
 build_run_image
