@@ -1015,29 +1015,6 @@ start_bridge_mode() {
             "sudo docker exec -ti ${_qemu_container} bash -c 'tmux -S /tmp/osmocom_tmux attach 2>/dev/null; exec bash'"
     fi
 
-    # fenetre 'wireshark' (GUI lancee DEPUIS tmux) sur le bridge backbone.
-    local bridge_if
-    bridge_if=$(docker network inspect "$INTER_NET" -f '{{.Id}}' 2>/dev/null | cut -c1-12)
-    if false && [ -n "$bridge_if" ] && command -v wireshark >/dev/null 2>&1; then   # DISABLED: pas de fenetre wireshark tmux
-        _u_tmux new-window -t "$_tmux_sess" -n wireshark \
-            "wireshark -k -i br-${bridge_if} -f 'sctp or udp port 4729'; exec bash"
-        echo -e "  Wireshark sur ${CYAN}br-${bridge_if}${NC} (fenetre tmux 'wireshark')"
-    fi
-
-    # fenetres 'fft' (MS = dsp_iq.cfile) et 'fft2' (BTS = record.cfile).
-    # GUI matplotlib lancee DEPUIS tmux. On attend que run.sh ait produit le
-    # cfile (sinon fft.sh sort tout de suite) avant de lancer.
-    if false && [ -x "${_egprs_dir}/fft.sh" ]; then   # DISABLED: pas de fenetre fft tmux
-        _u_tmux new-window -t "$_tmux_sess" -n fft \
-            "cd '${_egprs_dir}'; echo '[fft] attente I/Q MS (dsp_iq.cfile)...'; until sudo docker exec ${_qemu_container} test -f /dev/shm/dsp_iq.cfile 2>/dev/null; do sleep 2; done; CONTAINER='${_qemu_container}' ./fft.sh; exec bash"
-    fi
-    if false && [ -x "${_egprs_dir}/fft2.sh" ]; then   # DISABLED: pas de fenetre fft2 tmux
-        _u_tmux new-window -t "$_tmux_sess" -n fft2 \
-            "cd '${_egprs_dir}'; echo '[fft2] attente I/Q BTS (record.cfile)...'; until sudo docker exec ${_qemu_container} test -f /dev/shm/record.cfile 2>/dev/null; do sleep 2; done; CONTAINER='${_qemu_container}' ./fft2.sh; exec bash"
-    fi
-
-    # (pas de fenetre 'bash' : l'utilisateur ne veut pas de shell osmo_egprs qui pop.)
-
     # selectionne la fenetre principale (qemu = run.sh).
     _u_tmux select-window -t "${_tmux_sess}:0"
     echo -e "  ${CYAN}[*] session tmux '${_tmux_sess}'${NC} : ${CYAN}qemu/stack${NC}"
