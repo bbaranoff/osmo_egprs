@@ -1,5 +1,5 @@
 # Dockerfile.run — Image d'exécution ; repose sur l'image de base 
-FROM monimage AS osmocom-run
+FROM osmocom-nitb AS osmocom-run
 
 # ── Répertoires nécessaires ────────────────────────────────────────────────────
 RUN mkdir -p \

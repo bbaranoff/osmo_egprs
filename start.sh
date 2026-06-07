@@ -10,7 +10,7 @@ if [[ -n "$DEBUG" ]]; then
     echo "=== MODE DEBUG ACTIVÉ ==="
 fi
 
-IMAGE_BASE="monimage"
+IMAGE_BASE="osmocom-nitb"
 IMAGE_RUN="osmocom-run"
 
 INTER_NET="gsm-inter"
