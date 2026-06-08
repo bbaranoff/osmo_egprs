@@ -982,6 +982,7 @@ start_bridge_mode() {
         exec docker exec -ti "$_qemu_container" bash -c "\
 cd /opt/GSM/qemu-src && \
 CALYPSO_CANNED=PM \
+CALYPSO_IRDA_CAPTURE=0 \
 CALYPSO_UL_DEBUG=1 \
 CALYPSO_UL_SLOT_OFFSET=1875 \
 CALYPSO_REQREF_REWRITE=1 \
