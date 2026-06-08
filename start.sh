@@ -11,7 +11,7 @@ if [[ -n "$DEBUG" ]]; then
 fi
 
 IMAGE_BASE="osmocom-nitb"
-IMAGE_RUN="osmocom_run"
+IMAGE_RUN="osmocom-run"
 
 INTER_NET="gsm-inter"
 INTER_NET_SUBNET="172.20.0.0/24"
@@ -971,69 +971,31 @@ start_bridge_mode() {
     fi
     echo ""
 
-    # ══════════════════════════════════════════════════════════════════════
-    # Terminal unique : le terminal COURANT -> 1 session tmux HOTE
-    # ══════════════════════════════════════════════════════════════════════
-    # Toutes les vues (run.sh qemu, wireshark, FFT MS, FFT BTS) dans UNE
-    # seule session tmux. Le terminal courant s'y attache en fin (exec) : pas
-    # de nouvelle fenetre, pas de vty-menu. Fini les fenetres X qui poppent.
-    # La session tmux tourne en tant que
-    # l'utilisateur cible (DISPLAY/XAUTHORITY herites) pour que wireshark et
-    # les FFT (apps GUI lancees DEPUIS le tmux) s'affichent correctement.
-    TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
-    DISPLAY="${DISPLAY:-:0}"
-    XAUTHORITY="${XAUTHORITY:-/home/$TARGET_USER/.Xauthority}"
-    local _term_uid; _term_uid=$(id -u "$TARGET_USER" 2>/dev/null)
-    local _runtime="/run/user/${_term_uid}"
-    local _egprs_dir; _egprs_dir="$(cd "$(dirname "$0")" && pwd)"
-    local _tmux_sess="osmo"
-    # Conteneur cible des fenetres (qemu run.sh / FFT). Defaut = operateur 1
-    # (ce que start.sh cree). Surchargeable : QEMU_CONTAINER=osmo-operator-777 ./start.sh
-    local _qemu_container; _qemu_container="${QEMU_CONTAINER:-$(op_container 1)}"
-
-    # helper : execute `tmux ...` sur le serveur tmux de l'utilisateur cible.
-    # (toutes les commandes partagent le meme socket via XDG_RUNTIME_DIR.)
-    _u_tmux() {
-        sudo -u "$TARGET_USER" \
-            DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-            XDG_RUNTIME_DIR="$_runtime" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime}/bus" \
-            tmux "$@"
-    }
-
-    # repartir d'une session propre
-    _u_tmux kill-session -t "$_tmux_sess" 2>/dev/null || true
-
-    # fenetre 'qemu' = la stack qui tourne ("celui qui run").
-    # En mode non-qemu (virtual avec process), on attache plutot le tmux interne
-    # de l'operateur 1 pour garder un acces au shell de la stack.
-    if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
-        _u_tmux new-session -d -s "$_tmux_sess" -n qemu \
-            "sudo docker exec -ti ${_qemu_container} bash -c 'cd /opt/GSM/qemu-src && CALYPSO_MODE=full-grgsm CALYPSO_UL_SLOT_OFFSET=1875 CALYPSO_L2_CLIENT=mobile CALYPSO_UL_FN_GATE=0 CALYPSO_UL_RA= CALYPSO_UL_DEBUG=1 CALYPSO_REQREF_REWRITE=1 CALYPSO_REQREF_ADJ=1 CALYPSO_NB_MAXDLY=40 CALYPSO_START_FN=0 CALYPSO_UL_SDCCH_OFS=19 CALYPSO_UL_SABM_TTL=2 CALYPSO_SHUNT_IQ_CFILE=/dev/shm/dsp_iq.cfile CALYPSO_RECORD_FILE=/dev/shm/record.cfile ./run.sh; exec bash'"
-    else
-        _u_tmux new-session -d -s "$_tmux_sess" -n stack \
-            "sudo docker exec -ti ${_qemu_container} bash -c 'tmux -S /tmp/osmocom_tmux attach 2>/dev/null; exec bash'"
-    fi
-
-    # selectionne la fenetre principale (qemu = run.sh).
-    _u_tmux select-window -t "${_tmux_sess}:0"
-    echo -e "  ${CYAN}[*] session tmux '${_tmux_sess}'${NC} : ${CYAN}qemu/stack${NC}"
-
     echo -e "\n${GREEN}${BOLD}Stack prête !${NC}"
-    enable_user_loopback
 
-    # PAS de vty-menu, PAS de nouvelle fenetre gnome-terminal : le terminal
-    # COURANT (celui ou tourne start.sh) DEVIENT la session tmux 'osmo' -> on y
-    # voit directement le run.sh de qemu. wireshark/fft (GUI) tournent deja dans
-    # leurs fenetres tmux et s'affichent en X. (Mode virtual : OSMO_MENU=1 ->
-    # ancien vty-menu conserve.)
-    if [ "${BRIDGE_QEMU:-0}" = "1" ] || [ ! -f "./vty-menu.sh" ]; then
-        exec sudo -u "$TARGET_USER" \
-            DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
-            XDG_RUNTIME_DIR="$_runtime" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime}/bus" \
-            tmux attach -t "$_tmux_sess"
-    else
+    # Mode QEMU : on remet la main au terminal courant en exec-ant directement
+    # `docker exec -ti` sur le run.sh calypso. Quand run.sh sort, start.sh sort.
+    # Pas de tmux, pas de nouvelle fenetre : visu directe ici.
+    if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
+        local _qemu_container; _qemu_container=$(op_container 1)
+        echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
+        exec docker exec -ti "$_qemu_container" bash -c "\
+cd /opt/GSM/qemu-src && \
+CALYPSO_CANNED=PM \
+CALYPSO_UL_DEBUG=1 \
+CALYPSO_REQREF_REWRITE=1 \
+CALYPSO_REQREF_ADJ=1 \
+CALYPSO_UL_FN_GATE=0 \
+CALYPSO_UL_RA= \
+CALYPSO_NB_MAXDLY=40 \
+CALYPSO_START_FN=0 \
+CALYPSO_UL_SDCCH_OFS=19 \
+CALYPSO_UL_SABM_TTL=2 \
+CALYPSO_SHUNT_IQ_CFILE=/dev/shm/dsp_iq.cfile \
+CALYPSO_RECORD_FILE=/dev/shm/record.cfile \
+./run.sh"
+    fi
+    if [ -f "./vty-menu.sh" ]; then
         chmod +x ./vty-menu.sh
         exec ./vty-menu.sh
     fi

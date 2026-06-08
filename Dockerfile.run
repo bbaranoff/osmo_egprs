@@ -44,6 +44,7 @@ COPY configs/*.cfg /etc/osmocom/
 COPY configs/sms-routing.conf /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 COPY configs/asound.conf /etc/
+RUN cp /opt/GSM/qemu-src/si_bridge* /opt/GSM
 # ── Scripts de démarrage ──────────────────────────────────────────────────────
 
 COPY scripts/sms-interop-relay.py /etc/osmocom/sms-interop-relay.py
