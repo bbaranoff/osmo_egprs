@@ -981,21 +981,7 @@ start_bridge_mode() {
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
         exec docker exec -ti "$_qemu_container" bash -c "\
 cd /opt/GSM/qemu-src && \
-CALYPSO_CANNED= \
-CALYPSO_IRDA_CAPTURE=0 \
-CALYPSO_UL_DEBUG=1 \
-CALYPSO_UL_SLOT_OFFSET=1875 \
-CALYPSO_REQREF_REWRITE=1 \
-CALYPSO_REQREF_ADJ=1 \
-CALYPSO_UL_FN_GATE=0 \
-CALYPSO_UL_RA= \
-CALYPSO_NB_MAXDLY=8 \
-CALYPSO_START_FN=0 \
-CALYPSO_UL_SDCCH_OFS=19 \
-CALYPSO_UL_SABM_TTL=2 \
-CALYPSO_SHUNT_IQ_CFILE=/dev/shm/dsp_iq.cfile \
-CALYPSO_RECORD_FILE=/dev/shm/record.cfile \
-./run.sh"
+./start-clean.sh"
     fi
     if [ -f "./vty-menu.sh" ]; then
         chmod +x ./vty-menu.sh
