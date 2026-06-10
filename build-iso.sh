@@ -530,7 +530,7 @@ menuentry "osmo_egprs — Copy to RAM" {
 }
 GRUB
 
-grub-mkrescue -o "$OUTPUT" "$ISOROOT" --product-name "osmo_egprs" -- -volid "$LABEL"
+grub-mkrescue -o "$OUTPUT" "$ISOROOT" --product-name "osmo_egprs" -- -volid "$LABEL" -iso-level 3
 if command -v isohybrid &>/dev/null; then
     isohybrid --uefi "$OUTPUT"
 fi
