@@ -528,7 +528,9 @@ menuentry "osmo_egprs — Copy to RAM" {
     linux  /boot/vmlinuz boot=live toram copytoram quiet
     initrd /boot/initrd.img
 }
-GRUB# Wrapper: inject -iso-level 3 (multi-extent, lifts the 4 GiB single-file cap)
+GRUB
+
+# Wrapper: inject -iso-level 3 (multi-extent, lifts the 4 GiB single-file cap)
 # into grub-mkrescue's internal `xorriso -as mkisofs` call.
 XORRISO_WRAP="$WORK/xorriso-iso-level3"
 cat > "$XORRISO_WRAP" <<'EOF'
