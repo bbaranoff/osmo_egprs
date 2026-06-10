@@ -979,10 +979,7 @@ start_bridge_mode() {
     if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
         local _qemu_container; _qemu_container=$(op_container 1)
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
-        exec docker exec -ti "$_qemu_container" bash -c "\
-cd /opt/GSM/qemu-src && \
-source calypso.env && \
-./start-clean.sh"
+        exec docker exec -ti "$_qemu_container" bash -c "cd /opt/GSM/qemu-src && ./start-clean.sh"
     fi
     if [ -f "./vty-menu.sh" ]; then
         chmod +x ./vty-menu.sh
