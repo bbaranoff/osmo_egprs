@@ -100,8 +100,11 @@ RUN for repo in \
 # pour gsm0503_rach_ext_encode). Touche Makefile.am -> autoreconf+configure requis.
 COPY patches/osmo-trx-ipc-ts-frame-align.patch /tmp/osmo-trx-ipc-ts-frame-align.patch
 COPY patches/osmo-trx-rach-per-ra-table.patch /tmp/osmo-trx-rach-per-ra-table.patch
+COPY patches/osmo-trx-ipc-poll-fdsetsize.patch /tmp/osmo-trx-ipc-poll-fdsetsize.patch
 RUN git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-ipc-ts-frame-align.patch \
     && git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-rach-per-ra-table.patch \
+    && { git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-ipc-poll-fdsetsize.patch \
+         || patch -d ${ROOT}/osmo-trx -p1 --fuzz=3 < /tmp/osmo-trx-ipc-poll-fdsetsize.patch; } \
     && cd ${ROOT}/osmo-trx \
     && autoreconf -fi \
     && ./configure --with-ipc \

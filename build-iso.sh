@@ -243,7 +243,7 @@ echo -e "${GREEN}[7/7] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
 mkdir -p "$P"/{scripts,configs,checks,helpers}
 for f in start.sh build.sh loopback.sh vty-menu.sh vty-connect.exp \
-         firewall-wan.sh setup-wan-interop.sh setup-wan-sms.sh; do
+         firewall-wan.sh setup-wan-interop.sh setup-wan-sms.sh start_dbg.sh; do
     [ -f "$DIR/$f" ] && cp "$DIR/$f" "$P/$f" && chmod +x "$P/$f"
 done
 for d in scripts configs checks helpers; do
