@@ -386,12 +386,15 @@ apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 # logging libosmocore), on copie depuis le conteneur la clôture .so EXACTE de
 # tous les binaires osmo + calypso-ipc-device, en écrasant les libs apt. On
 # exclut la famille glibc/loader (identique en jammy, ne pas clobber ld.so).
-echo -e "${GREEN}[8b/7] Clôture de dépendances depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (versions Docker exactes)...${NC}"
+echo -e "${GREEN}[8b/7] Clôture de dépendances COMPLÈTE depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (toute l'install)...${NC}"
+# On ldd TOUS les ELF (executables + toutes les .so) de l'install custom :
+# /usr/local/bin (osmo), /opt/GSM (qemu, ipc-device, gr-gsm), /root/.env (venv
+# python : bindings gnuradio/gr-gsm + leurs deps boost/log4cpp/volk/fftw...).
+# => toutes les deps natives finissent dans l'ISO, plus de "import gsm" qui rate.
 docker run --rm --entrypoint bash "$ISO_RUN_IMAGE" -c '
     set -e
-    { ls /usr/local/bin/* 2>/dev/null
-      find /opt/GSM/qemu-src/tools -type f -executable 2>/dev/null
-    } | while read -r b; do [ -f "$b" ] && ldd "$b" 2>/dev/null; done \
+    find /usr/local/bin /opt/GSM /root/.env -type f \( -executable -o -name "*.so*" \) 2>/dev/null \
+      | while read -r b; do ldd "$b" 2>/dev/null; done \
       | grep -oE "/[^ ]+\.so[^ ]*" | sort -u \
       | grep -vE "/(ld-linux[^/]*|ld|libc|libm|libpthread|libdl|librt|libresolv)\.so" \
       | while read -r f; do realpath "$f" 2>/dev/null; done | sort -u \
