@@ -1,0 +1,18 @@
+diff --git a/tools/calypso-ipc-device/ipc_sock.c b/tools/calypso-ipc-device/ipc_sock.c
+--- a/tools/calypso-ipc-device/ipc_sock.c
++++ b/tools/calypso-ipc-device/ipc_sock.c
+@@ -104,6 +104,13 @@ void ipc_sock_close(struct ipc_sock_state *state)
+ {
+ 	struct osmo_fd *bfd = &state->conn_bfd;
+
++	/* PATCH idempotent : ipc_sock_close peut etre appele deux fois (callback
++	 * de deconnexion PUIS main/shutdown). Sans ce garde, le 2e
++	 * osmo_fd_unregister fait un llist_del sur un noeud deja retire
++	 * (LIST_POISON1/2) -> SIGSEGV dans __llist_del. bfd->fd est mis a -1
++	 * plus bas, ce qui sert de sentinelle. */
++	if (bfd->fd < 0)
++		return;
++
+ 	LOGP(DDEV, LOGL_NOTICE, "IPC socket has LOST connection\n");
+
+ 	ipc_exit_requested = 1;
