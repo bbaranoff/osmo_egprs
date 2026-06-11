@@ -10,8 +10,16 @@ ISOROOT="$WORK/isoroot"
 LABEL="OSMO_EGPRS"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-for arg in "$@"; do case "$arg" in --output=*) OUTPUT="${arg#*=}" ;; esac; done
+NO_CACHE=""
+for arg in "$@"; do case "$arg" in
+    --output=*)  OUTPUT="${arg#*=}" ;;
+    --no-cache)  NO_CACHE="--no-cache" ;;
+esac; done
 case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
+
+# Propage --no-cache aux deux builds Docker : build.sh (image osmocom-nitb) et
+# build_run_image (image osmocom-run, via DOCKER_NO_CACHE).
+export DOCKER_NO_CACHE="$NO_CACHE"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
@@ -48,10 +56,10 @@ echo -e "${CYAN}${BOLD}══ osmo_egprs ISO builder (via build.sh + start.sh) �
 # ── Étape 1 : Exécuter build.sh pour préparer l'hôte et construire osmocom-nitb ──
 echo -e "${GREEN}[1/7] Exécution de build.sh...${NC}"
 if [ -f "$DIR/build.sh" ]; then
-    bash "$DIR/build.sh"
+    bash "$DIR/build.sh" $NO_CACHE
 else
     echo -e "${YELLOW}build.sh introuvable, construction manuelle de l'image osmocom-nitb...${NC}"
-    docker build -t osmocom-nitb "$DIR"
+    docker build $NO_CACHE -t osmocom-nitb "$DIR"
 fi
 echo -e "  ${GREEN}✓${NC} image osmocom-nitb prête"
 

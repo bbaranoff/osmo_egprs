@@ -216,7 +216,7 @@ build_alsa_args() {
 # ══════════════════════════════════════════════════════════════════════════════
 build_run_image() {
     echo -e "${GREEN}Build de l'image run...${NC}"
-    docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
+    docker build ${DOCKER_NO_CACHE:-} --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
 }
 
