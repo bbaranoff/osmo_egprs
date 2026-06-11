@@ -39,7 +39,7 @@ fi
 echo "[*] Installation de SCTP, TUN et D-Bus sur l'hôte..."
 apt-get update
 apt-get install -y lksctp-tools libsctp-dev dbus uml-utilities libusb-1.0-0-dev \
-     wireshark linphone-desktop gnome-terminal whiptail expect netcat-openbsd \
+     wireshark linphone* gnome-terminal whiptail expect netcat-openbsd \
      telnet iproute2 pulseaudio-utils
 
 # 4. Chargement des modules noyau
