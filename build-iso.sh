@@ -315,6 +315,14 @@ deb http://archive.ubuntu.com/ubuntu jammy-security   main universe multiverse
 SOURCES
 apt-get update -qq
 
+# deb-src + build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw,
+# gmp, log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local.
+# Genere les lignes deb-src a partir des deb (tous composants), comme le Dockerfile.
+sed -nE "s|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p" \
+    /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list
+apt-get update -qq
+apt-get build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
+
 apt-get install -y $APT_OPTS --no-install-recommends \
     linux-image-generic initramfs-tools \
     live-boot live-boot-initramfs-tools
