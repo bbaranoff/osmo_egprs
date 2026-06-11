@@ -470,21 +470,32 @@ alias osmo-status='/opt/osmo-launch.sh status'
 export PS1='\[\033[0;36m\]osmo-egprs\[\033[0m\]:\[\033[0;33m\]\w\[\033[0m\]\$ '
 BASH
 
-# Message du jour
-cat > "$ROOTFS/etc/motd" <<'MOTD'
-
-  ╔══════════════════════════════════════════════════════════════╗
-  ║  osmo_egprs — GSM/EGPRS Multi-PLMN Live System              ║
-  ║  SS7/SIGTRAN • Osmocom • Web Dashboard                      ║
-  ╠══════════════════════════════════════════════════════════════╣
-  ║  /opt/osmo-launch.sh            ← lance tout (lab + web)     ║
-  ║  /opt/osmo_egprs/start-in-iso.sh ← lancement manuel du lab  ║
-  ║  http://localhost:8080           ← dashboard web             ║
-  ║                                                              ║
-  ║  loadkeys fr                     ← changer clavier après boot║
-  ╚══════════════════════════════════════════════════════════════╝
-
-MOTD
+# Message du jour — bannière couleur + boîte alignée. Contenu de la boîte en
+# ASCII (pas de ←/é/• multi-octets) + padding printf => bords parfaitement
+# alignés. Généré à chaud pour injecter les couleurs ANSI dans /etc/motd.
+{
+  B=$'\033[1;36m'; T=$'\033[1;37m'; G=$'\033[1;32m'; Y=$'\033[0;33m'; N=$'\033[0m'
+  W=58
+  printf '\n%b' "$B"
+  cat <<'LOGO'
+    ___  ___ _ __ ___   ___    ___  __ _ _ __  _ __ ___
+   / _ \/ __| '_ ` _ \ / _ \  / _ \/ _` | '_ \| '__/ __|
+  | (_) \__ \ | | | | | (_) ||  __/ (_| | |_) | |  \__ \
+   \___/|___/_| |_| |_|\___/  \___|\__, | .__/|_|  |___/
+                                   |___/|_|
+LOGO
+  printf '%b' "$N"
+  printf "${B}  ╔"; printf '═%.0s' $(seq 1 $W); printf "╗${N}\n"
+  printf "${B}  ║${N} ${T}%-*s${N} ${B}║${N}\n" $((W-2)) "GSM / EGPRS  Multi-PLMN  Live System"
+  printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "SS7/SIGTRAN  -  Osmocom  -  Web Dashboard"
+  printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/qemu-src/start-clean.sh"
+  printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> demarrer la stack GSM/EGPRS"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "http://localhost:8080"
+  printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> dashboard web"
+  printf "${B}  ║${N} ${Y}%-*s${N} ${B}║${N}\n" $((W-2)) "loadkeys fr   -> changer le clavier (apres boot)"
+  printf "${B}  ╚"; printf '═%.0s' $(seq 1 $W); printf "╝${N}\n\n"
+} > "$ROOTFS/etc/motd"
 
 chroot "$ROOTFS" passwd -d root 2>/dev/null||true
 
