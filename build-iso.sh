@@ -330,7 +330,7 @@ apt-get install -y $APT_OPTS --no-install-recommends \
 apt-get install -y $APT_OPTS --no-install-recommends \
     iproute2 iptables net-tools lksctp-tools \
     tmux telnet expect whiptail netcat-openbsd \
-    lsb-release pulseaudio-utils \
+    lsb-release pulseaudio-utils openssh-server \
     console-setup keyboard-configuration locales
 
 apt-get install -y $APT_OPTS --no-install-recommends \
@@ -518,11 +518,25 @@ LOGO
   printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/qemu-src/start-clean.sh"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> demarrer la stack GSM/EGPRS"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "ssh root@<vm-ip>   -> mot de passe : osmo"
   printf "${B}  ║${N} ${Y}%-*s${N} ${B}║${N}\n" $((W-2)) "loadkeys fr   -> changer le clavier (apres boot)"
   printf "${B}  ╚"; printf '═%.0s' $(seq 1 $W); printf "╝${N}\n\n"
 } > "$ROOTFS/etc/motd"
 
-chroot "$ROOTFS" passwd -d root 2>/dev/null||true
+# Mot de passe root = "osmo" (autologin console + login SSH). On NE vide PAS le
+# mot de passe (sinon sshd refuse le login root).
+echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
+
+# SSH : autorise le login root par mot de passe + active le service au boot.
+if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
+    sed -i \
+        -e 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' \
+        -e 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' \
+        "$ROOTFS/etc/ssh/sshd_config"
+    grep -q '^PermitRootLogin yes' "$ROOTFS/etc/ssh/sshd_config" || \
+        echo 'PermitRootLogin yes' >> "$ROOTFS/etc/ssh/sshd_config"
+fi
+chroot "$ROOTFS" systemctl enable ssh 2>/dev/null || true
 
 # Script de configuration clavier au premier boot
 cat > "$ROOTFS/etc/profile.d/01-keyboard-setup.sh" <<'KBSCRIPT'
