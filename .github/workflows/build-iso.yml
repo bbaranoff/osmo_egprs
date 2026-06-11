@@ -107,8 +107,8 @@ jobs:
             # USB
             sudo dd if=osmo_egprs.iso of=/dev/sdX bs=4M status=progress && sync
 
-            # Premier boot
-            cd /etc/osmocom/ && sudo ./run.sh
+            # Premier boot (lancement manuel de la stack)
+            /opt/GSM/qemu-src/start-clean.sh
             ```
           files: |
             ${{ env.ISO_NAME }}.part-*
