@@ -404,6 +404,33 @@ find "$ROOTFS/usr/lib" "$ROOTFS/lib" -maxdepth 4 -name 'libosmo*.so*' -delete 2>
 chroot "$ROOTFS" ldconfig 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} /usr/local/lib prioritaire + ldconfig"
 
+# ── Étape 8c : rebuild calypso-ipc-device contre les libs EXACTES de l'ISO ───
+# Garantit un binaire ipc-device aligne sur libosmocore/etc. du rootfs (evite
+# le skew d'ABI -> segfault logging). Toolchain installee puis purgee (ISO lean).
+IPC_DIR="/opt/GSM/qemu-src/tools/calypso-ipc-device"
+if [ -d "$ROOTFS$IPC_DIR" ]; then
+    echo -e "${GREEN}[8c/7] Rebuild calypso-ipc-device dans le rootfs...${NC}"
+    if chroot "$ROOTFS" bash -c '
+        set -e
+        export DEBIAN_FRONTEND=noninteractive PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
+        APT_OPTS="-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
+        apt-get update -qq
+        apt-get install -y $APT_OPTS --no-install-recommends build-essential pkg-config
+        ldconfig
+        cd '"$IPC_DIR"' && make clean && make -j"$(nproc)"
+        # purge du toolchain pour garder l'\''ISO legere
+        apt-get purge -y build-essential pkg-config >/dev/null 2>&1 || true
+        apt-get autoremove --purge -y >/dev/null 2>&1 || true
+        apt-get clean; rm -rf /var/lib/apt/lists/*
+    '; then
+        echo -e "  ${GREEN}✓${NC} calypso-ipc-device recompile (libs ISO) + toolchain purge"
+    else
+        echo -e "  ${YELLOW}rebuild ipc-device echoue — binaire Docker conserve${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}[8c/7] source calypso-ipc-device absente, skip${NC}"
+fi
+
 # ── Configuration système ──────────────────────────────────────────────────
 echo "osmo-egprs" > "$ROOTFS/etc/hostname"
 cat > "$ROOTFS/etc/hosts" <<'EOF'
