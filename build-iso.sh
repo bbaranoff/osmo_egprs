@@ -397,9 +397,10 @@ else
 fi
 
 # Priorité /usr/local/lib (libosmo* custom) + purge de tout doublon système.
+# NB: pas de `| grep` ici — sous set -euo pipefail un grep sans correspondance
+# (cas normal: aucun doublon) renverrait 1 et tuerait le script avant l'ISO.
 echo "/usr/local/lib" > "$ROOTFS/etc/ld.so.conf.d/00-osmocom-local.conf"
-find "$ROOTFS/usr/lib" "$ROOTFS/lib" -maxdepth 4 -name 'libosmo*.so*' 2>/dev/null \
-    | grep -v '/usr/local/' | xargs -r rm -f
+find "$ROOTFS/usr/lib" "$ROOTFS/lib" -maxdepth 4 -name 'libosmo*.so*' -delete 2>/dev/null || true
 chroot "$ROOTFS" ldconfig 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} /usr/local/lib prioritaire + ldconfig"
 
