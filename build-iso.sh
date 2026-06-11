@@ -128,6 +128,8 @@ docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
 docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
 docker cp "$CID:/usr/local/include/." "$ROOTFS/usr/local/include/" 2>/dev/null||true
 docker cp "$CID:/opt/GSM"             "$ROOTFS/opt/GSM"     2>/dev/null||true
+# venv python (gr-gsm + bridges) attendu par /opt/GSM/qemu-src/start-clean.sh
+docker cp "$CID:/root/.env"           "$ROOTFS/root/"       2>/dev/null||true
 docker cp "$CID:/etc/osmocom/."       "$ROOTFS/etc/osmocom/" 2>/dev/null||true
 docker cp "$CID:/etc/asterisk/."      "$ROOTFS/etc/asterisk/" 2>/dev/null||true
 for svc in osmo-bts-trx osmo-bsc osmo-msc osmo-hlr osmo-mgw osmo-stp osmo-ggsn osmo-sgsn osmo-pcu osmo-sip-connector; do
@@ -297,7 +299,7 @@ apt-get install -y $APT_OPTS --no-install-recommends \
     libfftw3-single3 libusb-1.0-0 \
     libgsm1 libasound2 libasound2-plugins \
     libsofia-sip-ua-glib3 libmnl0 \
-    liburing2
+    liburing2 libslirp0
 
 apt-get install -y $APT_OPTS --no-install-recommends \
     iproute2 iptables net-tools lksctp-tools \
@@ -399,6 +401,10 @@ EOF
 
 # bashrc pour root
 cat >> "$ROOTFS/root/.bashrc" <<'BASH'
+# Active par defaut l'environnement python (gr-gsm + bridges) utilise par
+# /opt/GSM/qemu-src/start-clean.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
+export VIRTUAL_ENV_DISABLE_PROMPT=1
+[ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
 alias osmo-lab='cd /opt/osmo_egprs && ./start-in-iso.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
@@ -483,7 +489,7 @@ dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 touch /var/lib/osmo-kb-done
 
 echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lancé automatiquement."
-echo -e "  \033[1;33mPour démarrer la stack manuellement : /etc/osmocom/run.sh\033[0m"
+echo -e "  \033[1;33mPour démarrer la stack manuellement : /opt/GSM/qemu-src/start-clean.sh\033[0m"
 
 echo -e "  \033[1;32m✓ Clavier configuré (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
 echo ""
