@@ -41,12 +41,8 @@ jobs:
           sudo docker image prune -af || true
           df -h /
 
-      - name: Install host tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin \
-            grub-common mtools debootstrap git
+      # Les paquets hôte (squashfs-tools, xorriso, grub*, mtools, debootstrap...)
+      # sont installés directement par build-iso.sh.
 
       - name: Build ISO via build-iso.sh
         run: |

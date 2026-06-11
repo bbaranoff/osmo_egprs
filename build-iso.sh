@@ -20,6 +20,24 @@ cleanup() { umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$
 trap cleanup EXIT
 
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
+
+# ── Paquets hôte requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
+# Installés ici plutôt que dans le workflow CI : `sudo ./build-iso.sh` suffit
+# sur une machine Debian/Ubuntu vierge, sans étape "Install host tools" externe.
+ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git isolinux"
+if command -v apt-get &>/dev/null; then
+    echo -e "${GREEN}[0/7] Installation des paquets hôte (apt)...${NC}"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq || true
+    # isolinux est optionnel (isohybrid) : on n'échoue pas s'il manque.
+    apt-get install -y --no-install-recommends $ISO_HOST_PKGS \
+        || apt-get install -y --no-install-recommends \
+           squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git
+else
+    echo -e "${YELLOW}apt-get absent : vérification seule des outils hôte.${NC}"
+fi
+
+# Docker n'est pas auto-installé ici (paquet docker-ce hors apt standard).
 for t in docker mksquashfs xorriso grub-mkrescue debootstrap git; do
     command -v "$t" &>/dev/null || { echo -e "${RED}Manquant: $t${NC}"; exit 1; }
 done
