@@ -1,73 +1,34 @@
-diff --git a/Transceiver52M/device/ipc/IPCDevice.cpp b/Transceiver52M/device/ipc/IPCDevice.cpp
 --- a/Transceiver52M/device/ipc/IPCDevice.cpp
 +++ b/Transceiver52M/device/ipc/IPCDevice.cpp
-@@ -38,6 +38,7 @@ extern "C" {
- #include <sys/mman.h>
- #include <sys/stat.h>
- #include <fcntl.h>
-+#include <poll.h>
- #include "osmo_signal.h"
- #include <osmocom/core/talloc.h>
- #include <osmocom/core/select.h>
-@@ -794,42 +795,49 @@ static int ipc_chan_sock_cb(struct osmo_fd *bfd, unsigned int flags);
+@@ -831,42 +831,53 @@
+ 
  void IPCDevice::manually_poll_sock_fds()
  {
 -	struct timeval wait = { 0, 100000 };
 -	fd_set crfds, cwfds;
--	char err_buf[256];
--	int max_fd = 0;
--
--	FD_ZERO(&crfds);
--	FD_ZERO(&cwfds);
--	for (unsigned int i = 0; i < chans; i++) {
--		struct osmo_fd *curr_fd = &sk_chan_state[i].conn_bfd;
--		max_fd = curr_fd->fd > max_fd ? curr_fd->fd : max_fd;
--
--		if (curr_fd->when & OSMO_FD_READ)
--			FD_SET(curr_fd->fd, &crfds);
--		if (curr_fd->when & OSMO_FD_WRITE)
--			FD_SET(curr_fd->fd, &cwfds);
--	}
--
--	if (select(max_fd + 1, &crfds, &cwfds, 0, &wait) < 0) {
--		LOGP(DDEV, LOGL_ERROR, "select() failed: %s\n",
--		     strerror_r(errno, err_buf, sizeof(err_buf)));
--		return;
--	}
--
--	for (unsigned int i = 0; i < chans; i++) {
--		int flags = 0;
--		struct osmo_fd *ofd = &sk_chan_state[i].conn_bfd;
--
--		if (FD_ISSET(ofd->fd, &crfds)) {
--			flags |= OSMO_FD_READ;
--			FD_CLR(ofd->fd, &crfds);
--		}
--
--		if (FD_ISSET(ofd->fd, &cwfds)) {
--			flags |= OSMO_FD_WRITE;
--			FD_CLR(ofd->fd, &cwfds);
--		}
--		if (flags)
--			ipc_chan_sock_cb(ofd, flags);
--	}
-+	/* PATCH: poll() au lieu de select()/fd_set. select() + FD_SET planten
-+	 * (__fdelt_chk "buffer overflow detected", SIGABRT) des qu'un fd >= 1024
-+	 * (FD_SETSIZE) apparait (fuite de descripteurs sur reconnexion IPC en
-+	 * boucle). poll() n'a pas cette limite. */
++	/* PATCH: poll() au lieu de select()/fd_set. FD_SET sur un fd >= FD_SETSIZE
++	 * (1024) -> __fdelt_chk \"buffer overflow detected\" -> SIGABRT (apparait
++	 * sur fuite de fd lors de reconnexions IPC en boucle). poll() n'a pas
++	 * cette limite. */
 +	struct pollfd pfds[chans];
-+	char err_buf[256];
+ 	char err_buf[256];
+-	int max_fd = 0;
 +	unsigned int n = 0, j;
 +	int idx[chans];
 +	int rc;
-+
-+	for (unsigned int i = 0; i < chans; i++) {
-+		struct osmo_fd *curr_fd = &sk_chan_state[i].conn_bfd;
+ 
+-	FD_ZERO(&crfds);
+-	FD_ZERO(&cwfds);
+ 	for (unsigned int i = 0; i < chans; i++) {
+ 		struct osmo_fd *curr_fd = &sk_chan_state[i].conn_bfd;
+-		max_fd = curr_fd->fd > max_fd ? curr_fd->fd : max_fd;
 +		short ev = 0;
-+
-+		if (curr_fd->when & OSMO_FD_READ)
+ 
+ 		if (curr_fd->when & OSMO_FD_READ)
+-			FD_SET(curr_fd->fd, &crfds);
 +			ev |= POLLIN;
-+		if (curr_fd->when & OSMO_FD_WRITE)
+ 		if (curr_fd->when & OSMO_FD_WRITE)
+-			FD_SET(curr_fd->fd, &cwfds);
 +			ev |= POLLOUT;
 +		if (!ev)
 +			continue;
@@ -76,29 +37,39 @@ diff --git a/Transceiver52M/device/ipc/IPCDevice.cpp b/Transceiver52M/device/ipc
 +		pfds[n].revents = 0;
 +		idx[n] = i;
 +		n++;
-+	}
-+
+ 	}
+ 
+-	if (select(max_fd + 1, &crfds, &cwfds, 0, &wait) < 0) {
+-		LOGP(DDEV, LOGL_ERROR, "select() failed: %s\n",
 +	if (!n)
 +		return;
 +
 +	rc = poll(pfds, n, 100 /* ms */);
 +	if (rc < 0) {
 +		LOGP(DDEV, LOGL_ERROR, "poll() failed: %s\n",
-+		     strerror_r(errno, err_buf, sizeof(err_buf)));
-+		return;
-+	}
+ 		     strerror_r(errno, err_buf, sizeof(err_buf)));
+ 		return;
+ 	}
 +	if (!rc)
 +		return;
-+
+ 
+-	for (unsigned int i = 0; i < chans; i++) {
 +	for (j = 0; j < n; j++) {
-+		int flags = 0;
+ 		int flags = 0;
+-		struct osmo_fd *ofd = &sk_chan_state[i].conn_bfd;
 +		struct osmo_fd *ofd = &sk_chan_state[idx[j]].conn_bfd;
-+
+ 
+-		if (FD_ISSET(ofd->fd, &crfds)) {
 +		if (pfds[j].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL))
-+			flags |= OSMO_FD_READ;
+ 			flags |= OSMO_FD_READ;
+-			FD_CLR(ofd->fd, &crfds);
+-		}
+-
+-		if (FD_ISSET(ofd->fd, &cwfds)) {
 +		if (pfds[j].revents & POLLOUT)
-+			flags |= OSMO_FD_WRITE;
-+		if (flags)
-+			ipc_chan_sock_cb(ofd, flags);
-+	}
- }
+ 			flags |= OSMO_FD_WRITE;
+-			FD_CLR(ofd->fd, &cwfds);
+-		}
+ 		if (flags)
+ 			ipc_chan_sock_cb(ofd, flags);
+ 	}
