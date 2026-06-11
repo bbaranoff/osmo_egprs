@@ -328,7 +328,7 @@ apt-get install -y $APT_OPTS --no-install-recommends \
     live-boot live-boot-initramfs-tools
 
 apt-get install -y $APT_OPTS --no-install-recommends \
-    libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2 libgnutls30 libgnutls28-dev \
+    libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2 libgnutls30 libgnutls28-dev libmnl-dev \
     libortp-dev libdbi1 libdbd-sqlite3 sqlite3 \
     libfftw3-single3 libusb-1.0-0 \
     libgsm1 libasound2 libasound2-plugins \
@@ -421,22 +421,42 @@ echo -e "  ${GREEN}✓${NC} /usr/local/lib prioritaire + ldconfig"
 IPC_DIR="/opt/GSM/qemu-src/tools/calypso-ipc-device"
 if [ -d "$ROOTFS$IPC_DIR" ]; then
     echo -e "${GREEN}[8c/7] Rebuild calypso-ipc-device dans le rootfs...${NC}"
-    if chroot "$ROOTFS" bash -c '
+    chroot "$ROOTFS" bash -c '
         set -e
         export DEBIAN_FRONTEND=noninteractive PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
         APT_OPTS="-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
         apt-get update -qq
-        apt-get install -y $APT_OPTS --no-install-recommends build-essential pkg-config
+        # Jeu complet de build-deps osmocom (cf Dockerfile) -> le make de
+        # calypso-ipc-device ne rate plus pour un header manquant. Le toolchain
+        # est purge plus bas ; les -dev restent (cf "laisse toutes les deps").
+        apt-get install -y $APT_OPTS --no-install-recommends \
+            build-essential pkg-config \
+            libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev liburing-dev \
+            libdbi-dev libsqlite3-dev libc-ares-dev libgnutls28-dev \
+            libortp-dev libfftw3-dev libusb-1.0-0-dev \
+            libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
+            libasound2-dev libgsm1-dev python3-dev
         ldconfig
-        cd '"$IPC_DIR"' && make clean && make -j"$(nproc)"
+        cd '"$IPC_DIR"'
+        # make clean SUPPRIME le binaire -> sauvegarde + restauration si make rate,
+        # pour ne JAMAIS laisser l'\''ISO sans calypso-ipc-device (osmo-trx-ipc en depend).
+        cp -a calypso-ipc-device calypso-ipc-device.docker.bak 2>/dev/null || true
+        if make clean && make -j"$(nproc)"; then
+            rm -f calypso-ipc-device.docker.bak
+        else
+            echo "[8c] make echoue -> restauration du binaire Docker"
+            [ -f calypso-ipc-device.docker.bak ] && mv -f calypso-ipc-device.docker.bak calypso-ipc-device
+        fi
+        chmod +x calypso-ipc-device 2>/dev/null || true
         # purge du toolchain pour garder l'\''ISO legere
         apt-get purge -y build-essential pkg-config >/dev/null 2>&1 || true
         apt-get autoremove --purge -y >/dev/null 2>&1 || true
         apt-get clean; rm -rf /var/lib/apt/lists/*
-    '; then
-        echo -e "  ${GREEN}✓${NC} calypso-ipc-device recompile (libs ISO) + toolchain purge"
+    ' || true
+    if [ -x "$ROOTFS$IPC_DIR/calypso-ipc-device" ]; then
+        echo -e "  ${GREEN}✓${NC} calypso-ipc-device présent + exécutable"
     else
-        echo -e "  ${YELLOW}rebuild ipc-device echoue — binaire Docker conserve${NC}"
+        echo -e "  ${RED}✗ calypso-ipc-device ABSENT/non exécutable — osmo-trx-ipc échouera !${NC}"
     fi
 else
     echo -e "  ${YELLOW}[8c/7] source calypso-ipc-device absente, skip${NC}"
