@@ -9,6 +9,10 @@ on:
         description: "Create GitHub Release"
         type: boolean
         default: true
+      no_cache:
+        description: "Rebuild Docker images without cache (--no-cache)"
+        type: boolean
+        default: true
 
 env:
   ISO_NAME: osmo_egprs.iso
@@ -47,7 +51,11 @@ jobs:
       - name: Build ISO via build-iso.sh
         run: |
           chmod +x build-iso.sh
-          sudo ./build-iso.sh --output="${ISO_NAME}"
+          # --no-cache par defaut (et sur push de tag) ; desactivable via le
+          # bouton "Run workflow" en mettant no_cache=false.
+          NO_CACHE="--no-cache"
+          [ "${{ github.event.inputs.no_cache }}" = "false" ] && NO_CACHE=""
+          sudo ./build-iso.sh $NO_CACHE --output="${ISO_NAME}"
           ls -lh "${ISO_NAME}"
 
       - name: Checksums
