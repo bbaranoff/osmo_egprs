@@ -60,6 +60,15 @@ jobs:
           md5sum "${ISO_NAME}" > "${ISO_NAME}.md5"
           cat "${ISO_NAME}.sha256"
 
+      - name: Split ISO for GitHub Release (2 GiB asset limit)
+        run: |
+          # GitHub Release assets must be < 2 GiB each. Split into 1900 MiB
+          # parts named osmo_egprs.iso.part-aa, .part-ab, ...
+          split -b 1900M -d -a 2 "${ISO_NAME}" "${ISO_NAME}.part-"
+          ls -lh "${ISO_NAME}".part-*
+          sha256sum "${ISO_NAME}".part-* > "${ISO_NAME}.parts.sha256"
+          cat "${ISO_NAME}.parts.sha256"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -84,7 +93,17 @@ jobs:
 
             Build x86_64 généré via `build-iso.sh`.
 
+            ⚠️ L'ISO dépasse la limite GitHub de 2 Gio par fichier de Release,
+            elle est donc **découpée en plusieurs parties** (`osmo_egprs.iso.part-*`).
+            Téléchargez **toutes** les parties puis recombinez-les :
+
             ```bash
+            # Recombiner l'ISO
+            cat osmo_egprs.iso.part-* > osmo_egprs.iso
+
+            # Vérifier l'intégrité
+            sha256sum -c osmo_egprs.iso.sha256
+
             # QEMU
             qemu-system-x86_64 -cdrom osmo_egprs.iso -m 8G -enable-kvm -cpu host -smp 4 \
               -nic user,hostfwd=tcp::8080-:8080
@@ -96,6 +115,7 @@ jobs:
             cd /etc/osmocom/ && sudo ./run.sh
             ```
           files: |
-            ${{ env.ISO_NAME }}
+            ${{ env.ISO_NAME }}.part-*
             ${{ env.ISO_NAME }}.sha256
             ${{ env.ISO_NAME }}.md5
+            ${{ env.ISO_NAME }}.parts.sha256
