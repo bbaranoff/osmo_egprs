@@ -364,6 +364,37 @@ update-initramfs -u -k "$KERNEL"
 apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 '
 
+# ── Étape 8b : Rééquilibrage sur build.sh — clôture de dépendances ldd ────────
+# L'image osmocom-run (produite par build.sh + Dockerfile) est l'environnement
+# qui MARCHE. Au lieu de se fier aux versions apt du rootfs (skew -> crash
+# logging libosmocore), on copie depuis le conteneur la clôture .so EXACTE de
+# tous les binaires osmo + calypso-ipc-device, en écrasant les libs apt. On
+# exclut la famille glibc/loader (identique en jammy, ne pas clobber ld.so).
+echo -e "${GREEN}[8b/7] Clôture de dépendances depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (versions Docker exactes)...${NC}"
+docker run --rm --entrypoint bash "$ISO_RUN_IMAGE" -c '
+    set -e
+    { ls /usr/local/bin/* 2>/dev/null
+      find /opt/GSM/qemu-src/tools -type f -executable 2>/dev/null
+    } | while read -r b; do [ -f "$b" ] && ldd "$b" 2>/dev/null; done \
+      | grep -oE "/[^ ]+\.so[^ ]*" | sort -u \
+      | grep -vE "/(ld-linux[^/]*|ld|libc|libm|libpthread|libdl|librt|libresolv)\.so" \
+      | while read -r f; do realpath "$f" 2>/dev/null; done | sort -u \
+      | tar -czf - -T - 2>/dev/null
+' > "$WORK/closure.tar.gz" || true
+if [ -s "$WORK/closure.tar.gz" ]; then
+    tar -xzf "$WORK/closure.tar.gz" -C "$ROOTFS" 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} $(tar -tzf "$WORK/closure.tar.gz" 2>/dev/null | wc -l) libs injectées (Docker)"
+else
+    echo -e "  ${YELLOW}clôture vide — on garde les libs apt${NC}"
+fi
+
+# Priorité /usr/local/lib (libosmo* custom) + purge de tout doublon système.
+echo "/usr/local/lib" > "$ROOTFS/etc/ld.so.conf.d/00-osmocom-local.conf"
+find "$ROOTFS/usr/lib" "$ROOTFS/lib" -maxdepth 4 -name 'libosmo*.so*' 2>/dev/null \
+    | grep -v '/usr/local/' | xargs -r rm -f
+chroot "$ROOTFS" ldconfig 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} /usr/local/lib prioritaire + ldconfig"
+
 # ── Configuration système ──────────────────────────────────────────────────
 echo "osmo-egprs" > "$ROOTFS/etc/hostname"
 cat > "$ROOTFS/etc/hosts" <<'EOF'
