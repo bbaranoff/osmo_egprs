@@ -320,7 +320,7 @@ apt-get install -y $APT_OPTS --no-install-recommends \
     live-boot live-boot-initramfs-tools
 
 apt-get install -y $APT_OPTS --no-install-recommends \
-    libtalloc2 libpcsclite1 libsctp1 libc-ares2 libgnutls30 \
+    libtalloc2 libpcsclite1 libsctp1 libsctp-dev libc-ares2 libgnutls30 libgnutls28-dev \
     libortp-dev libdbi1 libdbd-sqlite3 sqlite3 \
     libfftw3-single3 libusb-1.0-0 \
     libgsm1 libasound2 libasound2-plugins \
