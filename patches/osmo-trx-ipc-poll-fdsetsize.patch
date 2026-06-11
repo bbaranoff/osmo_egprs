@@ -1,6 +1,14 @@
 --- a/Transceiver52M/device/ipc/IPCDevice.cpp
 +++ b/Transceiver52M/device/ipc/IPCDevice.cpp
-@@ -831,42 +831,53 @@
+@@ -33,6 +33,7 @@
+ #include "smpl_buf.h"
+ 
+ extern "C" {
++#include <poll.h>
+ #include <sys/mman.h>
+ #include <sys/stat.h> /* For mode constants */
+ #include <fcntl.h> /* For O_* constants */
+@@ -831,42 +832,53 @@
  
  void IPCDevice::manually_poll_sock_fds()
  {
