@@ -48,8 +48,8 @@ index f5ddd9b..9c6b76a 100644
 +   * quel que soit le type/TN, pour trouver OU la RACH injectee atterrit vraiment
 +   * dans la grille osmo-trx (avant le filtre type==IDLE). Pas de cap : rare. */
 +  if (avg > 800.0)
-+    LOGCHAN(chan, DTRXDUL, NOTICE) << "ENERGY fn=" << burstTime.FN()
-+      << " tn=" << burstTime.TN() << " type=" << type << " avg=" << avg << " max=" << max;
++    LOGCHAN(chan, DTRXDUL, NOTICE) << "UL ENERGY fn=" << std::setw(7) << burstTime.FN()
++      << " tn=" << burstTime.TN() << " type=" << type << std::fixed << std::setprecision(1) << " avg=" << avg << " max=" << max;
 +
    if (type == IDLE) {
      /* Update noise levels */
@@ -74,14 +74,14 @@ index f5ddd9b..9c6b76a 100644
    /* Detect normal or RACH bursts */
    rc = detectAnyBurst(*shvec_ptr, mTSC, BURST_THRESH, cfg->rx_sps, type, max_toa, &ebp);
 +  if ((type == RACH || type == EXT_RACH) && avg > 800.0)
-+    LOGCHAN(chan, DTRXDUL, NOTICE) << "RACH-DET fn=" << burstTime.FN()
-+      << " rc=" << rc << " toa=" << ebp.toa << " tsc=" << (int)ebp.tsc;
++    LOGCHAN(chan, DTRXDUL, NOTICE) << "UL RACH   fn=" << std::setw(7) << burstTime.FN()
++      << " rc=" << rc << std::fixed << std::setprecision(2) << " toa=" << ebp.toa << " tsc=" << (int)ebp.tsc;
 +  /* DEBUG SDCCH UL (Calypso) : sonde symetrique a RACH-DET pour le burst NORMAL,
 +   * limitee a TN0 (le slot CCCH+SDCCH4) pour ne pas flooder. rc>0 = NB detecte,
 +   * toa = decalage mesure -> dit si c'est detection (offset) ou demod. */
 +  if ((type != RACH && type != EXT_RACH) && avg > 800.0 && burstTime.TN() == 0)
-+    LOGCHAN(chan, DTRXDUL, NOTICE) << "NB-DET fn=" << burstTime.FN()
-+      << " rc=" << rc << " toa=" << ebp.toa << " tsc=" << (int)ebp.tsc << " avg=" << avg;
++    LOGCHAN(chan, DTRXDUL, NOTICE) << "UL NB     fn=" << std::setw(7) << burstTime.FN()
++      << " rc=" << rc << std::fixed << std::setprecision(2) << " toa=" << ebp.toa << " tsc=" << (int)ebp.tsc << " avg=" << std::setprecision(1) << avg;
    if (rc <= 0) {
      if (rc == -SIGERR_CLIP) {
        LOGCHAN(chan, DTRXDUL, INFO) << "Clipping detected on received RACH or Normal Burst";
@@ -111,9 +111,9 @@ index f5ddd9b..9c6b76a 100644
 +    char datb[16]; int dj = 0;
 +    for (int i = 3; i <= 12 && dj < 15; i++) datb[dj++] = (rxBurst->begin()[i] > 0) ? '1' : '0';
 +    datb[dj] = 0;
-+    LOGCHAN(chan, DTRXDUL, NOTICE) << "SOFT-DBG fn=" << burstTime.FN()
-+      << " data_abs=" << (nd ? dabs / nd : 0.0) << " mid_abs=" << (nm ? mabs / nm : 0.0)
-+      << " tsc=" << tscb << " dat0=" << datb;
++    LOGCHAN(chan, DTRXDUL, NOTICE) << "UL SOFT   fn=" << std::setw(7) << burstTime.FN()
++      << std::fixed << std::setprecision(3) << " data_abs=" << (nd ? dabs / nd : 0.0)
++      << " mid_abs=" << (nm ? mabs / nm : 0.0) << " tsc_bits=" << tscb << " data_bits=" << datb;
 +  }
 +
    /* EDGE demodulator returns 444 (gSlotLen * 3) bits */
