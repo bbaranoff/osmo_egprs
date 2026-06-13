@@ -4,7 +4,9 @@
 set -euo pipefail
 
 OUTPUT="osmo_egprs.iso"
-WORK="/tmp/iso-build-$$"
+# Répertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
+# space left on device" car le rootfs est volumineux). Overridable via OSMO_ISO_WORK.
+WORK="${OSMO_ISO_WORK:-/var/tmp}/iso-build-$$"
 ROOTFS="$WORK/rootfs"
 ISOROOT="$WORK/isoroot"
 LABEL="OSMO_EGPRS"
