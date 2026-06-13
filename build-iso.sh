@@ -431,6 +431,45 @@ DHCP=yes
 EOF
 chroot "$ROOTFS" systemctl enable systemd-networkd systemd-resolved docker 2>/dev/null||true
 
+# ── Service startup : exécute le gist update.sh (bbaranoff) au démarrage ──────
+cat > "$ROOTFS/usr/local/sbin/osmo-update.sh" <<'UPD'
+#!/bin/bash
+# osmo-update.sh — recupere et execute le gist update.sh (bbaranoff) au boot.
+set -u
+URL="https://gist.githubusercontent.com/bbaranoff/563c87f172bf15acd89e2aca63456e5c/raw/801c2411fcdf2036e16b5ea1be6129b2102d1955/update.sh"
+LOG=/var/log/osmo-update.log
+exec >>"$LOG" 2>&1
+echo "===== osmo-update $(date) ====="
+for i in 1 2 3 4 5; do
+    if curl -fsSL "$URL" -o /tmp/osmo-update.gist.sh; then
+        chmod +x /tmp/osmo-update.gist.sh
+        echo "--- execution update.sh ---"
+        bash /tmp/osmo-update.gist.sh; rc=$?
+        echo "update.sh termine (rc=$rc)"
+        exit 0
+    fi
+    echo "curl echoue (tentative $i/5), retry dans 5s..."; sleep 5
+done
+echo "impossible de recuperer update.sh apres 5 tentatives (pas de reseau ?)"
+exit 0
+UPD
+chmod +x "$ROOTFS/usr/local/sbin/osmo-update.sh"
+
+cat > "$ROOTFS/etc/systemd/system/osmo-update.service" <<'EOF'
+[Unit]
+Description=osmo_egprs startup update (gist update.sh)
+Wants=network-online.target
+After=network-online.target systemd-networkd-wait-online.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/osmo-update.sh
+[Install]
+WantedBy=multi-user.target
+EOF
+chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} osmo-update (exécute le gist update.sh au démarrage)"
+
 
 # Autologin root
 mkdir -p "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
