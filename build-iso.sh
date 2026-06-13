@@ -431,84 +431,6 @@ DHCP=yes
 EOF
 chroot "$ROOTFS" systemctl enable systemd-networkd systemd-resolved docker 2>/dev/null||true
 
-# ── IP dynamiques : IP1 = IP DHCP reelle, IP2 = IP1 (3e octet +1) en alias ────
-# Au boot, on resout les IP a partir du reseau reel et on REECRIT les configs
-# osmo (qui referencent 127.0.0.1 = composants principaux, 127.0.0.2 = HLR/SGSN)
-# avec IP1/IP2. Mapping lu sur les configs osmo : 127.0.0.1 -> IP1, 127.0.0.2 -> IP2.
-mkdir -p "$ROOTFS/usr/local/sbin"
-cat > "$ROOTFS/usr/local/sbin/osmo-dynip.sh" <<'DYNIP'
-#!/bin/bash
-# osmo-dynip.sh — resout les IP du lab au boot et reecrit les configs osmocom.
-#   IP1 = IPv4 DHCP de l'interface primaire (route par defaut)
-#   IP2 = IP1 avec le 3e octet +1, ajoutee en alias sur le meme NIC
-# Substitution dans les configs : 127.0.0.1 -> IP1, 127.0.0.2 -> IP2.
-set -u
-LOG=/var/log/osmo-dynip.log
-exec >>"$LOG" 2>&1
-echo "===== osmo-dynip $(date) ====="
-
-STAMP=/run/osmo-dynip.done
-[ -f "$STAMP" ] && { echo "deja fait (${STAMP}), skip"; exit 0; }
-
-# interface primaire = celle de la route par defaut (fallback : 1re non-lo)
-NIC=$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')
-[ -z "${NIC:-}" ] && NIC=$(ip -o link show 2>/dev/null | awk -F': ' '$2!="lo"{print $2; exit}')
-echo "NIC=$NIC"
-
-# attendre une IPv4 globale (DHCP) jusqu'a ~45s
-IP1=""; PREFIX=""
-for i in $(seq 1 45); do
-    line=$(ip -4 -o addr show dev "$NIC" scope global 2>/dev/null | awk '{print $4; exit}')
-    IP1="${line%%/*}"; PREFIX="${line##*/}"
-    [ -n "$IP1" ] && break
-    sleep 1
-done
-if [ -z "$IP1" ]; then echo "pas d'IPv4 sur $NIC apres 45s -> abandon (configs gardent 127.0.0.x)"; exit 0; fi
-[ -z "$PREFIX" ] && PREFIX=24
-
-# IP2 = 3e octet +1 (clamp si 255)
-IFS=. read -r o1 o2 o3 o4 <<<"$IP1"
-o3p=$((o3 + 1)); [ "$o3p" -gt 255 ] && o3p=$((o3 - 1))
-IP2="$o1.$o2.$o3p.$o4"
-echo "IP1=$IP1/$PREFIX  IP2=$IP2 (NIC=$NIC)"
-
-# ajoute IP2 en alias (idempotent)
-if ip -4 -o addr show dev "$NIC" | grep -qw "$IP2"; then
-    echo "IP2 deja presente"
-else
-    ip addr add "$IP2/$PREFIX" dev "$NIC" && echo "IP2 ajoutee sur $NIC" || echo "echec ajout IP2"
-fi
-
-# reecriture des configs : 127.0.0.2 -> IP2 d'abord, puis 127.0.0.1 -> IP1
-FILES=$(ls /etc/osmocom/*.cfg /etc/osmocom/run.sh /root/run.sh \
-           /root/.osmocom/bb/*.cfg /etc/asterisk/*.conf 2>/dev/null)
-for f in $FILES; do
-    [ -f "$f" ] || continue
-    sed -i -e "s/\b127\.0\.0\.2\b/$IP2/g" -e "s/\b127\.0\.0\.1\b/$IP1/g" "$f"
-done
-echo "configs reecrites: $FILES"
-
-touch "$STAMP"
-echo "osmo-dynip OK : IP1=$IP1 IP2=$IP2"
-DYNIP
-chmod +x "$ROOTFS/usr/local/sbin/osmo-dynip.sh"
-
-cat > "$ROOTFS/etc/systemd/system/osmo-dynip.service" <<'EOF'
-[Unit]
-Description=osmo_egprs dynamic IP (IP1=DHCP, IP2=3rd-octet+1) + config rewrite
-Wants=network-online.target
-After=network-online.target systemd-networkd-wait-online.service
-Before=osmo-bts-trx.service osmo-bsc.service osmo-msc.service osmo-hlr.service osmo-mgw.service osmo-stp.service osmo-ggsn.service osmo-sgsn.service osmo-pcu.service osmo-sip-connector.service
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/sbin/osmo-dynip.sh
-[Install]
-WantedBy=multi-user.target
-EOF
-chroot "$ROOTFS" systemctl enable osmo-dynip 2>/dev/null || true
-chroot "$ROOTFS" systemctl enable systemd-networkd-wait-online 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} osmo-dynip (IP1 DHCP + IP2 3e octet+1 + réécriture configs)"
 
 # Autologin root
 mkdir -p "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
@@ -579,8 +501,8 @@ LOGO
   printf "${B}  ║${N} ${T}%-*s${N} ${B}║${N}\n" $((W-2)) "GSM / EGPRS  Multi-PLMN  Live System"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "SS7/SIGTRAN  -  Osmocom  -  Calypso/QEMU"
   printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
-  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/qemu-src/start-clean.sh"
-  printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> demarrer la stack GSM/EGPRS"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/osmo_egprs/start-in-iso.sh"
+  printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab (natif, hors docker)"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "ssh root@<vm-ip>   -> mot de passe : osmo"
   printf "${B}  ║${N} ${Y}%-*s${N} ${B}║${N}\n" $((W-2)) "loadkeys fr   -> changer le clavier (apres boot)"
   printf "${B}  ╚"; printf '═%.0s' $(seq 1 $W); printf "╝${N}\n\n"
@@ -660,7 +582,7 @@ dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 touch /var/lib/osmo-kb-done
 
 echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lancé automatiquement."
-echo -e "  \033[1;33mPour démarrer la stack manuellement : /opt/GSM/qemu-src/start-clean.sh\033[0m"
+echo -e "  \033[1;33mPour démarrer la stack manuellement : /opt/osmo_egprs/start-in-iso.sh\033[0m"
 
 echo -e "  \033[1;32m✓ Clavier configuré (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
 echo ""
