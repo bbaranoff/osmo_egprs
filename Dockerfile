@@ -100,11 +100,8 @@ RUN for repo in \
 # pour gsm0503_rach_ext_encode). Touche Makefile.am -> autoreconf+configure requis.
 COPY patches/osmo-trx-ipc-ts-frame-align.patch /tmp/osmo-trx-ipc-ts-frame-align.patch
 COPY patches/osmo-trx-rach-per-ra-table.patch /tmp/osmo-trx-rach-per-ra-table.patch
-COPY patches/osmo-trx-ipc-poll-fdsetsize.patch /tmp/osmo-trx-ipc-poll-fdsetsize.patch
 RUN git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-ipc-ts-frame-align.patch \
     && git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-rach-per-ra-table.patch \
-    && { git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-ipc-poll-fdsetsize.patch \
-         || patch -d ${ROOT}/osmo-trx -p1 --fuzz=3 < /tmp/osmo-trx-ipc-poll-fdsetsize.patch; } \
     && cd ${ROOT}/osmo-trx \
     && autoreconf -fi \
     && ./configure --with-ipc \
@@ -246,12 +243,7 @@ RUN mkdir -p /opt/GSM/qemu/build \
 # PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS
 # dépend de info_cnf compilé avec CALYPSO_TRX_OSR=4 (sinon il s'annonce 1 SPS →
 # osmo-trx alloue buffer_size=1250 → troncature → OML BTS meurt → pas de camping).
-# Patch idempotence ipc_sock_close (fix double osmo_fd_unregister -> SIGSEGV
-# __llist_del sur LIST_POISON quand la connexion IPC tombe).
-COPY patches/calypso-ipc-sock-idempotent-close.patch /tmp/calypso-ipc-sock-idempotent-close.patch
-RUN { git -C /opt/GSM/qemu-src apply /tmp/calypso-ipc-sock-idempotent-close.patch \
-      || patch -d /opt/GSM/qemu-src -p1 --fuzz=3 < /tmp/calypso-ipc-sock-idempotent-close.patch; } \
-    && cd /opt/GSM/qemu-src/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
+RUN cd /opt/GSM/qemu-src/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
 
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
 # (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
