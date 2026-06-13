@@ -9,6 +9,10 @@ on:
         description: "Create GitHub Release"
         type: boolean
         default: true
+      no_cache:
+        description: "Rebuild Docker images without cache (--no-cache)"
+        type: boolean
+        default: true
 
 env:
   ISO_NAME: osmo_egprs.iso
@@ -41,17 +45,17 @@ jobs:
           sudo docker image prune -af || true
           df -h /
 
-      - name: Install host tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin \
-            grub-common mtools debootstrap git
+      # Les paquets hôte (squashfs-tools, xorriso, grub*, mtools, debootstrap...)
+      # sont installés directement par build-iso.sh.
 
       - name: Build ISO via build-iso.sh
         run: |
           chmod +x build-iso.sh
-          sudo ./build-iso.sh --output="${ISO_NAME}"
+          # --no-cache par defaut (et sur push de tag) ; desactivable via le
+          # bouton "Run workflow" en mettant no_cache=false.
+          NO_CACHE="--no-cache"
+          [ "${{ github.event.inputs.no_cache }}" = "false" ] && NO_CACHE=""
+          sudo ./build-iso.sh $NO_CACHE --output="${ISO_NAME}"
           ls -lh "${ISO_NAME}"
 
       - name: Checksums
@@ -111,8 +115,8 @@ jobs:
             # USB
             sudo dd if=osmo_egprs.iso of=/dev/sdX bs=4M status=progress && sync
 
-            # Premier boot
-            cd /etc/osmocom/ && sudo ./run.sh
+            # Premier boot (lancement manuel de la stack)
+            /opt/GSM/qemu-src/start-clean.sh
             ```
           files: |
             ${{ env.ISO_NAME }}.part-*
