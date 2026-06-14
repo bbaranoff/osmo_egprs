@@ -121,8 +121,15 @@ RUN cd ${ROOT} && \
     
 # ── Calypso build ─────────────────────────────
 
+# ── Patch osmocon : filtre Kc (chiffrement A5/1) ──────────────────────────────
+# osmocon capte L1CTL_CRYPTO_REQ (mobile->L1) et ecrit /dev/shm/calypso_kc =
+# SEULE source du Kc pour le chiffrement : UL (qemu_wrap osmo_a5) + DL (si_bridge
+# grgsm -k). Sans ce patch : pas de Kc -> aucun chiffrement. NE TOUCHE PAS au
+# firmware. Patch maintenu dans patches/ (regenere si osmocon.c change).
+COPY patches/osmocom-bb-osmocon-kc-filter.patch /tmp/osmocom-bb-osmocon-kc-filter.patch
 RUN cd ${ROOT} && \
     git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
+    git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-osmocon-kc-filter.patch && \
     cd osmocom-bb/src && \
     # Build complet : firmware (layer1.bin/.elf pour Calypso) + outils host
     # (mobile, trxcon, virtphy, ccch_scan). Le firmware est nécessaire pour
