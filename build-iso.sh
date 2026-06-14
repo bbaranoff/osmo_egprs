@@ -4,14 +4,24 @@
 set -euo pipefail
 
 OUTPUT="osmo_egprs.iso"
-WORK="/tmp/iso-build-$$"
+# Répertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
+# space left on device" car le rootfs est volumineux). Overridable via OSMO_ISO_WORK.
+WORK="${OSMO_ISO_WORK:-/var/tmp}/iso-build-$$"
 ROOTFS="$WORK/rootfs"
 ISOROOT="$WORK/isoroot"
 LABEL="OSMO_EGPRS"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-for arg in "$@"; do case "$arg" in --output=*) OUTPUT="${arg#*=}" ;; esac; done
+NO_CACHE=""
+for arg in "$@"; do case "$arg" in
+    --output=*)  OUTPUT="${arg#*=}" ;;
+    --no-cache)  NO_CACHE="--no-cache" ;;
+esac; done
 case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
+
+# Propage --no-cache aux deux builds Docker : build.sh (image osmocom-nitb) et
+# build_run_image (image osmocom-run, via DOCKER_NO_CACHE).
+export DOCKER_NO_CACHE="$NO_CACHE"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
@@ -20,6 +30,24 @@ cleanup() { umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$
 trap cleanup EXIT
 
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
+
+# ── Paquets hôte requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
+# Installés ici plutôt que dans le workflow CI : `sudo ./build-iso.sh` suffit
+# sur une machine Debian/Ubuntu vierge, sans étape "Install host tools" externe.
+ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git isolinux"
+if command -v apt-get &>/dev/null; then
+    echo -e "${GREEN}[0/7] Installation des paquets hôte (apt)...${NC}"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq || true
+    # isolinux est optionnel (isohybrid) : on n'échoue pas s'il manque.
+    apt-get install -y --no-install-recommends $ISO_HOST_PKGS \
+        || apt-get install -y --no-install-recommends \
+           squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git
+else
+    echo -e "${YELLOW}apt-get absent : vérification seule des outils hôte.${NC}"
+fi
+
+# Docker n'est pas auto-installé ici (paquet docker-ce hors apt standard).
 for t in docker mksquashfs xorriso grub-mkrescue debootstrap git; do
     command -v "$t" &>/dev/null || { echo -e "${RED}Manquant: $t${NC}"; exit 1; }
 done
@@ -30,10 +58,10 @@ echo -e "${CYAN}${BOLD}══ osmo_egprs ISO builder (via build.sh + start.sh) �
 # ── Étape 1 : Exécuter build.sh pour préparer l'hôte et construire osmocom-nitb ──
 echo -e "${GREEN}[1/7] Exécution de build.sh...${NC}"
 if [ -f "$DIR/build.sh" ]; then
-    bash "$DIR/build.sh"
+    bash "$DIR/build.sh" $NO_CACHE
 else
     echo -e "${YELLOW}build.sh introuvable, construction manuelle de l'image osmocom-nitb...${NC}"
-    docker build -t osmocom-nitb "$DIR"
+    docker build $NO_CACHE -t osmocom-nitb "$DIR"
 fi
 echo -e "  ${GREEN}✓${NC} image osmocom-nitb prête"
 
@@ -128,6 +156,8 @@ docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
 docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
 docker cp "$CID:/usr/local/include/." "$ROOTFS/usr/local/include/" 2>/dev/null||true
 docker cp "$CID:/opt/GSM"             "$ROOTFS/opt/GSM"     2>/dev/null||true
+# venv python (gr-gsm + bridges) attendu par /opt/GSM/qemu-src/start-clean.sh
+docker cp "$CID:/root/.env"           "$ROOTFS/root/"       2>/dev/null||true
 docker cp "$CID:/etc/osmocom/."       "$ROOTFS/etc/osmocom/" 2>/dev/null||true
 docker cp "$CID:/etc/asterisk/."      "$ROOTFS/etc/asterisk/" 2>/dev/null||true
 for svc in osmo-bts-trx osmo-bsc osmo-msc osmo-hlr osmo-mgw osmo-stp osmo-ggsn osmo-sgsn osmo-pcu osmo-sip-connector; do
@@ -287,22 +317,30 @@ deb http://archive.ubuntu.com/ubuntu jammy-security   main universe multiverse
 SOURCES
 apt-get update -qq
 
+# deb-src + build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw,
+# gmp, log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local.
+# Genere les lignes deb-src a partir des deb (tous composants), comme le Dockerfile.
+sed -nE "s|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p" \
+    /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list
+apt-get update -qq
+apt-get build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
+
 apt-get install -y $APT_OPTS --no-install-recommends \
     linux-image-generic initramfs-tools \
     live-boot live-boot-initramfs-tools
 
 apt-get install -y $APT_OPTS --no-install-recommends \
-    libtalloc2 libpcsclite1 libsctp1 libc-ares2 libgnutls30 \
+    libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2 libgnutls30 libgnutls28-dev libmnl-dev \
     libortp-dev libdbi1 libdbd-sqlite3 sqlite3 \
     libfftw3-single3 libusb-1.0-0 \
     libgsm1 libasound2 libasound2-plugins \
     libsofia-sip-ua-glib3 libmnl0 \
-    liburing2
+    liburing2 libslirp0
 
 apt-get install -y $APT_OPTS --no-install-recommends \
     iproute2 iptables net-tools lksctp-tools \
     tmux telnet expect whiptail netcat-openbsd \
-    lsb-release pulseaudio-utils \
+    lsb-release pulseaudio-utils openssh-server \
     console-setup keyboard-configuration locales
 
 apt-get install -y $APT_OPTS --no-install-recommends \
@@ -344,6 +382,41 @@ update-initramfs -u -k "$KERNEL"
 apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 '
 
+# ── Étape 8b : Rééquilibrage sur build.sh — clôture de dépendances ldd ────────
+# L'image osmocom-run (produite par build.sh + Dockerfile) est l'environnement
+# qui MARCHE. Au lieu de se fier aux versions apt du rootfs (skew -> crash
+# logging libosmocore), on copie depuis le conteneur la clôture .so EXACTE de
+# tous les binaires osmo + calypso-ipc-device, en écrasant les libs apt. On
+# exclut la famille glibc/loader (identique en jammy, ne pas clobber ld.so).
+echo -e "${GREEN}[8b/7] Clôture de dépendances COMPLÈTE depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (toute l'install)...${NC}"
+# On ldd TOUS les ELF (executables + toutes les .so) de l'install custom :
+# /usr/local/bin (osmo), /opt/GSM (qemu, ipc-device, gr-gsm), /root/.env (venv
+# python : bindings gnuradio/gr-gsm + leurs deps boost/log4cpp/volk/fftw...).
+# => toutes les deps natives finissent dans l'ISO, plus de "import gsm" qui rate.
+docker run --rm --entrypoint bash "$ISO_RUN_IMAGE" -c '
+    set -e
+    find /usr/local/bin /opt/GSM /root/.env -type f \( -executable -o -name "*.so*" \) 2>/dev/null \
+      | while read -r b; do ldd "$b" 2>/dev/null; done \
+      | grep -oE "/[^ ]+\.so[^ ]*" | sort -u \
+      | grep -vE "/(ld-linux[^/]*|ld|libc|libm|libpthread|libdl|librt|libresolv)\.so" \
+      | while read -r f; do realpath "$f" 2>/dev/null; done | sort -u \
+      | tar -czf - -T - 2>/dev/null
+' > "$WORK/closure.tar.gz" || true
+if [ -s "$WORK/closure.tar.gz" ]; then
+    tar -xzf "$WORK/closure.tar.gz" -C "$ROOTFS" 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} $(tar -tzf "$WORK/closure.tar.gz" 2>/dev/null | wc -l) libs injectées (Docker)"
+else
+    echo -e "  ${YELLOW}clôture vide — on garde les libs apt${NC}"
+fi
+
+# Priorité /usr/local/lib (libosmo* custom) + purge de tout doublon système.
+# NB: pas de `| grep` ici — sous set -euo pipefail un grep sans correspondance
+# (cas normal: aucun doublon) renverrait 1 et tuerait le script avant l'ISO.
+echo "/usr/local/lib" > "$ROOTFS/etc/ld.so.conf.d/00-osmocom-local.conf"
+find "$ROOTFS/usr/lib" "$ROOTFS/lib" -maxdepth 4 -name 'libosmo*.so*' -delete 2>/dev/null || true
+chroot "$ROOTFS" ldconfig 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} /usr/local/lib prioritaire + ldconfig"
+
 # ── Configuration système ──────────────────────────────────────────────────
 echo "osmo-egprs" > "$ROOTFS/etc/hostname"
 cat > "$ROOTFS/etc/hosts" <<'EOF'
@@ -359,6 +432,46 @@ Name=en* eth*
 DHCP=yes
 EOF
 chroot "$ROOTFS" systemctl enable systemd-networkd systemd-resolved docker 2>/dev/null||true
+
+# ── Service startup : exécute le gist update.sh (bbaranoff) au démarrage ──────
+cat > "$ROOTFS/usr/local/sbin/osmo-update.sh" <<'UPD'
+#!/bin/bash
+# osmo-update.sh — recupere et execute le gist update.sh (bbaranoff) au boot.
+set -u
+URL="https://gist.githubusercontent.com/bbaranoff/563c87f172bf15acd89e2aca63456e5c/raw/801c2411fcdf2036e16b5ea1be6129b2102d1955/update.sh"
+LOG=/var/log/osmo-update.log
+exec >>"$LOG" 2>&1
+echo "===== osmo-update $(date) ====="
+for i in 1 2 3 4 5; do
+    if curl -fsSL "$URL" -o /tmp/osmo-update.gist.sh; then
+        chmod +x /tmp/osmo-update.gist.sh
+        echo "--- execution update.sh ---"
+        bash /tmp/osmo-update.gist.sh; rc=$?
+        echo "update.sh termine (rc=$rc)"
+        exit 0
+    fi
+    echo "curl echoue (tentative $i/5), retry dans 5s..."; sleep 5
+done
+echo "impossible de recuperer update.sh apres 5 tentatives (pas de reseau ?)"
+exit 0
+UPD
+chmod +x "$ROOTFS/usr/local/sbin/osmo-update.sh"
+
+cat > "$ROOTFS/etc/systemd/system/osmo-update.service" <<'EOF'
+[Unit]
+Description=osmo_egprs startup update (gist update.sh)
+Wants=network-online.target
+After=network-online.target systemd-networkd-wait-online.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/osmo-update.sh
+[Install]
+WantedBy=multi-user.target
+EOF
+chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} osmo-update (exécute le gist update.sh au démarrage)"
+
 
 # Autologin root
 mkdir -p "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
@@ -399,6 +512,10 @@ EOF
 
 # bashrc pour root
 cat >> "$ROOTFS/root/.bashrc" <<'BASH'
+# Active par defaut l'environnement python (gr-gsm + bridges) utilise par
+# /opt/GSM/qemu-src/start-clean.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
+export VIRTUAL_ENV_DISABLE_PROMPT=1
+[ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
 alias osmo-lab='cd /opt/osmo_egprs && ./start-in-iso.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
@@ -406,23 +523,46 @@ alias osmo-status='/opt/osmo-launch.sh status'
 export PS1='\[\033[0;36m\]osmo-egprs\[\033[0m\]:\[\033[0;33m\]\w\[\033[0m\]\$ '
 BASH
 
-# Message du jour
-cat > "$ROOTFS/etc/motd" <<'MOTD'
+# Message du jour — bannière couleur + boîte alignée. Contenu de la boîte en
+# ASCII (pas de ←/é/• multi-octets) + padding printf => bords parfaitement
+# alignés. Généré à chaud pour injecter les couleurs ANSI dans /etc/motd.
+{
+  B=$'\033[1;36m'; T=$'\033[1;37m'; G=$'\033[1;32m'; Y=$'\033[0;33m'; N=$'\033[0m'
+  W=58
+  printf '\n%b' "$B"
+  cat <<'LOGO'
+    ___  ___ _ __ ___   ___    ___  __ _ _ __  _ __ ___
+   / _ \/ __| '_ ` _ \ / _ \  / _ \/ _` | '_ \| '__/ __|
+  | (_) \__ \ | | | | | (_) ||  __/ (_| | |_) | |  \__ \
+   \___/|___/_| |_| |_|\___/  \___|\__, | .__/|_|  |___/
+                                   |___/|_|
+LOGO
+  printf '%b' "$N"
+  printf "${B}  ╔"; printf '═%.0s' $(seq 1 $W); printf "╗${N}\n"
+  printf "${B}  ║${N} ${T}%-*s${N} ${B}║${N}\n" $((W-2)) "GSM / EGPRS  Multi-PLMN  Live System"
+  printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "SS7/SIGTRAN  -  Osmocom  -  Calypso/QEMU"
+  printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/osmo_egprs/start-in-iso.sh"
+  printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab (natif, hors docker)"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "ssh root@<vm-ip>   -> mot de passe : osmo"
+  printf "${B}  ║${N} ${Y}%-*s${N} ${B}║${N}\n" $((W-2)) "loadkeys fr   -> changer le clavier (apres boot)"
+  printf "${B}  ╚"; printf '═%.0s' $(seq 1 $W); printf "╝${N}\n\n"
+} > "$ROOTFS/etc/motd"
 
-  ╔══════════════════════════════════════════════════════════════╗
-  ║  osmo_egprs — GSM/EGPRS Multi-PLMN Live System              ║
-  ║  SS7/SIGTRAN • Osmocom • Web Dashboard                      ║
-  ╠══════════════════════════════════════════════════════════════╣
-  ║  /opt/osmo-launch.sh            ← lance tout (lab + web)     ║
-  ║  /opt/osmo_egprs/start-in-iso.sh ← lancement manuel du lab  ║
-  ║  http://localhost:8080           ← dashboard web             ║
-  ║                                                              ║
-  ║  loadkeys fr                     ← changer clavier après boot║
-  ╚══════════════════════════════════════════════════════════════╝
+# Mot de passe root = "osmo" (autologin console + login SSH). On NE vide PAS le
+# mot de passe (sinon sshd refuse le login root).
+echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
 
-MOTD
-
-chroot "$ROOTFS" passwd -d root 2>/dev/null||true
+# SSH : autorise le login root par mot de passe + active le service au boot.
+if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
+    sed -i \
+        -e 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' \
+        -e 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' \
+        "$ROOTFS/etc/ssh/sshd_config"
+    grep -q '^PermitRootLogin yes' "$ROOTFS/etc/ssh/sshd_config" || \
+        echo 'PermitRootLogin yes' >> "$ROOTFS/etc/ssh/sshd_config"
+fi
+chroot "$ROOTFS" systemctl enable ssh 2>/dev/null || true
 
 # Script de configuration clavier au premier boot
 cat > "$ROOTFS/etc/profile.d/01-keyboard-setup.sh" <<'KBSCRIPT'
@@ -483,7 +623,7 @@ dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 touch /var/lib/osmo-kb-done
 
 echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lancé automatiquement."
-echo -e "  \033[1;33mPour démarrer la stack manuellement : /etc/osmocom/run.sh\033[0m"
+echo -e "  \033[1;33mPour démarrer la stack manuellement : /opt/osmo_egprs/start-in-iso.sh\033[0m"
 
 echo -e "  \033[1;32m✓ Clavier configuré (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
 echo ""
@@ -545,8 +685,7 @@ chmod +x "$XORRISO_WRAP"
 
 grub-mkrescue --xorriso="$XORRISO_WRAP" -o "$OUTPUT" "$ISOROOT" \
     --product-name "osmo_egprs" -- -volid "$LABEL"
-    
-if command -v isohybrid &>/dev/null; then
+    if command -v isohybrid &>/dev/null; then
     isohybrid --uefi "$OUTPUT"
 fi
 
