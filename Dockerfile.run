@@ -72,7 +72,7 @@ RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
 # ── Prompt interactif (root rouge / hostname bleu / cwd vert / ☎️#) ───────────
 RUN printf '%s\n' '' \
     '### calypso-prompt ###' \
-    "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️ # '" \
+    "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️# '" \
     '### end calypso-prompt ###' >> /root/.bashrc
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 RUN pip install matplotlib
