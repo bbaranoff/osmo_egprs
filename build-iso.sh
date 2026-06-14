@@ -93,7 +93,7 @@ echo -e "  ${GREEN}✓${NC} osmocom-run construite"
 echo -e "${GREEN}[2b/7] Préparation d'une image osmocom-run (net-host)...${NC}"
 
 ISO_N_MS=8
-ENCRYPTION="a5 0"
+ENCRYPTION="a5 1"   # A5/1 par defaut dans l'ISO (chiffrement bout-en-bout valide)
 
 HOST_IP="172.20.0.11"      # ip1 : conteneur operateur (backbone docker 172.20.0.0/24)
 GATEWAY_IP="172.20.0.1"    # gw  : passerelle du reseau docker
@@ -342,7 +342,8 @@ apt-get install -y $APT_OPTS --no-install-recommends \
     iproute2 iptables net-tools lksctp-tools \
     tmux telnet expect whiptail netcat-openbsd \
     lsb-release pulseaudio-utils openssh-server \
-    console-setup keyboard-configuration locales
+    console-setup keyboard-configuration locales \
+    binutils-arm-none-eabi
 
 apt-get install -y $APT_OPTS --no-install-recommends \
     python3 python3-scapy \
@@ -435,8 +436,7 @@ DHCP=yes
 Address=172.20.0.1/24
 Address=172.20.0.11/24
 Address=172.20.1.10/24
-# Route par defaut via la gw + couverture de tout le plan docker 172.20.0.0/16
-Gateway=172.20.0.1
+# Couverture de tout le plan docker 172.20.0.0/16 (route connectee, PAS de route par defaut)
 [Route]
 Destination=172.20.0.0/16
 Scope=link
