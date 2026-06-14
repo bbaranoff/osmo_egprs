@@ -616,13 +616,13 @@ start_bridge_mode() {
     declare -A OP_MCC OP_MNC OP_NAME OP_MS
     if [ "${QEMU_POC:-0}" = "1" ]; then
         # ── PoC QEMU (entrée par défaut du premier menu) : 1 opérateur, valeurs
-        #    par défaut, no-process + qemu-src/run.sh, A5/0, sans WAN. AUCUN prompt. ──
+        #    par défaut, no-process + qemu-src/run.sh, A5/1, sans WAN. AUCUN prompt. ──
         n_operators=1
         OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=1
         WAN_ENABLED="false"
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
-        ENCRYPTION="a5 0"
-        echo -e "  ${CYAN}[PoC QEMU] 1 opérateur · no-process + qemu-src/run.sh · A5/0${NC}"
+        ENCRYPTION="a5 1"   # defaut PoC QEMU = A5/1 (chiffrement bout-en-bout OK : Kc osmocon + UL qemu_wrap + DL 2-grgsm)
+        echo -e "  ${CYAN}[PoC QEMU] 1 opérateur · no-process + qemu-src/run.sh · A5/1${NC}"
     else
     n_operators=$(wt_input "Opérateurs" "Nombre d'opérateurs (1-36) :" "2") || exit 1
     n_operators=${n_operators:-2}
