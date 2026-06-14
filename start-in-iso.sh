@@ -55,7 +55,7 @@ log "IP1=${CYAN}${IP1}${NC}  IP2=${CYAN}${IP2}${NC}  (NIC=${NIC})"
 # 2) Injection des configs via apply_config_templates (lib de start.sh)
 # ─────────────────────────────────────────────────────────────────────────────
 # Globals attendus par apply_config_templates
-export ENCRYPTION="${ENCRYPTION:-a5 0}"
+export ENCRYPTION="${ENCRYPTION:-a5 1}"   # A5/1 par defaut (HLR feedé ci-dessous -> auth OK -> Kc)
 export HOST_IP="$IP1"
 export ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 export ALSA_INPUT="${ALSA_INPUT:-default}"
@@ -109,6 +109,45 @@ log "configs injectees dans /etc/osmocom + /etc/asterisk (IP1/IP2 appliquees)"
 # 3) Lancement natif de la stack (core systemctl + PHY/mobile/asterisk tmux)
 # ─────────────────────────────────────────────────────────────────────────────
 export OPERATOR_ID="${OPERATOR_ID:-1}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2b) Feed HLR (INDISPENSABLE pour A5/1) : sans l'IMSI/Ki du SIM test dans le
+#     HLR, la MSC ne peut pas authentifier -> pas de Kc -> CIPHER MODE rejete
+#     (LU en clair OK mais LU chiffree KO). On feed en tache de fond, une fois
+#     osmo-hlr (VTY IP2:4258) demarre par run.sh.
+# ─────────────────────────────────────────────────────────────────────────────
+feed_hlr_bg() {
+    local sim imsi ki msisdn hlr_ip="$IP2" vty i
+    for sim in /opt/GSM/qemu-src/cfgs/mobile_group1.cfg \
+               /root/.osmocom/bb/mobile_group1.cfg \
+               /root/.osmocom/bb/mobile.cfg; do
+        [ -f "$sim" ] || continue
+        imsi=$(grep -oP '^\s*imsi \K[0-9]{15}' "$sim" 2>/dev/null | head -1)
+        ki=$(grep -oP '^\s*ki comp128 \K[0-9a-fA-F ]+' "$sim" 2>/dev/null | head -1 | tr -d ' ')
+        [ -n "$imsi" ] && [ -n "$ki" ] && break
+    done
+    [ -n "$imsi" ] && [ -n "$ki" ] || { log "HLR feed: IMSI/Ki introuvable -> skip"; return; }
+    msisdn="${imsi: -5}"
+    # attend le VTY HLR (run.sh lance osmo-hlr via systemctl) : 90 x 2s = 180s
+    for i in $(seq 1 90); do (echo >"/dev/tcp/$hlr_ip/4258") 2>/dev/null && break; sleep 2; done
+    vty=$(mktemp)
+    { echo enable
+      echo "subscriber imsi $imsi create"
+      echo "subscriber imsi $imsi update msisdn $msisdn"
+      echo "subscriber imsi $imsi update aud2g comp128v1 ki $ki"
+      echo end
+    } > "$vty"
+    if command -v nc >/dev/null 2>&1; then
+        (sleep 1; cat "$vty"; sleep 2) | nc -q3 "$hlr_ip" 4258 >/dev/null 2>&1 \
+          || (sleep 1; cat "$vty"; sleep 2) | nc "$hlr_ip" 4258 >/dev/null 2>&1 || true
+    else
+        (sleep 1; cat "$vty"; sleep 3) | telnet "$hlr_ip" 4258 >/dev/null 2>&1 || true
+    fi
+    rm -f "$vty"
+    log "HLR feed: IMSI=$imsi msisdn=$msisdn (comp128v1 Ki) -> $hlr_ip:4258"
+}
+feed_hlr_bg &
+
 RUN="/etc/osmocom/run.sh"; [ -x "$RUN" ] || RUN="$DIR/scripts/run.sh"
 log "lancement natif via ${RUN} (PHY=${PHY_MODE})"
 exec "$RUN"
