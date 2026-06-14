@@ -95,16 +95,17 @@ echo -e "${GREEN}[2b/7] Préparation d'une image osmocom-run (net-host)...${NC}"
 ISO_N_MS=8
 ENCRYPTION="a5 0"
 
-HOST_IP="127.0.0.1"
-GATEWAY_IP="127.0.0.1"
+HOST_IP="172.20.0.11"      # ip1 : conteneur operateur (backbone docker 172.20.0.0/24)
+GATEWAY_IP="172.20.0.1"    # gw  : passerelle du reseau docker
 
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
 PHY_MODE="${PHY_MODE:-faketrx}"
-INTER_STP_IP="127.0.0.1"
+INTER_STP_IP="172.20.1.10" # ip2 : reseau prive operateur (172.20.1.0/24)
 
 echo -e "  Host IP    : ${CYAN}${HOST_IP}${NC}"
 echo -e "  Gateway    : ${CYAN}${GATEWAY_IP}${NC}"
+echo -e "  Inter-STP  : ${CYAN}${INTER_STP_IP}${NC}"
 echo -e "  MS         : ${CYAN}${ISO_N_MS}${NC}"
 echo -e "  Encryption : ${CYAN}${ENCRYPTION}${NC}"
 echo -e "  PHY        : ${CYAN}${PHY_MODE}${NC}"
@@ -117,10 +118,10 @@ if declare -f sms_routing_generate >/dev/null 2>&1; then
 fi
 
 apply_config_templates "$TEMP_CONFIG" \
-    "127.0.0.1" "127.0.0.1" \
+    "$HOST_IP" "$GATEWAY_IP" \
     "1" "1.1.1" "1.1.2" "1.1.3" \
     "001" "01" "OsmoGSM" \
-    "127.0.0.1" "shutdown" "1"
+    "$INTER_STP_IP" "shutdown" "1"
 
 ISO_RUN_IMAGE="osmocom-run-iso-net-host"
 TMP_CID="$(docker create osmocom-run /bin/sh)"
@@ -430,6 +431,15 @@ cat > "$ROOTFS/etc/systemd/network/20-dhcp.network" <<'EOF'
 Name=en* eth*
 [Network]
 DHCP=yes
+# IP fixes assignees au NIC par defaut (en plus du DHCP) : gw / ip1 / ip2
+Address=172.20.0.1/24
+Address=172.20.0.11/24
+Address=172.20.1.10/24
+# Route par defaut via la gw + couverture de tout le plan docker 172.20.0.0/16
+Gateway=172.20.0.1
+[Route]
+Destination=172.20.0.0/16
+Scope=link
 EOF
 chroot "$ROOTFS" systemctl enable systemd-networkd systemd-resolved docker 2>/dev/null||true
 
