@@ -135,7 +135,6 @@ feed_hlr_bg() {
       echo "subscriber imsi $imsi create"
       echo "subscriber imsi $imsi update msisdn $msisdn"
       echo "subscriber imsi $imsi update aud2g comp128v1 ki $ki"
-      echo end
     } > "$vty"
     if command -v nc >/dev/null 2>&1; then
         (sleep 1; cat "$vty"; sleep 2) | nc -q3 "$hlr_ip" 4258 >/dev/null 2>&1 \
