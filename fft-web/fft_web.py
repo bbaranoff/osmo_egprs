@@ -1,30 +1,77 @@
 #!/usr/bin/env python3
 # fft_web.py — 2 FFT (MS + BTS) sur UNE page, serveur web autonome (port 8081).
 #
-# Reprend la logique de fft.sh / fft2.sh (PSD Welch sur le cfile I/Q fc32) mais :
-#   - NATIF : lit directement les cfiles de l'hôte (/dev/shm/*.cfile), pas de docker exec.
+# Reprend la logique de fft.sh / fft2.sh (PSD Welch sur l'I/Q fc32) mais :
+#   - NATIF : lit directement les sources de l'hôte, pas de docker exec.
 #   - HEADLESS : pas de matplotlib/X. numpy calcule la PSD → JSON → le navigateur dessine (canvas).
-#   - fft.sh  = dsp_iq.cfile = MS (entrée DSP Calypso)
-#     fft2.sh = record.cfile = BTS (ce que la BTS émet)  -> les deux spectres sur la même page.
+#   - LIVE FIFO : le spectre BTS lit /tmp/iq_fft.fifo EN CONTINU (le tap FFT
+#     dédié du relay DL osmo-trx) au lieu du ring record.cfile (128 Mo) qui
+#     FIGEAIT une fois plein. La FIFO est ouverte O_RDWR|O_NONBLOCK (comme
+#     grgsm_fft_live.py) : pas d'EOF, le write non-bloquant du relay trouve
+#     toujours un lecteur, et on ne perturbe pas la boucle relay / le camping.
+#
+#   - MS  = dsp_iq.cfile  (entrée DSP Calypso ; fichier qui grandit, pas le ring → pas de freeze)
+#   - BTS = iq_fft.fifo   (DL relay osmo-trx, LIVE)
+#   Chaque source accepte indifféremment un .cfile (lecture tail) OU un .fifo
+#   (lecture live) : auto-détecté. Override par env CFILE_MS / CFILE_BTS.
 #
 # Lancement :  python3 /opt/GSM/osmo_egprs/fft-web/fft_web.py
 #   FFT_WEB_PORT=8081 RATE=1083333 NSAMP=262144 NFFT=4096 ...  (overridables par env)
-import os, json
+import os, json, stat, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import numpy as np
 
 PORT  = int(os.environ.get('FFT_WEB_PORT', '8081'))
-RATE  = float(os.environ.get('RATE', '1083333'))   # 4 SPS natif = 26e6/24
-NSAMP = int(os.environ.get('NSAMP', '262144'))     # complex samples lus en tail
+RATE  = float(os.environ.get('RATE', '1083333'))   # 4 SPS natif = 26e6/24 (= Fs du relay/FIFO)
+NSAMP = int(os.environ.get('NSAMP', '262144'))     # complex samples gardés (tail / fenêtre live)
 NFFT  = int(os.environ.get('NFFT', '4096'))        # résolution FFT (segment Welch)
 
 SRC = {
     'ms':  {'path': os.environ.get('CFILE_MS',  '/dev/shm/dsp_iq.cfile'),
             'arfcn': os.environ.get('ARFCN_MS', '514'),  'label': 'MS — Calypso DSP (dsp_iq.cfile)'},
-    'bts': {'path': os.environ.get('CFILE_BTS', '/dev/shm/record.cfile'),
-            'arfcn': os.environ.get('ARFCN_BTS', '514'), 'label': 'BTS — record (record.cfile)'},
+    'bts': {'path': os.environ.get('CFILE_BTS', '/tmp/iq_fft.fifo'),
+            'arfcn': os.environ.get('ARFCN_BTS', '514'), 'label': 'BTS — DL relay LIVE (iq_fft.fifo)'},
 }
+
+# ── État live par source FIFO : fd O_RDWR|O_NONBLOCK + buffer roulant ────────
+_state = {}                                        # src -> {'fd':int, 'buf':bytearray}
+_locks = {k: threading.Lock() for k in SRC}
+MAXB   = NSAMP * 8                                 # octets gardés (complex64 = 8 o/échantillon)
+
+def _is_fifo(path):
+    try:
+        return stat.S_ISFIFO(os.stat(path).st_mode)
+    except OSError:
+        return path.endswith('.fifo')              # pas encore créé : on se fie au suffixe
+
+def read_live_iq(src, path):
+    """Draine la FIFO en non-bloquant et renvoie les NSAMP derniers échantillons
+    (le plus frais). O_RDWR => jamais d'EOF, jamais de blocage du relay."""
+    st = _state.get(src)
+    if st is None:
+        if not os.path.exists(path):
+            os.mkfifo(path, 0o666)
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+        st = {'fd': fd, 'buf': bytearray()}
+        _state[src] = st
+    fd, buf = st['fd'], st['buf']
+    while True:
+        try:
+            c = os.read(fd, 1 << 16)
+        except BlockingIOError:
+            break
+        if not c:
+            break
+        buf += c
+        if len(buf) > MAXB:
+            del buf[:-MAXB]                         # borne la RAM, garde le frais
+    if len(buf) > MAXB:
+        del buf[:-MAXB]
+    n = (len(buf) // 8) * 8
+    if n < NFFT * 8:
+        return np.array([], dtype=np.complex64)
+    return np.frombuffer(bytes(buf[-n:]), dtype=np.complex64)
 
 def read_tail_iq(path, nsamp):
     sz = os.path.getsize(path)
@@ -51,17 +98,19 @@ def welch_psd(iq, nfft, rate):
 
 def psd_json(src):
     s = SRC[src]
+    path = s['path']
     try:
-        iq = read_tail_iq(s['path'], NSAMP)
+        with _locks[src]:
+            iq = read_live_iq(src, path) if _is_fifo(path) else read_tail_iq(path, NSAMP)
         f, p = welch_psd(iq, NFFT, RATE)
         if f is None:
-            return {'error': 'pas assez d\'échantillons', 'label': s['label']}
+            return {'error': "flux pas encore prêt (pas assez d'échantillons)", 'label': s['label']}
         step = max(1, len(f)//1024)                # sous-échantillonne pour le transport
         return {'label': s['label'], 'arfcn': s['arfcn'], 'rate': RATE,
                 'freqs': [round(x, 1) for x in f[::step].tolist()],
                 'psd':   [round(x, 2) for x in p[::step].tolist()]}
     except FileNotFoundError:
-        return {'error': 'cfile absent (%s) — lance la stack' % s['path'], 'label': s['label']}
+        return {'error': 'source absente (%s) — lance la stack' % path, 'label': s['label']}
     except Exception as e:
         return {'error': str(e), 'label': s['label']}
 
