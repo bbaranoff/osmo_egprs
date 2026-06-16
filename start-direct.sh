@@ -919,7 +919,7 @@ run_multi_op() {
 cleanup_procs() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl stop osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc \
-            osmo-ggsn osmo-sgsn osmo-pcu osmo-sip-connector osmo-bts-trx 2>/dev/null || true
+            osmo-ggsn osmo-sgsn osmo-pcu osmo-sip-connector osmo-bts-trx osmo-egprs-web 2>/dev/null || true
     fi
     if [ -d "$RUN_DIR" ]; then
         local pidf
@@ -931,6 +931,7 @@ cleanup_procs() {
     done
     pkill -f 'osmo-stp|osmo-hlr|osmo-msc|osmo-mgw|osmo-bsc|osmo-bts|osmo-ggsn|osmo-sgsn|osmo-sip-connector|osmo-pcu|osmo-gbproxy|osmo-hnbgw|osmo-trx|osmocon|trxcon|fake_trx|virtphy|mobile|gapk|sms-interop-relay|proto-smsc-daemon' 2>/dev/null || true
     pkill -f 'qemu-system-arm' 2>/dev/null || true
+    pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
     pkill -x asterisk 2>/dev/null || true
     command -v tmux >/dev/null 2>&1 && { tmux kill-session -t calypso 2>/dev/null; tmux kill-session -t hybrid 2>/dev/null; } || true
     ns_destroy_all
@@ -1046,6 +1047,15 @@ fi
 if command -v systemctl >/dev/null 2>&1 && systemctl cat osmo-egprs-web.service >/dev/null 2>&1; then
     systemctl restart osmo-egprs-web 2>/dev/null \
         && echo -e "  ${CYAN}[web] dashboard osmo-egprs-web démarré (http://<ip>:8080)${NC}" || true
+fi
+
+# FFT web (2 spectres MS/BTS depuis /dev/shm/*.cfile) — serveur autonome :8081, en arrière-plan.
+if [ -f "$HERE/fft-web/fft_web.py" ]; then
+    mkdir -p "$RUN_DIR" "$LOG_DIR"
+    pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
+    setsid /usr/bin/python3 "$HERE/fft-web/fft_web.py" > "${LOG_DIR}/fft-web.log" 2>&1 < /dev/null &
+    echo $! > "${RUN_DIR}/fft-web.pid"
+    echo -e "  ${CYAN}[fft] FFT web démarré (http://<ip>:8081)${NC}"
 fi
 
 case "$MODE" in
