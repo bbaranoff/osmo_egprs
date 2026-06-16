@@ -343,11 +343,51 @@ feed_hlr() {
         [ $retry -ge 45 ] && { echo -e " ${RED}TIMEOUT${NC}"; return 1; }
     done
     echo -e " ${GREEN}✓${NC}"
-    local feed="${RUN_DIR}/hlr_feed-op${op_id}.vty" m msin imsi msisdn ki
+    local feed="${RUN_DIR}/hlr_feed-op${op_id}.vty" m msin imsi msisdn ki idx
+
+    # ── Source de vérité = les configs mobile RÉELLEMENT installées ───────────
+    # On ALIMENTE le HLR avec l'IMSI + la Ki que la station mobile présente
+    # vraiment (configs/mobile.cfg → $HOME/.osmocom/bb/*.cfg). Avant, feed_hlr
+    # recalculait IMSI/Ki avec une formule DIFFÉRENTE de apply_config_templates
+    # (Ki '...dd<op><ms>' vs '...dd<op>ff', IMSI décalé) → le HLR ne contenait
+    # NI l'IMSI NI la Ki du MS → location-update/auth en échec. On les extrait
+    # donc directement du fichier (Ki dé-espacée), msisdn = op*10000 + index.
+    # Les MS au-delà des configs présentes gardent la génération synthétique.
+    local bbdir="$HOME/.osmocom/bb"
+    local pairs="" seen=""
+    if [ -d "$bbdir" ]; then
+        # awk : pour chaque bloc 'imsi <X>' suivi de 'ki comp128 <octets...>',
+        # émet "<imsi> <ki_sans_espaces>" (Ki HLR = 32 hex sans séparateur).
+        pairs=$(awk '
+            /^[[:space:]]*imsi[[:space:]]+[0-9]+/ { imsi=$2 }
+            /^[[:space:]]*ki[[:space:]]+comp128/ {
+                ki=""; for (i=3; i<=NF; i++) ki=ki $i;
+                if (imsi != "") { print imsi" "ki; imsi="" }
+            }
+        ' "$bbdir"/mobile*.cfg 2>/dev/null)
+    fi
+
+    idx=0
     { echo "enable"
-      for m in $(seq 1 "$n_ms"); do
+      # 1) Abonnés issus des configs mobile (IMSI + Ki exacts), filtrés sur le
+      #    PLMN de cet opérateur (mcc+mnc) et dédoublonnés par IMSI.
+      while read -r imsi ki; do
+          [ -n "$imsi" ] && [ -n "$ki" ] || continue
+          case "$imsi" in "${mcc}${mnc}"*) ;; *) continue ;; esac
+          case " $seen " in *" $imsi "*) continue ;; esac
+          seen="$seen $imsi"
+          idx=$(( idx + 1 )); msisdn=$(( op_id * 10000 + idx ))
+          echo "subscriber imsi ${imsi} create"
+          echo "subscriber imsi ${imsi} update msisdn ${msisdn}"
+          echo "subscriber imsi ${imsi} update aud2g comp128v1 ki ${ki}"
+      done <<< "$pairs"
+
+      # 2) Complément synthétique pour les MS au-delà des configs présentes.
+      for m in $(seq $(( idx + 1 )) "$n_ms"); do
           msin=$(printf '%04d%06d' "$op_id" "$m")
           imsi="${mcc}${mnc}${msin}"
+          case " $seen " in *" $imsi "*) continue ;; esac
+          seen="$seen $imsi"
           msisdn=$(( op_id * 10000 + m ))
           ki=$(printf '00112233445566778899aabbccdd%02x%02x' "$m" "$op_id")
           echo "subscriber imsi ${imsi} create"
@@ -356,7 +396,7 @@ feed_hlr() {
       done
       echo "end"
     } > "$feed"
-    echo -e "  ${GREEN}[*] HLR Op${op_id} (${n_ms} abonné(s))...${NC}"
+    echo -e "  ${GREEN}[*] HLR Op${op_id} ($(( idx > n_ms ? idx : n_ms )) abonné(s), dont ${idx} depuis configs mobile)...${NC}"
     if command -v nc >/dev/null 2>&1; then
         ns bash -c "(sleep 1; cat '$feed'; sleep 2) | nc -q2 127.0.0.1 4258" 2>/dev/null | grep -cE "^%" || true
     else
