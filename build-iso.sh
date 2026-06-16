@@ -494,7 +494,12 @@ Address=172.20.1.10/24
 Destination=172.20.0.0/16
 Scope=link
 EOF
-chroot "$ROOTFS" systemctl enable systemd-networkd systemd-resolved docker 2>/dev/null||true
+# docker RETIRÉ de la liste : son service n'existe plus (ISO natif) et 'systemctl
+# enable' valide tous les units d'abord → un seul manquant faisait AVORTER l'enable
+# de systemd-networkd/resolved → enp3s0 sans IP au boot. On active chaque unit
+# séparément pour qu'un éventuel échec n'empêche pas les autres.
+chroot "$ROOTFS" systemctl enable systemd-networkd 2>/dev/null||true
+chroot "$ROOTFS" systemctl enable systemd-resolved 2>/dev/null||true
 
 # ── Service startup : exécute le gist update.sh (bbaranoff) au démarrage ──────
 cat > "$ROOTFS/usr/local/sbin/osmo-update.sh" <<'UPD'
@@ -768,19 +773,19 @@ cp "$INITRD"  "$ISOROOT/boot/initrd.img"
 cat > "$ISOROOT/boot/grub/grub.cfg" <<'GRUB'
 set default=0
 set timeout=5
-menuentry "osmo_egprs — Live (toram — RAM ~8-12 Go)" {
+menuentry "osmo_egprs — Live (toram — RAM ~6 Go)" {
     linux  /boot/vmlinuz boot=live toram quiet
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs — Live USB sans toram (RAM ~3-4 Go, lit depuis le medium)" {
+menuentry "osmo_egprs — Live USB sans toram (RAM ~3 Go, lit depuis le medium)" {
     linux  /boot/vmlinuz boot=live quiet
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs — Live verbose (toram — RAM ~8-12 Go)" {
+menuentry "osmo_egprs — Live verbose (toram — RAM ~6 Go)" {
     linux  /boot/vmlinuz boot=live toram
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs — Copy to RAM (toram — RAM ~8-12 Go)" {
+menuentry "osmo_egprs — Copy to RAM (toram — RAM ~6 Go)" {
     linux  /boot/vmlinuz boot=live toram copytoram quiet
     initrd /boot/initrd.img
 }
