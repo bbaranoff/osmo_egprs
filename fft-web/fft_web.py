@@ -26,6 +26,11 @@ PORT  = int(os.environ.get('FFT_WEB_PORT', '8081'))
 RATE  = float(os.environ.get('RATE', '1083333'))   # 4 SPS natif = 26e6/24 (= Fs du relay/FIFO)
 NSAMP = int(os.environ.get('NSAMP', '262144'))     # complex samples gardés (tail / fenêtre live)
 NFFT  = int(os.environ.get('NFFT', '4096'))        # résolution FFT (segment Welch)
+# Cadence d'affichage : 40 ms = 25 img/s. Le navigateur poll /psd à cet intervalle
+# (2 fetch ms+bts par tick → ~50 req/s). On borne le nb de segments Welch par
+# requête (NSEG_MAX) pour que le calcul tienne la cadence (NFFT*NSEG_MAX FFT/req).
+REFRESH_MS = int(os.environ.get('REFRESH_MS', '40'))
+NSEG_MAX   = int(os.environ.get('NSEG_MAX', '16'))
 
 SRC = {
     'ms':  {'path': os.environ.get('CFILE_MS',  '/dev/shm/dsp_iq.cfile'),
@@ -86,7 +91,8 @@ def welch_psd(iq, nfft, rate):
     if iq.size < nfft:
         return None, None
     win = np.hanning(nfft).astype(np.float32)
-    nseg = iq.size // nfft
+    nseg = min(iq.size // nfft, NSEG_MAX)          # borne le coût pour tenir 25 img/s
+    iq = iq[-nseg*nfft:]                            # garde les segments les plus frais
     acc = np.zeros(nfft, dtype=np.float64)
     for i in range(nseg):
         seg = iq[i*nfft:(i+1)*nfft] * win
@@ -153,7 +159,7 @@ function draw(src,d){var e=document.getElementById('e-'+src),tt=document.getElem
 function tick(){['ms','bts'].forEach(function(s){
   fetch('/psd?src='+s+'&t='+Date.now()).then(function(r){return r.json();}).then(function(d){draw(s,d);}).catch(function(){});});
  document.getElementById('st').textContent='— '+new Date().toLocaleTimeString();}
-tick();setInterval(tick,1000);
+tick();setInterval(tick,__REFRESH_MS__);
 </script></body></html>"""
 
 class Handler(BaseHTTPRequestHandler):
@@ -171,7 +177,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-store')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers(); self.wfile.write(body); return
-        body = PAGE.encode('utf-8')
+        body = PAGE.replace('__REFRESH_MS__', str(REFRESH_MS)).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
