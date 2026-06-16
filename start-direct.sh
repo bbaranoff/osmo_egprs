@@ -1089,7 +1089,9 @@ if command -v systemctl >/dev/null 2>&1 && systemctl cat osmo-egprs-web.service 
         && echo -e "  ${CYAN}[web] dashboard osmo-egprs-web démarré (http://<ip>:8080)${NC}" || true
 fi
 
-# FFT web (2 spectres MS/BTS depuis /dev/shm/*.cfile) — serveur autonome :8081, en arrière-plan.
+# FFT web (2 spectres MS/BTS) — serveur autonome :8081, en arrière-plan.
+# BTS lit la FIFO LIVE /tmp/iq_fft.fifo (continu, plus de freeze au ring 128 Mo) ;
+# MS lit dsp_iq.cfile. Override : CFILE_MS / CFILE_BTS (acceptent .cfile ou .fifo).
 if [ -f "$HERE/fft-web/fft_web.py" ]; then
     mkdir -p "$RUN_DIR" "$LOG_DIR"
     pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
