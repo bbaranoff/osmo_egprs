@@ -29,7 +29,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 MODE="${MODE:-qemu}"
 IFACE="${IFACE:-enp0s3}"
 BRIDGE="${BRIDGE:-gsm-inter}"
-QEMU_SRC="${QEMU_SRC:-/opt/GSM/qemu-src}"; [ -d "$QEMU_SRC" ] || QEMU_SRC="$HERE/qemu-src"
+# qemu-src migré dans osmo_egprs : on lance run.sh/start-clean.sh/calypso.env du dossier
+# courant ($HERE). Fallback /opt/GSM/qemu-src si start-clean.sh absent ici.
+QEMU_SRC="${QEMU_SRC:-$HERE}"; [ -f "$QEMU_SRC/start-clean.sh" ] || QEMU_SRC="/opt/GSM/qemu-src"
 ENCRYPTION="${ENCRYPTION:-a5 1}"
 RUN_DIR="${RUN_DIR:-/run/osmo-direct}"
 LOG_DIR="${LOG_DIR:-/var/log/osmocom}"
@@ -484,6 +486,18 @@ build_hybrid_tmux() {
       # fenêtres mobile1 (Calypso, VTY 4247) + mobile2 (faketrx, VTY 4248) — attente du port
       tmux new-window -t "$S" -n mobile1 "bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/4247) 2>/dev/null; do sleep 1; done; exec telnet 127.0.0.1 4247'"
       tmux new-window -t "$S" -n mobile2 "bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/4248) 2>/dev/null; do sleep 1; done; exec telnet 127.0.0.1 4248'"
+      # ── 3 fenêtres supplémentaires : asterisk console + apps mobiles (consoles réelles) ──
+      # asterisk -cvvvvvvvvvvvvvv : démarre Asterisk en console très verbeuse (voix MNCC↔SIP).
+      tmux new-window -t "$S" -n asterisk "bash -c 'rm -f /var/lib/asterisk/astdb.sqlite3 2>/dev/null; exec asterisk -cvvvvvvvvvvvvvv'"
+      # app mobile MS#1 (Calypso) : LIEN vers la fenêtre 'mobile' de la session calypso (console L23 réelle).
+      if tmux has-session -t calypso 2>/dev/null && tmux list-windows -t calypso -F '#W' 2>/dev/null | grep -qx mobile; then
+          tmux link-window -a -s calypso:mobile -t "$S:mobile2" \
+              || tmux new-window -t "$S" -n app-qemu "bash -c 'tail -F ${LOG_DIR}/run-op1.log'"
+      else
+          tmux new-window -t "$S" -n app-qemu "bash -c 'tail -F ${LOG_DIR}/run-op1.log'"
+      fi
+      # app mobile MS#2 (faketrx) : console = stdout du process mobile (setsid) → tail du log.
+      tmux new-window -t "$S" -n app-faketrx "bash -c 'tail -F ${LOG_DIR}/mobile-bts1.log'"
       tmux select-window -t "$S:mobile2"
     ) || true
 }
@@ -1025,6 +1039,13 @@ if [ -x ./helpers/prepare_host.sh ] && command -v sudo >/dev/null 2>&1 \
     ./helpers/prepare_host.sh || true
 else
     echo -e "${YELLOW}prepare_host.sh sauté (sudo/docker/SUDO_USER absent — non requis en natif).${NC}"
+fi
+
+# Dashboard web osmo-egprs-web : (re)démarré automatiquement (service systemd natif).
+# Capture GSMTAP/SCTP + VTY/BTS (mode natif, opérateur 1) + audio. Non-bloquant.
+if command -v systemctl >/dev/null 2>&1 && systemctl cat osmo-egprs-web.service >/dev/null 2>&1; then
+    systemctl restart osmo-egprs-web 2>/dev/null \
+        && echo -e "  ${CYAN}[web] dashboard osmo-egprs-web démarré (http://<ip>:8080)${NC}" || true
 fi
 
 case "$MODE" in

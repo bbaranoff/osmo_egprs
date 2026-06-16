@@ -135,11 +135,10 @@ rm -rf "$TEMP_CONFIG" "$SMS_ROUTING_DIR"
 
 echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prête"
 
-# ── Étape 3 : Sauvegarde de l'image Docker pour l'inclure dans l'ISO ───────
-echo -e "${GREEN}[3/7] Sauvegarde de l'image osmocom-run net-host...${NC}"
-mkdir -p "$ROOTFS/opt/osmo_egprs/images"
-docker save "$ISO_RUN_IMAGE" | gzip > "$ROOTFS/opt/osmo_egprs/images/osmocom-run.tar.gz"
-echo -e "  ${GREEN}✓${NC} image sauvegardée ($(du -h "$ROOTFS/opt/osmo_egprs/images/osmocom-run.tar.gz" | cut -f1))"
+# ── Étape 3 : (SUPPRIMÉ) — ISO NATIF : on n'embarque PAS l'image Docker ────
+# L'image osmocom-run ne sert plus que de SOURCE de build (docker cp des binaires
+# et configs vers le rootfs à l'étape 6). On ne la save plus dans l'ISO : pas de
+# docker au runtime, pas de tar.gz de plusieurs Go embarqué.
 
 # ── Étape 4 : Bootstrap rootfs minimal ─────────────────────────────────────
 echo -e "${GREEN}[4/7] debootstrap jammy (minimal)...${NC}"
@@ -166,6 +165,19 @@ for svc in osmo-bts-trx osmo-bsc osmo-msc osmo-hlr osmo-mgw osmo-stp osmo-ggsn o
 done
 docker rm "$CID" &>/dev/null
 echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectés"
+
+# ── osmo_egprs : SOURCE à jour depuis GitHub (remplace la copie de l'image) ──
+# La copie docker cp ci-dessus peut être périmée ; on récupère la dernière version
+# du repo (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh…) dans l'ISO.
+echo -e "${GREEN}[5d/7] git clone osmo_egprs (source à jour)...${NC}"
+if git clone --depth 1 https://github.com/bbaranoff/osmo_egprs /tmp/osmo_egprs.clone 2>&1 | tail -2; then
+    rm -rf "$ROOTFS/opt/GSM/osmo_egprs"
+    mv /tmp/osmo_egprs.clone "$ROOTFS/opt/GSM/osmo_egprs"
+    echo -e "  ${GREEN}✓${NC} osmo_egprs cloné depuis GitHub"
+else
+    rm -rf /tmp/osmo_egprs.clone
+    echo -e "  ${YELLOW}⚠ git clone osmo_egprs échoué (réseau ?) — copie de l'image conservée${NC}"
+fi
 echo -e "${GREEN}[5c/7] Ajustements osmocom dans le rootfs...${NC}"
 echo -e "${GREEN}[5b/7] Patch configs ISO...${NC}"
 
@@ -229,17 +241,29 @@ WEB="$ROOTFS/opt/osmo-egprs-web"
 WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
 WEB_BRANCH="${OSMO_WEB_BRANCH:-main}"
 
-WEB_TMP="$WORK/osmo-egprs-web"
-git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2
-
 mkdir -p "$WEB/web"
-[ -f "$WEB_TMP/server/server.js" ]    && cp "$WEB_TMP/server/server.js"    "$WEB/server.js"
-[ -f "$WEB_TMP/server/package.json" ] && cp "$WEB_TMP/server/package.json" "$WEB/package.json"
-[ -d "$WEB_TMP/web" ]                 && cp -r "$WEB_TMP/web/."            "$WEB/web/"
-[ -f "$WEB_TMP/start-web.sh" ]        && cp "$WEB_TMP/start-web.sh"        "$WEB/" && chmod +x "$WEB/start-web.sh"
-[ -f "$WEB_TMP/Dockerfile" ]          && cp "$WEB_TMP/Dockerfile"          "$WEB/Dockerfile"
-rm -rf "$WEB_TMP"
-echo -e "  ${GREEN}✓${NC} /opt/osmo-egprs-web"
+# Source PRIORITAIRE = copie LOCALE /opt/osmo-egprs-web (live déjà corrigée : mode
+# natif + MS show-subscriber-cache + 2-BTS show-bts + audio /audio + bouton front).
+# Fallback = clone upstream. Le patch natif ci-dessous est idempotent (skip si déjà natif).
+LOCAL_WEB="${OSMO_WEB_LOCAL:-/opt/osmo-egprs-web}"
+if [ -f "$LOCAL_WEB/server.js" ]; then
+    cp "$LOCAL_WEB/server.js" "$WEB/server.js"
+    [ -f "$LOCAL_WEB/package.json" ] && cp "$LOCAL_WEB/package.json" "$WEB/package.json"
+    [ -d "$LOCAL_WEB/web" ]          && cp -r "$LOCAL_WEB/web/."     "$WEB/web/"
+    [ -f "$LOCAL_WEB/start-web.sh" ] && cp "$LOCAL_WEB/start-web.sh" "$WEB/" && chmod +x "$WEB/start-web.sh"
+    [ -f "$LOCAL_WEB/Dockerfile" ]   && cp "$LOCAL_WEB/Dockerfile"   "$WEB/Dockerfile"
+    echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis source LOCALE ($LOCAL_WEB)"
+else
+    WEB_TMP="$WORK/osmo-egprs-web"
+    git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2
+    [ -f "$WEB_TMP/server/server.js" ]    && cp "$WEB_TMP/server/server.js"    "$WEB/server.js"
+    [ -f "$WEB_TMP/server/package.json" ] && cp "$WEB_TMP/server/package.json" "$WEB/package.json"
+    [ -d "$WEB_TMP/web" ]                 && cp -r "$WEB_TMP/web/."            "$WEB/web/"
+    [ -f "$WEB_TMP/start-web.sh" ]        && cp "$WEB_TMP/start-web.sh"        "$WEB/" && chmod +x "$WEB/start-web.sh"
+    [ -f "$WEB_TMP/Dockerfile" ]          && cp "$WEB_TMP/Dockerfile"          "$WEB/Dockerfile"
+    rm -rf "$WEB_TMP"
+    echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis clone upstream"
+fi
 
 # Patch server.js : mode natif (no-docker). VTY en telnet direct sur 127.0.0.1
 # (ou ip netns exec) au lieu de docker exec. Idempotent ; n'échoue pas le build.
@@ -252,7 +276,7 @@ if 'const NATIVE' in s:
     print('  [web] server.js déjà en mode natif — skip'); sys.exit(0)
 HELPERS = """
 // ─── Native (no-docker) mode ─────────────────────────────────
-const NATIVE        = (process.env.OSMO_NATIVE === '1' || process.env.OSMO_NATIVE === 'true');
+const NATIVE        = (process.env.OSMO_NATIVE !== '0');
 const OP_IDS        = (process.env.OSMO_OP_IDS || '1').split(',')
                         .map(function(s){ return parseInt(s, 10); })
                         .filter(function(n){ return !isNaN(n); });
@@ -326,25 +350,11 @@ EOF
     chmod +x "$P/start-in-iso.sh"
 fi
 
-# ── Étape 8 : Service systemd pour charger l'image Docker au boot ─────────
-cat > "$ROOTFS/etc/systemd/system/load-osmocom-image.service" <<'EOF'
-[Unit]
-Description=Load osmocom-run Docker image
-Before=docker.service
-After=docker.socket
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=-/bin/bash -c 'while ! docker info &>/dev/null; do sleep 1; done'
-ExecStart=/bin/bash -c 'gunzip -c /opt/osmo_egprs/images/osmocom-run.tar.gz | docker load'
-ExecStartPost=rm -f /opt/osmo_egprs/images/osmocom-run.tar.gz
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-chroot "$ROOTFS" systemctl enable load-osmocom-image 2>/dev/null || true
+# ── Étape 8 : (SUPPRIMÉ) — ISO NATIF, plus de Docker au runtime ───────────
+# L'ancien load-osmocom-image.service chargeait osmocom-run.tar.gz via 'docker
+# load' au boot ; son ExecStartPre 'while ! docker info' bloquait indéfiniment la
+# file systemd en natif (docker jamais up) → boot figé. Le lab tourne désormais
+# en natif (start-direct.sh) : pas d'image Docker à charger, pas de ce service.
 
 # ── Étape 9 : Configuration chroot (paquets) ───────────────────────────────
 echo -e "${GREEN}[8/7] Configuration chroot...${NC}"
@@ -395,7 +405,7 @@ apt-get install -y $APT_OPTS --no-install-recommends \
     tmux telnet expect whiptail netcat-openbsd \
     lsb-release pulseaudio pulseaudio-utils alsa-utils openssh-server \
     console-setup keyboard-configuration locales \
-    binutils-arm-none-eabi
+    binutils-arm-none-eabi psmisc gdb-multiarch
 
 apt-get install -y $APT_OPTS --no-install-recommends \
     python3 python3-scapy \
@@ -406,18 +416,9 @@ apt-get install -y $APT_OPTS --no-install-recommends \
 echo "/usr/local/lib" > /etc/ld.so.conf.d/osmocom.conf
 ldconfig
 
-if [ ! -f /usr/bin/dockerd ]; then
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    chmod a+r /etc/apt/keyrings/docker.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
-        > /etc/apt/sources.list.d/docker.list
-    apt-get update -qq
-    apt-get install -y $APT_OPTS --no-install-recommends \
-        docker-ce docker-ce-cli containerd.io docker-compose-plugin
-fi
+# Docker NON installe dans le ISO (natif) : le lab tourne via start-direct.sh et le
+# dashboard web via node natif. Le build sur le HOTE utilise le docker du HOTE pour
+# extraire binaires/configs, mais le ISO final nembarque pas docker.
 
 if ! command -v node &>/dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -498,9 +499,9 @@ chroot "$ROOTFS" systemctl enable systemd-networkd systemd-resolved docker 2>/de
 # ── Service startup : exécute le gist update.sh (bbaranoff) au démarrage ──────
 cat > "$ROOTFS/usr/local/sbin/osmo-update.sh" <<'UPD'
 #!/bin/bash
-# osmo-update.sh — recupere et execute le gist update.sh (bbaranoff) au boot.
+# osmo-update.sh — recupere et execute update.sh (repo bbaranoff/osmo_egprs) au boot.
 set -u
-URL="https://gist.githubusercontent.com/bbaranoff/563c87f172bf15acd89e2aca63456e5c/raw/801c2411fcdf2036e16b5ea1be6129b2102d1955/update.sh"
+URL="https://raw.githubusercontent.com/bbaranoff/osmo_egprs/refs/heads/main/update.sh"
 LOG=/var/log/osmo-update.log
 exec >>"$LOG" 2>&1
 echo "===== osmo-update $(date) ====="
@@ -605,14 +606,18 @@ EOF
 # bashrc pour root
 cat >> "$ROOTFS/root/.bashrc" <<'BASH'
 # Active par defaut l'environnement python (gr-gsm + bridges) utilise par
-# /opt/GSM/qemu-src/start-clean.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
+# /opt/GSM/osmo_egprs/start-direct.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
 export VIRTUAL_ENV_DISABLE_PROMPT=1
 [ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
-alias osmo-lab='cd /opt/osmo_egprs && ./start-in-iso.sh'
+alias osmo-lab='cd /opt/GSM/osmo_egprs && ./start-direct.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
-alias osmo-status='/opt/osmo-launch.sh status'
-export PS1='\[\033[0;36m\]osmo-egprs\[\033[0m\]:\[\033[0;33m\]\w\[\033[0m\]\$ '
+alias osmo-status='/etc/osmocom/status.sh status'
+export PATH="$HOME/.local/bin:$PATH"
+
+### calypso-prompt ###
+export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️ # '
+### end calypso-prompt ###
 BASH
 
 # Message du jour — bannière couleur + boîte alignée. Contenu de la boîte en
@@ -634,7 +639,7 @@ LOGO
   printf "${B}  ║${N} ${T}%-*s${N} ${B}║${N}\n" $((W-2)) "GSM / EGPRS  Multi-PLMN  Live System"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "SS7/SIGTRAN  -  Osmocom  -  Calypso/QEMU"
   printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
-  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/qemu-src/start-clean.sh"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/osmo_egprs/start-direct.sh"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab Calypso/QEMU (A5/1)"
   printf "${B}  ║${N} ${Y}%-*s${N} ${B}║${N}\n" $((W-2)) "Wiki / docs        ->  pl4y.store"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "ssh root@<vm-ip>   -> mot de passe : osmo"
