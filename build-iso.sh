@@ -516,6 +516,15 @@ for i in 1 2 3 4 5; do
         echo "--- execution update.sh ---"
         bash /tmp/osmo-update.gist.sh; rc=$?
         echo "update.sh termine (rc=$rc)"
+        # ── Normalisation fstab : retire le doublon /tmp ré-injecté par update.sh ──
+        # update.sh (gist) ré-ajoute 'tmpfs /tmp tmpfs nosuid,nodev 0 0' (SANS size=),
+        # créant un doublon avec l'entree canonique 'tmpfs /tmp … size=2G' posee au build.
+        # On supprime toute ligne 'tmpfs /tmp tmpfs …' depourvue de size= (le doublon),
+        # en conservant l'entree 2G. Idempotent : sans effet si le doublon est absent.
+        if [ -f /etc/fstab ]; then
+            sed -i -E '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]+tmpfs[[:space:]]/{/size=/!d}' /etc/fstab
+            echo "fstab normalise (doublon /tmp retire)"
+        fi
         exit 0
     fi
     echo "curl echoue (tentative $i/5), retry dans 5s..."; sleep 5
@@ -663,18 +672,16 @@ echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
 # stack sont les cfiles I/Q dans /dev/shm (FFT/record, plusieurs centaines de Mo)
 # et /tmp. On force 2 Go sur ces deux tmpfs via fstab (cap RAM-backed : nécessite
 # autant de RAM dispo). systemd applique ces entrées au boot.
-#
-# IMPORTANT : on PURGE d'abord toute ligne /tmp ou /dev/shm préexistante avant de
-# réécrire les nôtres. L'ancien garde-fou ne testait que '/dev/shm' : si le rootfs
-# de base avait déjà une ligne /tmp (live-boot/systemd), on en ajoutait une 2ᵉ →
-# deux entrées /tmp → systemd-fstab-generator échoue à créer tmp.mount au
-# daemon-reload ("Duplicate entry in /etc/fstab?"). Purge + une seule écriture =
-# fstab cohérent, pas de doublon, idempotent même si build-iso est relancé.
+# Idempotent + anti-doublon : on purge d'abord toute entree tmpfs /tmp ou /dev/shm
+# preexistante (y compris la variante 'nosuid,nodev' sans size=) et l'ancien
+# commentaire de bloc, PUIS on (re)ecrit le bloc canonique size=2G. Garantit
+# exactement une entree /tmp et une entree /dev/shm dans le fstab du squashfs.
 touch "$ROOTFS/etc/fstab"
-sed -i -E '/^[[:space:]]*[^#[:space:]]+[[:space:]]+\/(tmp|dev\/shm)[[:space:]]/d' \
+sed -i -E \
+    -e '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]/d' \
+    -e '/^[[:space:]]*tmpfs[[:space:]]+\/dev\/shm[[:space:]]/d' \
+    -e '/^# osmo_egprs live — espace writable/d' \
     "$ROOTFS/etc/fstab"
-# Retire aussi notre ancien commentaire-marqueur pour ne pas l'empiler.
-sed -i '/osmo_egprs live — espace writable/d' "$ROOTFS/etc/fstab"
 cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
 # osmo_egprs live — espace writable (cfiles I/Q FFT, tmp)
 tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=2G   0 0

@@ -343,51 +343,11 @@ feed_hlr() {
         [ $retry -ge 45 ] && { echo -e " ${RED}TIMEOUT${NC}"; return 1; }
     done
     echo -e " ${GREEN}✓${NC}"
-    local feed="${RUN_DIR}/hlr_feed-op${op_id}.vty" m msin imsi msisdn ki idx
-
-    # ── Source de vérité = les configs mobile RÉELLEMENT installées ───────────
-    # On ALIMENTE le HLR avec l'IMSI + la Ki que la station mobile présente
-    # vraiment (configs/mobile.cfg → $HOME/.osmocom/bb/*.cfg). Avant, feed_hlr
-    # recalculait IMSI/Ki avec une formule DIFFÉRENTE de apply_config_templates
-    # (Ki '...dd<op><ms>' vs '...dd<op>ff', IMSI décalé) → le HLR ne contenait
-    # NI l'IMSI NI la Ki du MS → location-update/auth en échec. On les extrait
-    # donc directement du fichier (Ki dé-espacée), msisdn = op*10000 + index.
-    # Les MS au-delà des configs présentes gardent la génération synthétique.
-    local bbdir="$HOME/.osmocom/bb"
-    local pairs="" seen=""
-    if [ -d "$bbdir" ]; then
-        # awk : pour chaque bloc 'imsi <X>' suivi de 'ki comp128 <octets...>',
-        # émet "<imsi> <ki_sans_espaces>" (Ki HLR = 32 hex sans séparateur).
-        pairs=$(awk '
-            /^[[:space:]]*imsi[[:space:]]+[0-9]+/ { imsi=$2 }
-            /^[[:space:]]*ki[[:space:]]+comp128/ {
-                ki=""; for (i=3; i<=NF; i++) ki=ki $i;
-                if (imsi != "") { print imsi" "ki; imsi="" }
-            }
-        ' "$bbdir"/mobile*.cfg 2>/dev/null)
-    fi
-
-    idx=0
+    local feed="${RUN_DIR}/hlr_feed-op${op_id}.vty" m msin imsi msisdn ki
     { echo "enable"
-      # 1) Abonnés issus des configs mobile (IMSI + Ki exacts), filtrés sur le
-      #    PLMN de cet opérateur (mcc+mnc) et dédoublonnés par IMSI.
-      while read -r imsi ki; do
-          [ -n "$imsi" ] && [ -n "$ki" ] || continue
-          case "$imsi" in "${mcc}${mnc}"*) ;; *) continue ;; esac
-          case " $seen " in *" $imsi "*) continue ;; esac
-          seen="$seen $imsi"
-          idx=$(( idx + 1 )); msisdn=$(( op_id * 10000 + idx ))
-          echo "subscriber imsi ${imsi} create"
-          echo "subscriber imsi ${imsi} update msisdn ${msisdn}"
-          echo "subscriber imsi ${imsi} update aud2g comp128v1 ki ${ki}"
-      done <<< "$pairs"
-
-      # 2) Complément synthétique pour les MS au-delà des configs présentes.
-      for m in $(seq $(( idx + 1 )) "$n_ms"); do
+      for m in $(seq 1 "$n_ms"); do
           msin=$(printf '%04d%06d' "$op_id" "$m")
           imsi="${mcc}${mnc}${msin}"
-          case " $seen " in *" $imsi "*) continue ;; esac
-          seen="$seen $imsi"
           msisdn=$(( op_id * 10000 + m ))
           ki=$(printf '00112233445566778899aabbccdd%02x%02x' "$m" "$op_id")
           echo "subscriber imsi ${imsi} create"
@@ -396,7 +356,7 @@ feed_hlr() {
       done
       echo "end"
     } > "$feed"
-    echo -e "  ${GREEN}[*] HLR Op${op_id} ($(( idx > n_ms ? idx : n_ms )) abonné(s), dont ${idx} depuis configs mobile)...${NC}"
+    echo -e "  ${GREEN}[*] HLR Op${op_id} (${n_ms} abonné(s))...${NC}"
     if command -v nc >/dev/null 2>&1; then
         ns bash -c "(sleep 1; cat '$feed'; sleep 2) | nc -q2 127.0.0.1 4258" 2>/dev/null | grep -cE "^%" || true
     else
@@ -730,29 +690,19 @@ BTS1BLOCK
     done
     [ "$r" -gt 0 ] && echo -e " ${GREEN}✓${NC}" || echo -e " ${YELLOW}(timeout, on continue)${NC}"
 
-    # ── (g) barrière : HLR VTY 4258 ──
-    echo -ne "  ${GREEN}[faketrx-qemu] attente HLR VTY 4258${NC}"
-    r=60
-    while [ "$r" -gt 0 ]; do
-        (echo > /dev/tcp/127.0.0.1/4258) 2>/dev/null && break
-        echo -n "."; sleep 1; r=$((r-1))
-    done
-    [ "$r" -gt 0 ] && echo -e " ${GREEN}✓${NC}" || echo -e " ${YELLOW}(timeout, on continue)${NC}"
-
-    # ── (h) MSISDN par défaut du mode hybride : MS#1 (QEMU)=10001, MS#2 (faketrx)=10002.
-    #     Schéma op*10000+ms → compatible avec les routes SMS existantes (1000x → op1).
-    #     run.sh a feedé MS#1 avec msisdn=00001 (last-5 de l'IMSI) → on l'ÉCRASE en 10001.
-    #     MS#2 est créé ici avec msisdn=10002. (On NE touche PAS sms-routing.conf.)
-    local imsi1="001010001000001" msisdn1="10001"
-    local imsi2="001010001000002" ki2="00112233445566778899aabbccdd0201" msisdn2="10002"
-    if exec 9<>/dev/tcp/127.0.0.1/4258 2>/dev/null; then
-        printf 'enable\nsubscriber imsi %s update msisdn %s\nsubscriber imsi %s create\nsubscriber imsi %s update msisdn %s\nsubscriber imsi %s update aud2g comp128v1 ki %s\n' \
-            "$imsi1" "$msisdn1" "$imsi2" "$imsi2" "$msisdn2" "$imsi2" "$ki2" >&9 || true
-        timeout 2 cat <&9 >/dev/null 2>&1 || true; exec 9>&- 9<&- || true
-        echo -e "  ${GREEN}[faketrx-qemu] HLR : MS#1 msisdn ${msisdn1} (QEMU), MS#2 msisdn ${msisdn2} (faketrx)${NC}"
-    else
-        echo -e "  ${YELLOW}[faketrx-qemu] HLR 4258 injoignable — MSISDN non posés${NC}"
-    fi
+    # ── (g+h) Feed HLR « comme start.sh » sur les 2 MS (attente 4258 + create/msisdn/ki) ──
+    #     feed_hlr est le portage natif EXACT du feed start.sh (subscriber imsi …
+    #     create / update msisdn / update aud2g comp128v1 ki) et embarque sa propre
+    #     barrière 4258. Pour op=1, ms∈{1,2} il génère exactement les valeurs attendues
+    #     par le mode hybride :
+    #       IMSI   = 001 01 <%04d op><%06d ms> → 001010001000001 (MS#1 QEMU) / 001010001000002 (MS#2 faketrx)
+    #       msisdn = op*10000 + ms             → 10001 / 10002   (schéma routes SMS 1000x → op1)
+    #       ki     = …aabbccdd<%02x ms><%02x op>→ …0101 / …0201   (aud2g comp128v1)
+    #     → identiques à la cfg mobile MS#2 (sed étape d) et au feed multi-op (run_multi_op).
+    #     MS#1 a déjà été créé par run.sh (pipeline QEMU) : 'create' est idempotent (l'échec
+    #     « déjà existant » est sans effet), 'update msisdn/ki' réaligne sur 10001/…0101.
+    #     MS#2 est créé ici. NETNS="" en hybride → feed_hlr parle direct à 127.0.0.1:4258.
+    feed_hlr 1 "001" "01" 2 || true
 
     # ── (i) fake_trx (BTS#1) : DOIT être up AVANT osmo-bts-trx (qui poll le POWERON) ──
     echo -e "  ${GREEN}[faketrx-qemu] fake_trx BTS#1 (-P ${bts_port} -p ${bb_port})${NC}"
@@ -1089,9 +1039,7 @@ if command -v systemctl >/dev/null 2>&1 && systemctl cat osmo-egprs-web.service 
         && echo -e "  ${CYAN}[web] dashboard osmo-egprs-web démarré (http://<ip>:8080)${NC}" || true
 fi
 
-# FFT web (2 spectres MS/BTS) — serveur autonome :8081, en arrière-plan.
-# BTS lit la FIFO LIVE /tmp/iq_fft.fifo (continu, plus de freeze au ring 128 Mo) ;
-# MS lit dsp_iq.cfile. Override : CFILE_MS / CFILE_BTS (acceptent .cfile ou .fifo).
+# FFT web (2 spectres MS/BTS depuis /dev/shm/*.cfile) — serveur autonome :8081, en arrière-plan.
 if [ -f "$HERE/fft-web/fft_web.py" ]; then
     mkdir -p "$RUN_DIR" "$LOG_DIR"
     pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
