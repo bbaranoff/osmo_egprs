@@ -263,8 +263,11 @@ echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 if [ "$RUN_NO_PROCESS" = "1" ]; then
     echo ""
     echo -e "${GREEN}=== Audio PulseAudio (no-process) ===${NC}"
-    if [ -f /scripts/pulse-gsm-setup.sh ]; then
-        /scripts/pulse-gsm-setup.sh || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo)${NC}"
+    # Docker : /scripts/  |  natif : /etc/osmocom/  (même script, chemin différent)
+    PULSE_SETUP=/scripts/pulse-gsm-setup.sh
+    [ -f "$PULSE_SETUP" ] || PULSE_SETUP=/etc/osmocom/pulse-gsm-setup.sh
+    if [ -f "$PULSE_SETUP" ]; then
+        "$PULSE_SETUP" || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo)${NC}"
     fi
     echo ""
     echo -e "${GREEN}Core Osmocom prêt (no-process). PHY/mobile/asterisk/smsc NON lancés.${NC}"
@@ -322,6 +325,13 @@ else
     #   mobile ↔ trxcon ↔ (TRXD UDP) ↔ fake_trx ↔ osmo-bts-trx ↔ BSC
     # ─────────────────────────────────────────────────────────────────────────
 
+    echo -e "${GREEN}=== [3b/10] osmo-bts-trx ===${NC}"
+    # BTS lancé AVANT fake_trx : il poll le transceiver (POWERON) et se connecte
+    # dès que fake_trx répond. On stoppe une éventuelle instance systemd pour
+    # éviter un double-BTS.
+    systemctl stop osmo-bts-trx 2>/dev/null || true
+    run_in_tmux "bts" "osmo-bts-trx -c /etc/osmocom/osmo-bts-trx.cfg"
+
     echo -e "${GREEN}=== [4/10] FakeTRX ===${NC}"
     FAKETRX_CMD="python3 ${FAKETRX_PY} -b 127.0.0.1 -R 127.0.0.1 -r 127.0.0.1 -P ${BTS_PORT_BASE} -p ${BB_PORT_BASE}"
     for t in $(seq 1 $((N_TRX-1))); do
@@ -354,8 +364,38 @@ else
 fi
 
 echo -e "${GREEN}=== [6b/10] Audio PulseAudio ===${NC}"
-if [ -f /scripts/pulse-gsm-setup.sh ]; then
-    /scripts/pulse-gsm-setup.sh
+# Docker : /scripts/  |  natif : /etc/osmocom/  (même script, chemin différent)
+PULSE_SETUP=/scripts/pulse-gsm-setup.sh
+[ -f "$PULSE_SETUP" ] || PULSE_SETUP=/etc/osmocom/pulse-gsm-setup.sh
+if [ -f "$PULSE_SETUP" ]; then
+    # Non-fatal : sans PulseAudio (PULSE_SERVER absent) l'audio gapk est indispo,
+    # mais on NE doit PAS tuer run.sh (set -e) avant Mobile/Asterisk/SMSC/tmux.
+    "$PULSE_SETUP" || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo) — on continue${NC}"
+fi
+echo ""
+
+# ── [6c] Bridge audio : gapk auto (RTP réseau → sink gsm_audio) + loopback ────
+#    gsm_audio.monitor → carte son par défaut (haut-parleurs). Non-fatal.
+echo -e "${GREEN}=== [6c/10] Bridge audio (gapk + loopback) ===${NC}"
+if pactl info >/dev/null 2>&1; then
+    GAPK=/scripts/gapk-start.sh; [ -f "$GAPK" ] || GAPK=/etc/osmocom/gapk-start.sh
+    if [ -f "$GAPK" ]; then
+        # auto : surveille le MGW et bridge RTP↔ALSA(gsm_out=sink gsm_audio)
+        run_in_tmux "gapk" "GAPK_ALSA_DEV=gsm_out bash '$GAPK' auto gsmfr gsm_out"
+        echo -e "  ${GREEN}✓ gapk auto (RTP réseau → gsm_audio)${NC}"
+    else
+        echo -e "  ${YELLOW}gapk-start.sh absent — pas de bridge RTP${NC}"
+    fi
+    # loopback gsm_audio.monitor → sink par défaut (carte), dédupliqué
+    if ! pactl list short modules 2>/dev/null | grep -q 'source=gsm_audio.monitor'; then
+        pactl load-module module-loopback source=gsm_audio.monitor latency_msec=20 >/dev/null 2>&1 \
+            && echo -e "  ${GREEN}✓ loopback gsm_audio → carte son${NC}" \
+            || echo -e "  ${YELLOW}loopback non chargé (pas de sink de sortie ?)${NC}"
+    else
+        echo -e "  ${GREEN}✓ loopback déjà actif${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}PulseAudio indisponible — bridge audio non lancé${NC}"
 fi
 echo ""
 

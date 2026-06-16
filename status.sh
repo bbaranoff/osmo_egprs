@@ -1,5 +1,5 @@
 #!/bin/bash
-cmd="${1:-status}" 
+cmd="${1:-status}"
 set -ex
 systemctl daemon-reload
 systemctl $cmd osmo-hlr \

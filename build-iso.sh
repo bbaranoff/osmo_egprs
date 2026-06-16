@@ -241,14 +241,66 @@ mkdir -p "$WEB/web"
 rm -rf "$WEB_TMP"
 echo -e "  ${GREEN}✓${NC} /opt/osmo-egprs-web"
 
+# Patch server.js : mode natif (no-docker). VTY en telnet direct sur 127.0.0.1
+# (ou ip netns exec) au lieu de docker exec. Idempotent ; n'échoue pas le build.
+if [ -f "$WEB/server.js" ] && command -v python3 >/dev/null 2>&1; then
+python3 - "$WEB/server.js" <<'PYEOF' || echo -e "  ${YELLOW}[web] patch natif non appliqué (server.js amont a changé ?)${NC}"
+import sys, re
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'const NATIVE' in s:
+    print('  [web] server.js déjà en mode natif — skip'); sys.exit(0)
+HELPERS = """
+// ─── Native (no-docker) mode ─────────────────────────────────
+const NATIVE        = (process.env.OSMO_NATIVE === '1' || process.env.OSMO_NATIVE === 'true');
+const OP_IDS        = (process.env.OSMO_OP_IDS || '1').split(',')
+                        .map(function(s){ return parseInt(s, 10); })
+                        .filter(function(n){ return !isNaN(n); });
+const NETNS_PREFIX  = process.env.OSMO_NETNS_PREFIX || '';
+function vtyProc(container, port, ip, id) {
+  if (NATIVE) {
+    if (NETNS_PREFIX) return { bin: 'ip', args: ['netns','exec', NETNS_PREFIX + id, 'telnet', ip, String(port)] };
+    return { bin: 'telnet', args: [ip, String(port)] };
+  }
+  return { bin: 'docker', args: ['exec','-i', container, 'telnet', ip, String(port)] };
+}
+function shCmd(container, id, inner) {
+  if (NATIVE) {
+    if (NETNS_PREFIX) return 'ip netns exec ' + NETNS_PREFIX + id + ' bash -c "' + inner + '"';
+    return 'bash -c "' + inner + '"';
+  }
+  return 'docker exec ' + container + ' bash -c "' + inner + '"';
+}
+"""
+n = [0]
+def sub(pat, rep, flags=0):
+    global s
+    s, c = re.subn(pat, rep, s, flags=flags); n[0]+=c; return c
+sub(r"(const VTY_RETRY_DELAY = 2000;)", r"\1\n" + HELPERS.replace('\\','\\\\'))
+sub(r"(function discoverOperators\(\) \{)", r"\1\n  if (NATIVE) return Promise.resolve(OP_IDS.slice());")
+sub(r"var proc = spawn\('docker', \[\s*'exec', '-i', container, 'telnet', targetIp, String\(port\)\s*\], \{ stdio: \['pipe','pipe','pipe'\] \}\);",
+    "var vc = vtyProc(container, port, targetIp, String(container).replace(PREFIX, ''));\n    var proc = spawn(vc.bin, vc.args, { stdio: ['pipe','pipe','pipe'] });", re.DOTALL)
+sub(r"return execAsync\(\s*'docker inspect.*?\)\.then\(function\(running\) \{",
+    "var runningProbe = NATIVE\n    ? execAsync(shCmd(container, id, 'ss -tln 2>/dev/null | grep -q :' + VTY_PORTS.bsc + ' && echo true || echo false'), 3000)\n    : execAsync('docker inspect -f \\'{{.State.Running}}\\' ' + container + ' 2>/dev/null', 3000);\n  return runningProbe.then(function(running) {", re.DOTALL)
+sub(r"execAsync\(\s*'docker exec ' \+ container \+ ' bash -c \"ss -tlnp.*?', 3000\s*\)",
+    "execAsync(\n        shCmd(container, id, 'ss -tlnp 2>/dev/null | grep :7890 | wc -l'), 3000\n      )", re.DOTALL)
+sub(r"log\('VTY open: docker exec.*?\], \{ stdio: \['pipe','pipe','pipe'\] \}\);",
+    "var vc = vtyProc(this.container, this.port, this.ip, this.opId);\n  log('VTY open: ' + vc.bin + ' ' + vc.args.join(' ') + ' (attempt ' + (this.retries + 1) + ')');\n\n  this.proc = spawn(vc.bin, vc.args, { stdio: ['pipe','pipe','pipe'] });", re.DOTALL)
+open(p,'w',encoding='utf-8').write(s)
+print('  [web] server.js patché mode natif (%d remplacements)' % n[0])
+sys.exit(0 if n[0] >= 6 else 2)
+PYEOF
+fi
+
 # ── Étape 7 : Injection des scripts projet et création de start-in-iso.sh ──
 echo -e "${GREEN}[7/7] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
 mkdir -p "$P"/{scripts,configs,checks,helpers}
-for f in start.sh build.sh loopback.sh vty-menu.sh vty-connect.exp \
+for f in start.sh start-direct.sh build.sh loopback.sh vty-menu.sh vty-connect.exp \
          firewall-wan.sh setup-wan-interop.sh setup-wan-sms.sh; do
     [ -f "$DIR/$f" ] && cp "$DIR/$f" "$P/$f" && chmod +x "$P/$f"
 done
+ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
 for d in scripts configs checks helpers; do
     [ -d "$DIR/$d" ] && cp -r "$DIR/$d/." "$P/$d/" && find "$P/$d" -name "*.sh" -exec chmod +x {} \;
 done
@@ -341,7 +393,7 @@ apt-get install -y $APT_OPTS --no-install-recommends \
 apt-get install -y $APT_OPTS --no-install-recommends \
     iproute2 iptables net-tools lksctp-tools \
     tmux telnet expect whiptail netcat-openbsd \
-    lsb-release pulseaudio-utils openssh-server \
+    lsb-release pulseaudio pulseaudio-utils alsa-utils openssh-server \
     console-setup keyboard-configuration locales \
     binutils-arm-none-eabi
 
@@ -494,8 +546,8 @@ EOF
 # Service web dashboard
 cat > "$ROOTFS/etc/systemd/system/osmo-egprs-web.service" <<'EOF'
 [Unit]
-Description=osmo_egprs Web Dashboard
-After=network.target docker.service
+Description=osmo_egprs Web Dashboard (native)
+After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/osmo-egprs-web
@@ -503,11 +555,41 @@ ExecStart=/usr/bin/node /opt/osmo-egprs-web/server.js --verbose
 Restart=always
 RestartSec=5
 Environment=HTTP_PORT=8080
+# Mode natif (start-direct.sh) : VTY en telnet direct sur 127.0.0.1, pas de docker.
+# Pour le mode docker (start.sh + conteneurs), mettre OSMO_NATIVE=0.
+Environment=OSMO_NATIVE=1
+Environment=OSMO_OP_IDS=1
 Environment=CONTAINER_PREFIX=osmo-operator-
 [Install]
 WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
+
+# ── Audio : PulseAudio système (sink gsm_audio) au boot ────────────────────
+# Chaîne : osmo-gapk → ALSA gsm_out → sink null gsm_audio → monitor → loopback
+# → carte. system.pa autorise l'accès anonyme + prépare le sink ; le service
+# lance le démon au boot (ensure_pulse de start-direct.sh devient un no-op).
+if [ -f "$ROOTFS/etc/pulse/system.pa" ]; then
+    sed -i 's|^load-module module-native-protocol-unix.*|load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native|' \
+        "$ROOTFS/etc/pulse/system.pa"
+    grep -q 'sink_name=gsm_audio' "$ROOTFS/etc/pulse/system.pa" || \
+        echo 'load-module module-null-sink sink_name=gsm_audio format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Audio' \
+        >> "$ROOTFS/etc/pulse/system.pa"
+fi
+cat > "$ROOTFS/etc/systemd/system/osmo-pulse.service" <<'EOF'
+[Unit]
+Description=osmo_egprs PulseAudio system daemon (GSM audio)
+After=sound.target
+[Service]
+Type=forking
+ExecStart=/usr/bin/pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 --log-target=file:/var/log/osmocom/pulse-system.log
+ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
+chroot "$ROOTFS" systemctl enable osmo-pulse 2>/dev/null||true
 
 # Modules noyau
 mkdir -p "$ROOTFS/etc/modules-load.d"
