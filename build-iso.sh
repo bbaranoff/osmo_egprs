@@ -653,6 +653,18 @@ LOGO
 # mot de passe (sinon sshd refuse le login root).
 echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
 
+# ── Espace writable du live : 2 Go pour /dev/shm + /tmp ─────────────────────
+# Le live boote en 'toram' → racine = overlay tmpfs (RAM). Les gros writers de la
+# stack sont les cfiles I/Q dans /dev/shm (FFT/record, plusieurs centaines de Mo)
+# et /tmp. On force 2 Go sur ces deux tmpfs via fstab (cap RAM-backed : nécessite
+# autant de RAM dispo). systemd applique ces entrées au boot.
+grep -q '/dev/shm' "$ROOTFS/etc/fstab" 2>/dev/null || \
+cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
+# osmo_egprs live — espace writable (cfiles I/Q FFT, tmp)
+tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=2G   0 0
+tmpfs   /tmp       tmpfs   defaults,nosuid,nodev,size=2G   0 0
+FSTAB
+
 # SSH : autorise le login root par mot de passe + active le service au boot.
 if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
     sed -i \
@@ -756,15 +768,19 @@ cp "$INITRD"  "$ISOROOT/boot/initrd.img"
 cat > "$ISOROOT/boot/grub/grub.cfg" <<'GRUB'
 set default=0
 set timeout=5
-menuentry "osmo_egprs — Live" {
+menuentry "osmo_egprs — Live (toram — RAM ~8-12 Go)" {
     linux  /boot/vmlinuz boot=live toram quiet
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs — Live (verbose)" {
+menuentry "osmo_egprs — Live USB sans toram (RAM ~3-4 Go, lit depuis le medium)" {
+    linux  /boot/vmlinuz boot=live quiet
+    initrd /boot/initrd.img
+}
+menuentry "osmo_egprs — Live verbose (toram — RAM ~8-12 Go)" {
     linux  /boot/vmlinuz boot=live toram
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs — Copy to RAM" {
+menuentry "osmo_egprs — Copy to RAM (toram — RAM ~8-12 Go)" {
     linux  /boot/vmlinuz boot=live toram copytoram quiet
     initrd /boot/initrd.img
 }
