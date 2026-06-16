@@ -663,7 +663,18 @@ echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
 # stack sont les cfiles I/Q dans /dev/shm (FFT/record, plusieurs centaines de Mo)
 # et /tmp. On force 2 Go sur ces deux tmpfs via fstab (cap RAM-backed : nécessite
 # autant de RAM dispo). systemd applique ces entrées au boot.
-grep -q '/dev/shm' "$ROOTFS/etc/fstab" 2>/dev/null || \
+#
+# IMPORTANT : on PURGE d'abord toute ligne /tmp ou /dev/shm préexistante avant de
+# réécrire les nôtres. L'ancien garde-fou ne testait que '/dev/shm' : si le rootfs
+# de base avait déjà une ligne /tmp (live-boot/systemd), on en ajoutait une 2ᵉ →
+# deux entrées /tmp → systemd-fstab-generator échoue à créer tmp.mount au
+# daemon-reload ("Duplicate entry in /etc/fstab?"). Purge + une seule écriture =
+# fstab cohérent, pas de doublon, idempotent même si build-iso est relancé.
+touch "$ROOTFS/etc/fstab"
+sed -i -E '/^[[:space:]]*[^#[:space:]]+[[:space:]]+\/(tmp|dev\/shm)[[:space:]]/d' \
+    "$ROOTFS/etc/fstab"
+# Retire aussi notre ancien commentaire-marqueur pour ne pas l'empiler.
+sed -i '/osmo_egprs live — espace writable/d' "$ROOTFS/etc/fstab"
 cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
 # osmo_egprs live — espace writable (cfiles I/Q FFT, tmp)
 tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=2G   0 0
