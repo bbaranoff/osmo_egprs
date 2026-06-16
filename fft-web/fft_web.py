@@ -78,19 +78,31 @@ h1{font-size:15px;color:#2aa198;margin:0 0 10px} .row{display:flex;gap:12px;flex
  <div class=card><div class=t id=t-bts>BTS</div><canvas id=c-bts class=psd></canvas><canvas id=w-bts class=wf></canvas><div class=err id=e-bts></div></div>
 </div>
 <script>
-function draw(cid,d){var c=document.getElementById(cid),x=c.getContext('2d');
+function cmap(v){v=Math.max(0,Math.min(1,v));var h=(1-v)*240,l=0.12+0.5*v,a=1*Math.min(l,1-l);
+ var f=function(n){var k=(n+h/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1))));};
+ return [f(0),f(8),f(4)];}
+function drawPsd(src,d){var c=document.getElementById('c-'+src),x=c.getContext('2d');
  var W=c.width=c.clientWidth*2,H=c.height=c.clientHeight*2;x.clearRect(0,0,W,H);
- var e=document.getElementById(cid.replace('c-','e-')),tt=document.getElementById(cid.replace('c-','t-'));
- if(d.error){e.textContent=d.error;tt.textContent=d.label||'';return;} e.textContent='';
- tt.textContent=d.label+'  •  ARFCN '+d.arfcn+'  •  Fs '+(d.rate/1e6).toFixed(3)+' MHz';
  var p=d.psd,n=p.length;if(!n)return;var mn=Math.min.apply(null,p),mx=Math.max.apply(null,p),rg=(mx-mn)||1;
  x.strokeStyle='#16222b';x.lineWidth=1;for(var g=0;g<=4;g++){var yy=H*g/4;x.beginPath();x.moveTo(0,yy);x.lineTo(W,yy);x.stroke();}
  x.beginPath();x.moveTo(W/2,0);x.lineTo(W/2,H);x.strokeStyle='#243845';x.stroke();
  x.strokeStyle='#2aa198';x.lineWidth=2;x.beginPath();
  for(var i=0;i<n;i++){var xx=W*i/(n-1),yy=H-(p[i]-mn)/rg*H*0.9-H*0.05;i?x.lineTo(xx,yy):x.moveTo(xx,yy);}
  x.stroke();}
+function drawWf(src,d){var c=document.getElementById('w-'+src),x=c.getContext('2d');
+ var p=d.psd,n=p.length;if(!n)return;
+ if(c.width!==n){c.width=n;c.height=160;x.fillStyle='#060a0e';x.fillRect(0,0,n,c.height);}
+ x.drawImage(c,0,-1);                       // scroll vers le haut d'1px
+ var mn=Math.min.apply(null,p),mx=Math.max.apply(null,p),rg=(mx-mn)||1;
+ var row=x.createImageData(n,1);
+ for(var i=0;i<n;i++){var col=cmap((p[i]-mn)/rg),o=i*4;row.data[o]=col[0];row.data[o+1]=col[1];row.data[o+2]=col[2];row.data[o+3]=255;}
+ x.putImageData(row,0,c.height-1);}         // nouvelle ligne en bas
+function draw(src,d){var e=document.getElementById('e-'+src),tt=document.getElementById('t-'+src);
+ if(d.error){e.textContent=d.error;tt.textContent=d.label||'';return;} e.textContent='';
+ tt.textContent=d.label+'  •  ARFCN '+d.arfcn+'  •  Fs '+(d.rate/1e6).toFixed(3)+' MHz';
+ drawPsd(src,d);drawWf(src,d);}
 function tick(){['ms','bts'].forEach(function(s){
-  fetch('/psd?src='+s+'&t='+Date.now()).then(function(r){return r.json();}).then(function(d){draw('c-'+s,d);}).catch(function(){});});
+  fetch('/psd?src='+s+'&t='+Date.now()).then(function(r){return r.json();}).then(function(d){draw(s,d);}).catch(function(){});});
  document.getElementById('st').textContent='— '+new Date().toLocaleTimeString();}
 tick();setInterval(tick,1000);
 </script></body></html>"""
