@@ -32,7 +32,7 @@ BRIDGE="${BRIDGE:-gsm-inter}"
 # qemu-src migré dans osmo_egprs : on lance run.sh/start-clean.sh/calypso.env du dossier
 # courant ($HERE). Fallback /opt/GSM/qemu-src si start-clean.sh absent ici.
 QEMU_SRC="${QEMU_SRC:-$HERE}"; [ -f "$QEMU_SRC/start-clean.sh" ] || QEMU_SRC="/opt/GSM/qemu-src"
-ENCRYPTION="${ENCRYPTION:-a5 1}"
+ENCRYPTION="${ENCRYPTION:-a5 0}"
 RUN_DIR="${RUN_DIR:-/run/osmo-direct}"
 LOG_DIR="${LOG_DIR:-/var/log/osmocom}"
 N_OPERATORS="${N_OPERATORS:-2}"
