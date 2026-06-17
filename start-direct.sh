@@ -465,7 +465,18 @@ ensure_pulse() {
     fi
 
     export PULSE_SERVER="unix:${PULSE_SOCK}"
-    pactl info >/dev/null 2>&1 && { echo -e "  ${GREEN}[audio] PulseAudio déjà actif${NC}"; return 0; }
+    if pactl info >/dev/null 2>&1; then
+        # PulseAudio déjà actif (service osmo-pulse au boot, ou un 'fake' solo
+        # précédent). Le sink gsm_audio n'est PAS forcément chargé dans CE démon
+        # -> on le (re)charge à la volée s'il manque. SANS ça : l'audio ne marchait
+        # qu'après un 'fake' solo (qui avait posé le sink) — c'est le maillon qui
+        # manquait à fake+qemu pour avoir l'audio de lui-même.
+        pactl list short sinks 2>/dev/null | grep -q gsm_audio || \
+            pactl load-module module-null-sink sink_name=gsm_audio \
+                format=s16le rate=8000 channels=1 \
+                sink_properties=device.description=GSM_Audio >/dev/null 2>&1 || true
+        echo -e "  ${GREEN}[audio] PulseAudio déjà actif (sink gsm_audio assuré)${NC}"; return 0
+    fi
 
     # 1. Installer pulseaudio si absent (le binaire démon, pas que les clients)
     if ! command -v pulseaudio >/dev/null 2>&1; then
@@ -966,6 +977,12 @@ cleanup_procs() {
     pkill -f 'qemu-system-arm' 2>/dev/null || true
     pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
     pkill -x asterisk 2>/dev/null || true
+    # ── Stop explicite (demandé) : service osmo-bts-trx + tout python3 + osmo-bts-trx ──
+    # python3 = fake_trx.py / bridges / fft_web : on les tue en bloc pour repartir
+    # d'un état propre (les pkill -f ciblés au-dessus peuvent en laisser traîner).
+    command -v systemctl >/dev/null 2>&1 && systemctl stop osmo-bts-trx 2>/dev/null || true
+    pkill osmo-bts-trx 2>/dev/null || true
+    pkill python3      2>/dev/null || true
     command -v tmux >/dev/null 2>&1 && { tmux kill-session -t calypso 2>/dev/null; tmux kill-session -t hybrid 2>/dev/null; tmux kill-session -t gapk 2>/dev/null; } || true
     ns_destroy_all
     ip addr del "${INTER_STP_IP}/24" dev "$IFACE" 2>/dev/null || true
@@ -1041,6 +1058,16 @@ choose_mode() {
 banner
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
+
+# Tout démarrage (sans argument 'stop') commence par un STOP complet, pour repartir
+# d'un état propre — équivalent à './start-direct.sh stop' avant de lancer.
+# NO_STARTUP_STOP=1 pour le désactiver. Comme le stop nettoie déjà tout, on passe
+# NO_CLEAN=1 à pre_start pour éviter un double nettoyage.
+if [ "${NO_STARTUP_STOP:-0}" != "1" ]; then
+    echo -e "${YELLOW}[start] stop préalable (état propre)...${NC}"
+    stop_all
+    NO_CLEAN=1
+fi
 
 # Sélection du mode :
 #   - arg positionnel (./start-direct.sh faketrx) → direct, sans menu
