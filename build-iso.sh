@@ -242,11 +242,12 @@ WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
 WEB_BRANCH="${OSMO_WEB_BRANCH:-main}"
 
 mkdir -p "$WEB/web"
-# Source PRIORITAIRE = copie LOCALE /opt/osmo-egprs-web (live déjà corrigée : mode
-# natif + MS show-subscriber-cache + 2-BTS show-bts + audio /audio + bouton front).
-# Fallback = clone upstream. Le patch natif ci-dessous est idempotent (skip si déjà natif).
-LOCAL_WEB="${OSMO_WEB_LOCAL:-/opt/osmo-egprs-web}"
-if [ -f "$LOCAL_WEB/server.js" ]; then
+# Source AUTORITAIRE = le VRAI git bbaranoff/osmo-egprs-web (clone ci-dessous).
+# La copie locale /opt/osmo-egprs-web n'est plus utilisee que comme override
+# EXPLICITE : OSMO_WEB_LOCAL=/chemin ./build-iso.sh. Sinon -> git.
+# Le patch natif plus bas est idempotent (skip si server.js est deja en mode natif).
+LOCAL_WEB="${OSMO_WEB_LOCAL:-}"
+if [ -n "$LOCAL_WEB" ] && [ -f "$LOCAL_WEB/server.js" ]; then
     cp "$LOCAL_WEB/server.js" "$WEB/server.js"
     [ -f "$LOCAL_WEB/package.json" ] && cp "$LOCAL_WEB/package.json" "$WEB/package.json"
     [ -d "$LOCAL_WEB/web" ]          && cp -r "$LOCAL_WEB/web/."     "$WEB/web/"
@@ -255,14 +256,23 @@ if [ -f "$LOCAL_WEB/server.js" ]; then
     echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis source LOCALE ($LOCAL_WEB)"
 else
     WEB_TMP="$WORK/osmo-egprs-web"
-    git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2
-    [ -f "$WEB_TMP/server/server.js" ]    && cp "$WEB_TMP/server/server.js"    "$WEB/server.js"
-    [ -f "$WEB_TMP/server/package.json" ] && cp "$WEB_TMP/server/package.json" "$WEB/package.json"
-    [ -d "$WEB_TMP/web" ]                 && cp -r "$WEB_TMP/web/."            "$WEB/web/"
-    [ -f "$WEB_TMP/start-web.sh" ]        && cp "$WEB_TMP/start-web.sh"        "$WEB/" && chmod +x "$WEB/start-web.sh"
-    [ -f "$WEB_TMP/Dockerfile" ]          && cp "$WEB_TMP/Dockerfile"          "$WEB/Dockerfile"
     rm -rf "$WEB_TMP"
-    echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis clone upstream"
+    git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2 || true
+    # Layout REEL du repo : server.js / package.json / web/ / start-web.sh à la
+    # RACINE (fallback sous server/ pour un ancien layout).
+    if   [ -f "$WEB_TMP/server.js" ];        then cp "$WEB_TMP/server.js"        "$WEB/server.js"
+    elif [ -f "$WEB_TMP/server/server.js" ]; then cp "$WEB_TMP/server/server.js" "$WEB/server.js"; fi
+    if   [ -f "$WEB_TMP/package.json" ];        then cp "$WEB_TMP/package.json"        "$WEB/package.json"
+    elif [ -f "$WEB_TMP/server/package.json" ]; then cp "$WEB_TMP/server/package.json" "$WEB/package.json"; fi
+    [ -d "$WEB_TMP/web" ]          && cp -r "$WEB_TMP/web/."     "$WEB/web/"
+    [ -f "$WEB_TMP/start-web.sh" ] && cp "$WEB_TMP/start-web.sh" "$WEB/" && chmod +x "$WEB/start-web.sh"
+    [ -f "$WEB_TMP/Dockerfile" ]   && cp "$WEB_TMP/Dockerfile"   "$WEB/Dockerfile"
+    rm -rf "$WEB_TMP"
+    if [ -f "$WEB/server.js" ]; then
+        echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis le git ${CYAN}$WEB_REPO${NC} ($WEB_BRANCH)"
+    else
+        echo -e "  ${RED}✗ clone osmo-egprs-web sans server.js — dashboard incomplet${NC}"
+    fi
 fi
 
 # Patch server.js : mode natif (no-docker). VTY en telnet direct sur 127.0.0.1
@@ -501,6 +511,17 @@ EOF
 chroot "$ROOTFS" systemctl enable systemd-networkd 2>/dev/null||true
 chroot "$ROOTFS" systemctl enable systemd-resolved 2>/dev/null||true
 
+# live-boot écrit /root/etc/network/interfaces dans la racine montée au boot.
+# Sans ifupdown, /etc/network/ n'existe pas -> "/init: can't create
+# /root/etc/network/interfaces: nonexistent directory". On crée le dossier + un
+# interfaces minimal (loopback). systemd-networkd gère le réseau ; ce fichier
+# n'est lu par personne (ifupdown absent), il satisfait juste le hook live-boot.
+mkdir -p "$ROOTFS/etc/network"
+cat > "$ROOTFS/etc/network/interfaces" <<'EOF'
+auto lo
+iface lo inet loopback
+EOF
+
 # ── Service startup : exécute le gist update.sh (bbaranoff) au démarrage ──────
 cat > "$ROOTFS/usr/local/sbin/osmo-update.sh" <<'UPD'
 #!/bin/bash
@@ -522,8 +543,9 @@ for i in 1 2 3 4 5; do
         # On supprime toute ligne 'tmpfs /tmp tmpfs …' depourvue de size= (le doublon),
         # en conservant l'entree 2G. Idempotent : sans effet si le doublon est absent.
         if [ -f /etc/fstab ]; then
-            sed -i -E '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]+tmpfs[[:space:]]/{/size=/!d}' /etc/fstab
-            echo "fstab normalise (doublon /tmp retire)"
+            sed -i -E '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]+tmpfs[[:space:]]/d' /etc/fstab
+            systemctl daemon-reload 2>/dev/null || true
+            echo "fstab normalise (/tmp gere par systemd tmp.mount)"
         fi
         exit 0
     fi
@@ -682,11 +704,22 @@ sed -i -E \
     -e '/^[[:space:]]*tmpfs[[:space:]]+\/dev\/shm[[:space:]]/d' \
     -e '/^# osmo_egprs live — espace writable/d' \
     "$ROOTFS/etc/fstab"
+# /dev/shm : sizing via fstab (sans risque de doublon generateur).
 cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
-# osmo_egprs live — espace writable (cfiles I/Q FFT, tmp)
+# osmo_egprs live — espace writable (cfiles I/Q FFT)
 tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=2G   0 0
-tmpfs   /tmp       tmpfs   defaults,nosuid,nodev,size=2G   0 0
 FSTAB
+# /tmp : PAS dans fstab. Une entree fstab /tmp entre en collision avec l'unite
+# systemd tmp.mount -> "systemd-fstab-generator: tmp.mount already exists,
+# Duplicate entry in /etc/fstab" (generateur en exit 1) ; en plus update.sh la
+# reinjecte au boot. On gere /tmp en natif systemd via un drop-in size=2G : une
+# seule source, zero doublon possible quoi que fasse update.sh.
+mkdir -p "$ROOTFS/etc/systemd/system/tmp.mount.d"
+cat > "$ROOTFS/etc/systemd/system/tmp.mount.d/size.conf" <<'EOF'
+[Mount]
+Options=mode=1777,strictatime,nosuid,nodev,size=2G
+EOF
+chroot "$ROOTFS" systemctl enable tmp.mount 2>/dev/null || true
 
 # SSH : autorise le login root par mot de passe + active le service au boot.
 if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
