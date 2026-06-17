@@ -366,6 +366,49 @@ feed_hlr() {
     echo -e "  ${GREEN}✓ HLR Op${op_id}${NC}"
 }
 
+# ── SMS bridge natif : régénère sms-routing.conf + proto-smsc-daemon + relay ──
+# Factorisé depuis l'ancien bloc inline du mode hybride. $1=op_id $2=n_ms.
+#   • régénère /etc/osmocom/sms-routing.conf via scripts/sms-routing-setup.sh
+#     (routes EXACTES op*10000+ms → opX + [local] complet : sendmt_socket, hlr_vty) ;
+#   • backup l'ancien conf dans RUN_DIR (restauré par cleanup_procs) ;
+#   • (re)lance scripts/smsc-start.sh → proto-smsc-daemon (MO log + sendmt socket)
+#     + sms-interop-relay.py (TCP 7890). Non-fatal, gated sur proto-smsc-daemon.
+# Utilisé par le mode hybride ET les modes cœur (faketrx/noproc/virtphy/hw).
+# NB multi-op (netns) : NON appelé ici — /tmp/sendmt_socket + relay:7890 sont
+#     partagés (pas d'isolation /tmp entre netns) → collision. Cf. run_multi_op.
+setup_sms_bridge() {
+    local op_id="${1:-1}" n_ms="${2:-1}"
+    local sms_setup="$HERE/scripts/sms-routing-setup.sh"
+    local sms_conf="/etc/osmocom/sms-routing.conf" sms_bak="${RUN_DIR}/sms-routing.conf.backup"
+    if ! command -v proto-smsc-daemon >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}[sms] proto-smsc-daemon absent — bridge SMS non lancé${NC}"; return 0
+    fi
+    if [ -f "$sms_setup" ]; then
+        { [ -f "$sms_conf" ] && [ ! -f "$sms_bak" ] && cp -f "$sms_conf" "$sms_bak"; } || true
+        local sms_tmp; sms_tmp=$(mktemp -d)
+        # sms_routing_generate <op_id> <n_ops> <destdir> [ms_counts...] → op_id, n_ops=1, ms=n_ms
+        ( set +eu; . "$sms_setup" >/dev/null 2>&1; sms_routing_generate "$op_id" 1 "$sms_tmp" "$n_ms" >/dev/null 2>&1 ) || true
+        if [ -f "$sms_tmp/sms-routing-op${op_id}.conf" ]; then
+            cp -f "$sms_tmp/sms-routing-op${op_id}.conf" "$sms_conf"
+            echo -e "  ${GREEN}[sms] sms-routing.conf régénéré (op${op_id}, ${n_ms} MS, [local] complet)${NC}"
+        else
+            echo -e "  ${YELLOW}[sms] génération sms-routing.conf échouée — conf existant conservé${NC}"
+        fi
+        rm -rf "$sms_tmp"
+    fi
+    pkill -f 'proto-smsc-daemon' 2>/dev/null || true   # purge doublons résiduels
+    local smsc_sh="/etc/osmocom/smsc-start.sh"; [ -x "$smsc_sh" ] || smsc_sh="$HERE/scripts/smsc-start.sh"
+    if [ -x "$smsc_sh" ]; then
+        echo -e "  ${GREEN}[sms] proto-smsc-daemon + sms-interop-relay (smsc-start.sh)${NC}"
+        setsid env OPERATOR_ID="$op_id" HLR_IP=127.0.0.2 bash "$smsc_sh" \
+            > "${LOG_DIR}/smsc-op${op_id}.log" 2>&1 < /dev/null &
+        echo $! > "${RUN_DIR}/smsc-op${op_id}.pid"
+        echo -e "  ${CYAN}[sms] MT local : scripts/send-mt-sms.sh <imsi> 'msg'  |  MO log : ${LOG_DIR}/mo-sms-op${op_id}.log${NC}"
+    else
+        echo -e "  ${YELLOW}[sms] smsc-start.sh introuvable — SMS indispo${NC}"
+    fi
+}
+
 detect_host_ip() {
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
         | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
@@ -410,6 +453,17 @@ auto_attach_tmux() {
 PULSE_SOCK="/var/run/pulse/native"
 ensure_pulse() {
     [ "${AUDIO:-1}" = "1" ] || { echo -e "  ${YELLOW}[audio] désactivé (AUDIO=0)${NC}"; return 0; }
+
+    # 0. Mapping ALSA gsm_out/gsm_in → sink PulseAudio gsm_audio (REQUIS côté hôte
+    #    en mode natif). Sans /etc/asound.conf, le `mobile` (io-handler gapk,
+    #    alsa-output-dev gsm_out) ouvre un PCM ALSA inexistant → "Unknown PCM
+    #    gsm_out" → l'audio TCH n'est jamais décodé vers gsm_audio → silence
+    #    navigateur. Le sink seul ne suffit pas : ce mapping doit exister.
+    if [ -f "$HERE/configs/asound.conf" ] && ! cmp -s "$HERE/configs/asound.conf" /etc/asound.conf 2>/dev/null; then
+        cp -f "$HERE/configs/asound.conf" /etc/asound.conf \
+            && echo -e "  ${GREEN}[audio] /etc/asound.conf déployé (ALSA gsm_out/gsm_in → pulse gsm_audio)${NC}"
+    fi
+
     export PULSE_SERVER="unix:${PULSE_SOCK}"
     pactl info >/dev/null 2>&1 && { echo -e "  ${GREEN}[audio] PulseAudio déjà actif${NC}"; return 0; }
 
@@ -446,6 +500,27 @@ ensure_pulse() {
     fi
 }
 
+# ── Bridge audio : osmo-gapk auto (chemin réseau MGW RTP → sink gsm_audio) ────
+# gapk auto poll le VTY OsmoMGW (4243) et bridge le RTP de CHAQUE appel vers
+# alsa://gsm_out (= sink null PulseAudio gsm_audio). C'est ce maillon qui rend
+# l'audio des appels "réseau" (ex: 600 = echo-test Asterisk via MGW) audible
+# dans le dashboard web : server.js capte gsm_audio.monitor → /audio (MP3).
+# Lancé en session tmux DÉTACHÉE 'gapk' : survit aux 'exec' (start-clean.sh /
+# tmux attach) des modes qemu/hybride et poll jusqu'à ce que le MGW soit up.
+# Idempotent (relance la session), non-fatal. AUDIO=0 → désactivé.
+ensure_gapk() {
+    [ "${AUDIO:-1}" = "1" ] || return 0
+    command -v tmux      >/dev/null 2>&1 || { echo -e "  ${YELLOW}[gapk] tmux absent — bridge audio non lancé${NC}"; return 0; }
+    command -v osmo-gapk >/dev/null 2>&1 || { echo -e "  ${YELLOW}[gapk] osmo-gapk absent — bridge audio non lancé${NC}"; return 0; }
+    ensure_pulse   # gapk écrit dans alsa://gsm_out = sink gsm_audio (idempotent)
+    local gapk_sh="/etc/osmocom/gapk-start.sh"; [ -x "$gapk_sh" ] || gapk_sh="$HERE/scripts/gapk-start.sh"
+    [ -x "$gapk_sh" ] || { echo -e "  ${YELLOW}[gapk] gapk-start.sh introuvable — bridge audio non lancé${NC}"; return 0; }
+    tmux kill-session -t gapk 2>/dev/null || true
+    tmux new-session -d -s gapk \
+        "GAPK_ALSA_DEV=gsm_out PULSE_SERVER=unix:${PULSE_SOCK} bash '$gapk_sh' auto gsmfr gsm_out 2>&1 | tee ${LOG_DIR}/gapk-auto.log"
+    echo -e "  ${GREEN}[gapk] auto lancé (RTP MGW → sink gsm_audio) — tmux 'gapk', log ${LOG_DIR}/gapk-auto.log${NC}"
+}
+
 # ══════════════════════════════════════════════════════════════════════════
 # Modes 1 opérateur (host loopback + enp0s3) : noproc/faketrx/virtphy/qemu/combiné
 # ══════════════════════════════════════════════════════════════════════════
@@ -459,23 +534,17 @@ ensure_pulse() {
 #   une seule osmo-bts-trx 2-PHY est IMPOSSIBLE (clk_s partagé, reset ping-pong),
 #   d'où 2 process distincts. On NE TOUCHE NI qemu-src/run.sh NI osmo-bts-trx.cfg.
 # ══════════════════════════════════════════════════════════════════════════
-# ── tmux 'hybrid' (à attacher) : fenêtre qemu-all (LIÉE depuis la session 'calypso'
-#    du pipeline QEMU) + faketrx-all (4 panes : tail des logs BTS#1) + mobile1 (VTY 4247,
-#    Calypso) + mobile2 (VTY 4248, faketrx). Même socket tmux par défaut que 'calypso'
-#    (sinon link-window impossible). Tout est non-bloquant (set +e dans un sous-shell).
 build_hybrid_tmux() {
     command -v tmux >/dev/null 2>&1 || { echo -e "  ${YELLOW}[tmux] tmux absent${NC}"; return 0; }
     ( set +e
       S=hybrid
       tmux kill-session -t "$S" 2>/dev/null
-      # fenêtre faketrx-all : 4 panes (bts1 / fake_trx / trxcon / mobile MS#2)
       tmux new-session -d -s "$S" -n faketrx-all "bash -c 'tail -F ${LOG_DIR}/bts1.log'"
       tmux split-window -t "$S:faketrx-all" -h "bash -c 'tail -F ${LOG_DIR}/faketrx-bts1.log'"
       tmux split-window -t "$S:faketrx-all" -v "bash -c 'tail -F ${LOG_DIR}/trxcon-bts1.log'"
       tmux select-pane  -t "$S:faketrx-all.0"
       tmux split-window -t "$S:faketrx-all" -v "bash -c 'tail -F ${LOG_DIR}/mobile-bts1.log'"
       tmux select-layout -t "$S:faketrx-all" tiled
-      # fenêtre qemu-all : lien vers calypso:all (la fenêtre 'all' agrégée du pipeline QEMU)
       if tmux has-session -t calypso 2>/dev/null \
           && tmux list-windows -t calypso -F '#W' 2>/dev/null | grep -qx all; then
           tmux link-window -a -s calypso:all -t "$S:faketrx-all" \
@@ -483,20 +552,15 @@ build_hybrid_tmux() {
       else
           tmux new-window -t "$S" -n qemu-all "bash -c 'tail -F ${LOG_DIR}/run-op1.log'"
       fi
-      # fenêtres mobile1 (Calypso, VTY 4247) + mobile2 (faketrx, VTY 4248) — attente du port
       tmux new-window -t "$S" -n mobile1 "bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/4247) 2>/dev/null; do sleep 1; done; exec telnet 127.0.0.1 4247'"
       tmux new-window -t "$S" -n mobile2 "bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/4248) 2>/dev/null; do sleep 1; done; exec telnet 127.0.0.1 4248'"
-      # ── 3 fenêtres supplémentaires : asterisk console + apps mobiles (consoles réelles) ──
-      # asterisk -cvvvvvvvvvvvvvv : démarre Asterisk en console très verbeuse (voix MNCC↔SIP).
       tmux new-window -t "$S" -n asterisk "bash -c 'rm -f /var/lib/asterisk/astdb.sqlite3 2>/dev/null; exec asterisk -cvvvvvvvvvvvvvv'"
-      # app mobile MS#1 (Calypso) : LIEN vers la fenêtre 'mobile' de la session calypso (console L23 réelle).
       if tmux has-session -t calypso 2>/dev/null && tmux list-windows -t calypso -F '#W' 2>/dev/null | grep -qx mobile; then
           tmux link-window -a -s calypso:mobile -t "$S:mobile2" \
               || tmux new-window -t "$S" -n app-qemu "bash -c 'tail -F ${LOG_DIR}/run-op1.log'"
       else
           tmux new-window -t "$S" -n app-qemu "bash -c 'tail -F ${LOG_DIR}/run-op1.log'"
       fi
-      # app mobile MS#2 (faketrx) : console = stdout du process mobile (setsid) → tail du log.
       tmux new-window -t "$S" -n app-faketrx "bash -c 'tail -F ${LOG_DIR}/mobile-bts1.log'"
       tmux select-window -t "$S:mobile2"
     ) || true
@@ -516,8 +580,21 @@ handle_faketrx_qemu() {
     mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb
     echo -e "  ${CYAN}[faketrx-qemu] Approche C : BTS#0 QEMU (5700/ARFCN514) + BTS#1 faketrx (5720/ARFCN516)${NC}"
 
-    # ── (a) cfg dédiée du 2e osmo-bts-trx (anti-collision : VTY 4250, CTRL 127.0.0.2:4239,
-    #        PCU /tmp/pcu_bts2, base-port 5820/5720, unit-id 6002 0) ──────────────────────
+    # ── (0) Audio : MÊME init que le mode faketrx, AVANT de lancer le moindre MS ──
+    #   faketrx : install_configs_native déploie /etc/asound.conf (mapping ALSA
+    #   gsm_out/gsm_in → sink pulse gsm_audio) ET pose ALSA_OUTPUT/INPUT=gsm_out/gsm_in,
+    #   puis ensure_pulse démarre le démon + le sink ; le mobile hérite via start_core_native.
+    #   En hybride, mobile MS#2 est lancé EN DIRECT (étape l) : sans ce même init préalable
+    #   son gapk ouvre 'default' → la voix TCH ne passe pas par gsm_audio (silence). Le bypass
+    #   "faketrx d'abord" ne faisait QUE pré-poser cet état. Placé AVANT (e) → le pipeline
+    #   QEMU (MS#1) trouve aussi asound.conf+pulse prêts.
+    if [ -f "$HERE/configs/asound.conf" ]; then
+        cp -f "$HERE/configs/asound.conf" /etc/asound.conf
+        ALSA_OUTPUT="gsm_out"; ALSA_INPUT="gsm_in"
+    fi
+    ensure_pulse   # démon système + sink gsm_audio + export PULSE_SERVER (idempotent)
+
+    # ── (a) cfg dédiée du 2e osmo-bts-trx (VTY 4250, CTRL 127.0.0.2:4239, base-port 5820/5720) ──
     cat > "$bts1_cfg" <<'BTS1CFG'
 !
 ! OsmoBTS BTS#1 (side-car faketrx) — généré par start-direct.sh (mode faketrx-qemu)
@@ -668,20 +745,13 @@ BTS1BLOCK
         "$ms2_src" > "$ms2_cfg"
     echo -e "  ${GREEN}[faketrx-qemu] cfg mobile MS#2 → ${ms2_cfg}${NC}"
 
-    # ── (e) pipeline QEMU (BTS#0) en arrière-plan via start-clean.sh (source calypso.env) ──
-    #   CALYPSO_NO_ATTACH=1 : run.sh sort (exit 0) au lieu de 'exec tmux attach' ; la session
-    #   tmux 'calypso' persiste. ICOUNT=off : QEMU wall-clock. AUTO_GEN_DOC=0 : pas de pytest.
-    #   run.sh fait SON cleanup (killall bts/mobile/osmocon/trx-ipc + rm /tmp/osmocom_l2_*) PUIS
-    #   status.sh stop + osmo-start.sh → recharge osmo-bsc.cfg (avec bts1). D'où QEMU AVANT side-car.
+    # ── (e) pipeline QEMU (BTS#0) en arrière-plan via start-clean.sh ──
     echo -e "  ${YELLOW}[faketrx-qemu] lancement pipeline QEMU (BTS#0) en arrière-plan${NC}"
-    #   CALYPSO_L2_CLIENT=mobile : présélectionne le client L2 (sinon run.sh bloque sur
-    #   son menu interactif 'L2 client selection' → EOF sous set -e → pipeline avorté).
     ( cd "$QEMU_SRC" && setsid env CALYPSO_NO_ATTACH=1 CALYPSO_ICOUNT=off CALYPSO_AUTO_GEN_DOC=0 \
         CALYPSO_L2_CLIENT=mobile \
         bash ./start-clean.sh > "${LOG_DIR}/run-op1.log" 2>&1 < /dev/null & echo $! > "${RUN_DIR}/qemu-sidecar.pid" )
 
-    # ── (f) barrière : transceiver BTS#0 prêt (osmo-trx-ipc TRXD udp/5700). On NE gate PAS
-    #        sur le PID run.sh (il fait exit 0 vite) mais sur l'ouverture du port. ──────────
+    # ── (f) barrière : transceiver BTS#0 prêt (osmo-trx-ipc TRXD udp/5700) ──
     echo -ne "  ${GREEN}[faketrx-qemu] attente BTS#0 TRXD udp/5700${NC}"
     r=120
     while [ "$r" -gt 0 ]; do
@@ -691,17 +761,10 @@ BTS1BLOCK
     [ "$r" -gt 0 ] && echo -e " ${GREEN}✓${NC}" || echo -e " ${YELLOW}(timeout, on continue)${NC}"
 
     # ── (g+h) Feed HLR « comme start.sh » sur les 2 MS (attente 4258 + create/msisdn/ki) ──
-    #     feed_hlr est le portage natif EXACT du feed start.sh (subscriber imsi …
-    #     create / update msisdn / update aud2g comp128v1 ki) et embarque sa propre
-    #     barrière 4258. Pour op=1, ms∈{1,2} il génère exactement les valeurs attendues
-    #     par le mode hybride :
-    #       IMSI   = 001 01 <%04d op><%06d ms> → 001010001000001 (MS#1 QEMU) / 001010001000002 (MS#2 faketrx)
-    #       msisdn = op*10000 + ms             → 10001 / 10002   (schéma routes SMS 1000x → op1)
-    #       ki     = …aabbccdd<%02x ms><%02x op>→ …0101 / …0201   (aud2g comp128v1)
-    #     → identiques à la cfg mobile MS#2 (sed étape d) et au feed multi-op (run_multi_op).
-    #     MS#1 a déjà été créé par run.sh (pipeline QEMU) : 'create' est idempotent (l'échec
-    #     « déjà existant » est sans effet), 'update msisdn/ki' réaligne sur 10001/…0101.
-    #     MS#2 est créé ici. NETNS="" en hybride → feed_hlr parle direct à 127.0.0.1:4258.
+    #     feed_hlr = portage natif EXACT du feed start.sh. op=1, ms∈{1,2} :
+    #       IMSI 001010001000001 (MS#1 QEMU) / 001010001000002 (MS#2 faketrx)
+    #       msisdn 10001 / 10002   ki …0101 / …0201 (aud2g comp128v1)
+    #     'create' sur MS#1 (déjà créé par run.sh) = idempotent ; update réaligne.
     feed_hlr 1 "001" "01" 2 || true
 
     # ── (i) fake_trx (BTS#1) : DOIT être up AVANT osmo-bts-trx (qui poll le POWERON) ──
@@ -733,55 +796,32 @@ BTS1BLOCK
         > "${LOG_DIR}/trxcon-bts1.log" 2>&1 < /dev/null &
     echo $! > "${RUN_DIR}/trxcon-bts1.pid"
 
-    # ── (l) mobile MS#2 (après le socket L1CTL) ──
+    # ── (l) mobile MS#2 (après le socket L1CTL) — MÊMES variables audio que faketrx ──
     echo -ne "  ${GREEN}[faketrx-qemu] attente L1CTL ${l2sock}${NC}"
     r=30
     while [ ! -S "$l2sock" ] && [ "$r" -gt 0 ]; do echo -n "."; sleep 1; r=$((r-1)); done
     [ -S "$l2sock" ] && echo -e " ${GREEN}✓${NC}" || echo -e " ${YELLOW}(absent, on tente)${NC}"
     echo -e "  ${GREEN}[faketrx-qemu] mobile MS#2 (cfg ${ms2_cfg})${NC}"
-    setsid mobile -c "$ms2_cfg" > "${LOG_DIR}/mobile-bts1.log" 2>&1 < /dev/null &
+    setsid env \
+        ALSA_OUTPUT="$ALSA_OUTPUT" ALSA_INPUT="$ALSA_INPUT" \
+        ALSA_CARD=gsm_out GAPK_ALSA_DEV=gsm_out \
+        PULSE_SERVER="${PULSE_SERVER:-unix:${PULSE_SOCK}}" \
+        mobile -c "$ms2_cfg" > "${LOG_DIR}/mobile-bts1.log" 2>&1 < /dev/null &
     echo $! > "${RUN_DIR}/mobile-bts1.pid"
 
-    # ── (m) SMS bridge : regénération des ROUTES + proto-smsc-daemon (sms-over-gsup) ─────
-    #   osmo-msc 'sms-over-gsup' → osmo-hlr 'smsc default-route SMSC-OP1' → proto-smsc-daemon.
-    #   On REGÉNÈRE /etc/osmocom/sms-routing.conf avec le générateur officiel
-    #   (scripts/sms-routing-setup.sh → sms_routing_generate 1 1 <dir> 2) : routes EXACTES
-    #   10001/10002 → op1 + [local] complet (sendmt_socket, hlr_vty). Le fallback n'avait NI
-    #   routes correctes NI sendmt_socket → MT local jamais délivré. Sauvegardé/restauré au stop.
-    local sms_setup="$HERE/scripts/sms-routing-setup.sh"
-    local sms_conf="/etc/osmocom/sms-routing.conf" sms_bak="${RUN_DIR}/sms-routing.conf.backup"
-    if [ -f "$sms_setup" ]; then
-        { [ -f "$sms_conf" ] && [ ! -f "$sms_bak" ] && cp -f "$sms_conf" "$sms_bak"; } || true
-        local sms_tmp; sms_tmp=$(mktemp -d)
-        ( set +eu; . "$sms_setup" >/dev/null 2>&1; sms_routing_generate 1 1 "$sms_tmp" 2 >/dev/null 2>&1 ) || true
-        if [ -f "$sms_tmp/sms-routing-op1.conf" ]; then
-            cp -f "$sms_tmp/sms-routing-op1.conf" "$sms_conf"
-            echo -e "  ${GREEN}[faketrx-qemu] sms-routing.conf regénéré (routes 10001/10002 → op1, [local] complet)${NC}"
-        else
-            echo -e "  ${YELLOW}[faketrx-qemu] échec génération sms-routing.conf — SMS local indispo${NC}"
-        fi
-        rm -rf "$sms_tmp"
-    fi
-    pkill -f 'proto-smsc-daemon' 2>/dev/null || true   # purge des doublons résiduels
-    local smsc_sh="/etc/osmocom/smsc-start.sh"; [ -x "$smsc_sh" ] || smsc_sh="$HERE/scripts/smsc-start.sh"
-    if [ -x "$smsc_sh" ]; then
-        echo -e "  ${GREEN}[faketrx-qemu] SMS bridge (proto-smsc-daemon)${NC}"
-        setsid env OPERATOR_ID=1 HLR_IP=127.0.0.2 bash "$smsc_sh" \
-            > "${LOG_DIR}/smsc-bts.log" 2>&1 < /dev/null &
-        echo $! > "${RUN_DIR}/smsc.pid"
-    else
-        echo -e "  ${YELLOW}[faketrx-qemu] smsc-start.sh absent — SMS inter-MS indispo${NC}"
-    fi
+    # ── (m) SMS bridge : régénère routes + proto-smsc-daemon + relay (op1, 2 MS) ──
+    setup_sms_bridge 1 2
 
     echo ""
     echo -e "${GREEN}${BOLD}[faketrx-qemu] BTS#0 (QEMU Calypso) + BTS#1 (faketrx) prêts.${NC}"
     echo -e "  MS#1 QEMU    : IMSI 001010001000001  msisdn 10001  ARFCN 514  unit-id 6001"
     echo -e "  MS#2 faketrx : IMSI 001010001000002  msisdn 10002  ARFCN 516  unit-id 6002"
     echo -e "  Appel/SMS intra-MSC : MS#1→10002, MS#2→10001 (ex: 'sms 1 10001 hi', 'call 1 10001')."
-    echo -e "  Logs : ${CYAN}${LOG_DIR}/{run-op1,bts1,faketrx-bts1,trxcon-bts1,mobile-bts1,smsc-bts}.log${NC}"
+    echo -e "  Logs : ${CYAN}${LOG_DIR}/{run-op1,bts1,faketrx-bts1,trxcon-bts1,mobile-bts1,smsc-op1}.log${NC}"
     echo -e "  Stop : ${CYAN}./start-direct.sh stop${NC}"
 
-    # ── tmux 'hybrid' : qemu-all (lié) + faketrx-all + mobile1 + mobile2, puis attach ──
+    ensure_gapk   # bridge audio MGW RTP → sink gsm_audio (avant l'exec tmux attach)
+
     build_hybrid_tmux
     if [ -t 1 ] && [ -z "${TMUX:-}" ] && [ "${AUTO_ATTACH:-1}" = "1" ]; then
         echo -e "  ${GREEN}[faketrx-qemu] attache tmux 'hybrid' (Ctrl-b d = détacher, stack reste up)${NC}"
@@ -812,7 +852,7 @@ run_single_op() {
         faketrx)       PHY_MODE="faketrx"; RUN_NO_PROCESS=0; post="none" ;;
         virtphy)       PHY_MODE="virtphy"; RUN_NO_PROCESS=0; post="none" ;;
         qemu)          self_contained=1; post="qemu" ;;
-        faketrx-qemu)  handle_faketrx_qemu; return ;;   # Approche C : 2 osmo-bts-trx (cf. handle_faketrx_qemu)
+        faketrx-qemu)  handle_faketrx_qemu; return ;;   # Approche C : 2 osmo-bts-trx
         hw)            PHY_MODE="${PHY_MODE:-trx}"; RUN_NO_PROCESS=0; post="none" ;;
         *) echo -e "${RED}Mode inconnu : ${mode}${NC}"; exit 1 ;;
     esac
@@ -823,6 +863,7 @@ run_single_op() {
     # ── Modes qemu : passthrough pur vers le pipeline auto-suffisant ────────
     if [ "$self_contained" = "1" ]; then
         [ -d "$QEMU_SRC" ] || { echo -e "${RED}qemu-src introuvable : ${QEMU_SRC}${NC}"; exit 1; }
+        ensure_gapk   # bridge audio MGW RTP → sink gsm_audio (avant l'exec start-clean.sh)
         echo -e "  ${YELLOW}[$mode] pipeline auto-suffisant : osmo-start.sh + HLR + radio gérés par qemu-src/run.sh${NC}"
         echo -e "  ${CYAN}[*] exec qemu-src/start-clean.sh (terminal courant)${NC}"
         cd "$QEMU_SRC"
@@ -848,13 +889,16 @@ run_single_op() {
 
     ensure_pulse   # PulseAudio natif + export PULSE_SERVER (propagé à run.sh)
     start_core_native "$op_id" "$cip" "$gw"
+    ensure_gapk    # bridge audio MGW RTP → sink gsm_audio (MGW up depuis start_core_native)
     feed_hlr "$op_id" "$mcc" "$mnc" "$N_MS"
+    setup_sms_bridge "$op_id" "$N_MS"   # proto-smsc-daemon + sms-interop-relay (SMS local/MT)
 
     echo ""
     echo -e "${GREEN}${BOLD}Cœur prêt (natif) — ${N_MS} MS.${NC}"
     echo -e "  HLR VTY   @ ${CYAN}127.0.0.1:4258${NC}   BB VTY @ ${CYAN}127.0.0.1:4247${NC}"
     echo -e "  Linphone  @ ${CYAN}${HOST_IP}:$(linphone_sip_port "$op_id")${NC}"
     echo -e "  Logs      @ ${CYAN}${LOG_DIR}/run-op1.log${NC}"
+    echo -e "  SMS       : ${CYAN}scripts/send-mt-sms.sh <imsi> 'msg'${NC}  (MO log ${LOG_DIR}/mo-sms-op${op_id}.log)"
     echo -e "${GREEN}Processus en arrière-plan. './start-direct.sh stop' pour tout arrêter.${NC}"
 
     auto_attach_tmux "${LOG_DIR}/run-op${op_id}.log"
@@ -893,6 +937,9 @@ run_multi_op() {
         NETNS="$nsn" PHY_MODE="faketrx" RUN_NO_PROCESS=1 N_MS="$ms" \
             start_core_native "$i" "$cip" "$gw"
         NETNS="$nsn" feed_hlr "$i" "001" "$(printf '%02d' "$i")" "$ms"
+        # NB : SMS bridge NON lancé par op en netns — /tmp/sendmt_socket + relay:7890
+        # sont partagés (pas d'isolation /tmp) → collision. À traiter via netns /tmp
+        # dédié (mount) ou ports relay distincts si besoin du SMS inter-op natif.
         echo ""
     done
 
@@ -902,10 +949,6 @@ run_multi_op() {
 }
 
 # ── Nettoyage des process : systemd + natifs + netns + bridge ───────────────
-# Partagé par stop_all (commande `stop`) et pre_start (hook de démarrage).
-# Les daemons du cœur sont des services systemd (osmo-start.sh les lance via
-# systemctl) : un pkill seul se fait respawn → on `systemctl stop` d'abord,
-# PUIS pkill pour tout résidu natif (run.sh/setsid : bts-trx, fake_trx, mobile…).
 cleanup_procs() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl stop osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc \
@@ -923,7 +966,7 @@ cleanup_procs() {
     pkill -f 'qemu-system-arm' 2>/dev/null || true
     pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
     pkill -x asterisk 2>/dev/null || true
-    command -v tmux >/dev/null 2>&1 && { tmux kill-session -t calypso 2>/dev/null; tmux kill-session -t hybrid 2>/dev/null; } || true
+    command -v tmux >/dev/null 2>&1 && { tmux kill-session -t calypso 2>/dev/null; tmux kill-session -t hybrid 2>/dev/null; tmux kill-session -t gapk 2>/dev/null; } || true
     ns_destroy_all
     ip addr del "${INTER_STP_IP}/24" dev "$IFACE" 2>/dev/null || true
     # ── [faketrx-qemu] restore osmo-bsc.cfg + purge artefacts BTS#1 (AVANT rm RUN_DIR) ──
@@ -947,11 +990,6 @@ stop_all() {
 }
 
 # ── Pré-démarrage : nettoyage résiduel + (re)lancement du cœur ──────────────
-# Appelé au lancement de chaque mode (pas pour `stop`). Repart d'un état propre
-# pour éviter les collisions STP/VTY documentées plus haut, puis enchaîne sur
-# /etc/osmocom/osmo-start.sh (cœur séquencé via systemctl).
-#   NO_CLEAN=1       → saute le nettoyage des process résiduels
-#   NO_OSMO_START=1  → saute l'appel à osmo-start.sh
 pre_start() {
     if [ "${NO_CLEAN:-0}" != "1" ]; then
         echo -e "${YELLOW}[pre-start] Nettoyage des process résiduels...${NC}"
@@ -965,11 +1003,9 @@ pre_start() {
 }
 
 # ── Menu whiptail (optionnel) ───────────────────────────────────────────────
-# Validation entier dans [min,max]
 _validate_int() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
 
 choose_mode() {
-    # Fix box-drawing whiptail (TERM/locale) — cf. run.sh qemu-src.
     export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
     case "${TERM:-}" in dumb|"") export TERM=xterm-256color ;; esac
 
@@ -1033,13 +1069,12 @@ else
 fi
 
 # Dashboard web osmo-egprs-web : (re)démarré automatiquement (service systemd natif).
-# Capture GSMTAP/SCTP + VTY/BTS (mode natif, opérateur 1) + audio. Non-bloquant.
 if command -v systemctl >/dev/null 2>&1 && systemctl cat osmo-egprs-web.service >/dev/null 2>&1; then
     systemctl restart osmo-egprs-web 2>/dev/null \
         && echo -e "  ${CYAN}[web] dashboard osmo-egprs-web démarré (http://<ip>:8080)${NC}" || true
 fi
 
-# FFT web (2 spectres MS/BTS depuis /dev/shm/*.cfile) — serveur autonome :8081, en arrière-plan.
+# FFT web (2 spectres MS/BTS depuis /dev/shm/*.cfile) — serveur autonome :8081.
 if [ -f "$HERE/fft-web/fft_web.py" ]; then
     mkdir -p "$RUN_DIR" "$LOG_DIR"
     pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
