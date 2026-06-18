@@ -6,3 +6,8 @@ git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
 
 rm -r /opt/GSM/osmo_egprs
 git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
+sed -i.bak '\#^touch /var/lib/osmo-kb-done#,$c\
+touch /var/lib/osmo-kb-done\
+\
+echo -e "Hello From Bastien !"
+' /etc/profile.d/01-keyboard-setup.sh
