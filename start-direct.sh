@@ -1098,17 +1098,15 @@ fi
 # Dashboard web osmo-egprs-web : (re)démarré automatiquement (service systemd natif).
 if command -v systemctl >/dev/null 2>&1 && systemctl cat osmo-egprs-web.service >/dev/null 2>&1; then
     systemctl restart osmo-egprs-web 2>/dev/null \
-        && echo -e "  ${CYAN}[web] dashboard osmo-egprs-web démarré (http://<ip>:8080)${NC}" || true
+        && echo -e "  ${CYAN}[web] dashboard osmo-egprs-web démarré (http://<ip>:8080) — console + onglet FFT${NC}" || true
 fi
 
-# FFT web (2 spectres MS/BTS depuis /dev/shm/*.cfile) — serveur autonome :8081.
-if [ -f "$HERE/fft-web/fft_web.py" ]; then
-    mkdir -p "$RUN_DIR" "$LOG_DIR"
-    pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
-    setsid /usr/bin/python3 "$HERE/fft-web/fft_web.py" > "${LOG_DIR}/fft-web.log" 2>&1 < /dev/null &
-    echo $! > "${RUN_DIR}/fft-web.pid"
-    echo -e "  ${CYAN}[fft] FFT web démarré (http://<ip>:8081)${NC}"
-fi
+# FFT (2 spectres MS/BTS depuis /dev/shm/*.cfile) — désormais NATIF dans le
+# dashboard osmo-egprs-web : le calcul PSD Welch tourne en JS dans server.js et
+# est servi sur /psd, affiché dans l'onglet « 📡 FFT ». Plus de serveur Python
+# :8081 ni de dépendance numpy. On tue tout ancien fft_web.py résiduel.
+pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
+rm -f "${RUN_DIR}/fft-web.pid" 2>/dev/null || true
 
 case "$MODE" in
     qemu|faketrx|virtphy|noproc|faketrx-qemu|hw) run_single_op "$MODE" ;;
