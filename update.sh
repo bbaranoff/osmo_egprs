@@ -1,4 +1,3 @@
-new=$(awk '1; $0=="touch /var/lib/osmo-kb-donE"{print "echo \"Hello From Bastien !!!\""; exit}' /etc/profile.d/01-keyboard-setup.sh); printf '%s\n' "$new" > /etc/profile.d/01-keyboard-setup.sh
 
 
 sed -i -e 's/a5 1/a5 0/g' /etc/osmocom/osmo-*sc.cfg
