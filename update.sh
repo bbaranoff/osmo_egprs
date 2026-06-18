@@ -5,4 +5,4 @@ rm -r /opt/osmo-egprs-web
 git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
 
 rm -r /opt/GSM/osmo_egprs
-git clone https://github.com/bbaranoff/osmo-egprs-web /opt/GSM/osmo_egprs
+git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
