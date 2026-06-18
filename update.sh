@@ -19,7 +19,7 @@ done
 printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered — MT end-to-end\033[0m\n' "$ph" '' "$ph"
 printf '\033[?25h'
 ANIM
-
+sed -i -e 's/a5 1/a5 0/g' /etc/osmocom/osmo-*sc.cfg
 # 3) réécrire dans le même inode
 cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 
