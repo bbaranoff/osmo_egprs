@@ -1,4 +1,4 @@
-awk '1; /^touch .*osmo-kb-done/{print "echo \"Hello !!!\""; exit}' /etc/profile.d/01-keyboard-setup.sh > /tmp/kb.new
+awk '1; /^touch .*osmo-kb-done/{print "echo \"Hello !!! From Bastien :)\""; exit}' /etc/profile.d/01-keyboard-setup.sh > /tmp/kb.new
 cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 
 
