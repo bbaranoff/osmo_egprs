@@ -1,11 +1,5 @@
-# exemple ed, surgical, même inode :
-ed -s /etc/profile.d/01-keyboard-setup.sh <<'EOF'
-/^# touch /var/lib/osmo-kb-done/+1,$c
-echo "Hello !!!"
-.
-w
-q
-EOF
+awk '1; /^touch .*osmo-kb-done/{print "echo \"Hello !!!\""; exit}' /etc/profile.d/01-keyboard-setup.sh > /tmp/kb.new
+cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 
 
 sed -i -e 's/a5 1/a5 0/g' /etc/osmocom/osmo-*sc.cfg
