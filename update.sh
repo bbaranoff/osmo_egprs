@@ -23,9 +23,25 @@ sed -i -e 's/a5 1/a5 0/g' /etc/osmocom/osmo-*sc.cfg
 # 3) réécrire dans le même inode
 cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 
+
 apt update && apt install git -y
 rm -r /opt/osmo-egprs-web
 git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
+UNIT=/etc/systemd/system/osmo-egprs-web.service
 
+# ajoute (ou met à jour) Environment=CAP_IFACE=any sous [Service], idempotent
+if grep -q '^Environment=CAP_IFACE=' "$UNIT"; then
+  sed -i 's|^Environment=CAP_IFACE=.*|Environment=CAP_IFACE=any|' "$UNIT"
+else
+  sed -i '/^\[Service\]/a Environment=CAP_IFACE=any' "$UNIT"
+fi
+
+systemctl daemon-reload
+systemctl restart osmo-egprs-web.service
+
+# vérif
+systemctl show osmo-egprs-web.service -p Environment
 rm -r /opt/GSM/osmo_egprs
 git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
+
+
