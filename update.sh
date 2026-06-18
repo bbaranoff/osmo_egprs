@@ -1,4 +1,4 @@
-awk '1; $0=="touch /var/lib/osmo-kb-done"{print "echo \"Hello !!!\""; exit}' /etc/profile.d/01-keyboard-setup.sh > /tmp/kb.new
+awk '1; /^touch /var/lib/osmo-kb-done/{print "echo \"Hello !!!\""; exit}' /etc/profile.d/01-keyboard-setup.sh > /tmp/kb.new
 cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 
 sed -i -e 's/a5 1/a5 0/g' /etc/osmocom/osmo-*sc.cfg
