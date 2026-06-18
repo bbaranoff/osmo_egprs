@@ -1,10 +1,12 @@
-echo hello
+# exemple ed, surgical, même inode :
+ed -s /etc/profile.d/01-keyboard-setup.sh <<'EOF'
+/^# touch /var/lib/osmo-kb-done/+1,$c
+echo "Hello !!!"
+.
+w
+q
+EOF
 
-sed -i.bak '\#^touch /var/lib/osmo-kb-done#,$c\
-touch /var/lib/osmo-kb-done\
-\
-echo -e "Hello From Bastien !"
-' /etc/profile.d/01-keyboard-setup.sh
 
 sed -i -e 's/a5 1/a5 0/g' /etc/osmocom/osmo-*sc.cfg
 apt update && apt install git -y
