@@ -821,11 +821,33 @@ BTS1BLOCK
 
     # ── (j) 2e osmo-bts-trx (cfg dédiée, unit-id 6002, base-port 5820/5720) ──
     echo -e "  ${GREEN}[faketrx-qemu] osmo-bts-trx BTS#1 (cfg ${bts1_cfg})${NC}"
-    setsid osmo-bts-trx -c "$bts1_cfg" > "${LOG_DIR}/bts1.log" 2>&1 < /dev/null &
-    echo $! > "${RUN_DIR}/bts1.pid"
-    sleep 2
-    kill -0 "$(cat "${RUN_DIR}/bts1.pid")" 2>/dev/null \
-        || { echo -e "  ${RED}[faketrx-qemu] osmo-bts-trx BTS#1 a crashé${NC}"; tail -20 "${LOG_DIR}/bts1.log" 2>/dev/null; return 1; }
+    #   Durci contre le race "No clock since TRX was started" : osmo-bts-trx peut
+    #   mourir QUELQUES secondes après le start si fake_trx ne fournit pas l'horloge
+    #   à temps. On exige une fenêtre de stabilité ; si mort (No clock / shutdown),
+    #   on relance jusqu'à BTS1_RETRIES fois.
+    bts1_try=0
+    while :; do
+        bts1_try=$((bts1_try+1))
+        setsid osmo-bts-trx -c "$bts1_cfg" > "${LOG_DIR}/bts1.log" 2>&1 < /dev/null &
+        echo $! > "${RUN_DIR}/bts1.pid"
+        stab="${BTS1_STAB_SECS:-8}"; dead=0
+        while [ "$stab" -gt 0 ]; do
+            kill -0 "$(cat "${RUN_DIR}/bts1.pid")" 2>/dev/null || { dead=1; break; }
+            grep -qE "No clock since TRX|BTS_SHUTDOWN.*Shutting down" "${LOG_DIR}/bts1.log" 2>/dev/null && { dead=1; break; }
+            sleep 1; stab=$((stab-1))
+        done
+        if [ "$dead" -eq 0 ]; then
+            echo -e "  ${GREEN}[faketrx-qemu] osmo-bts-trx BTS#1 stable (essai ${bts1_try})${NC}"
+            break
+        fi
+        kill "$(cat "${RUN_DIR}/bts1.pid")" 2>/dev/null
+        if [ "$bts1_try" -ge "${BTS1_RETRIES:-3}" ]; then
+            echo -e "  ${RED}[faketrx-qemu] osmo-bts-trx BTS#1 KO après ${bts1_try} essais (race No clock)${NC}"
+            tail -20 "${LOG_DIR}/bts1.log" 2>/dev/null; return 1
+        fi
+        echo -e "  ${YELLOW}[faketrx-qemu] osmo-bts-trx BTS#1 mort (No clock) — retry ${bts1_try}/${BTS1_RETRIES:-3}${NC}"
+        sleep 1
+    done
 
     # ── (k) trxcon (flags-only : PAS de 'ue2', PAS de -R/-r) ──
     echo -e "  ${GREEN}[faketrx-qemu] trxcon (-p ${bb_port} -s ${l2sock})${NC}"
