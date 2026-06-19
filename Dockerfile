@@ -232,7 +232,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cd /opt/GSM \
     && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
     && cd /opt/GSM/qemu-src \
-    && git checkout checkpoint \
+    && git checkout test \
     && python3 -m venv /root/.venv-qemu \
     && . /root/.venv-qemu/bin/activate \
     && pip install --no-cache-dir tomli \
