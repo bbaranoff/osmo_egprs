@@ -27,7 +27,7 @@ cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 apt update && apt install git -y
 rm -r /opt/osmo-egprs-web
 git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
-cd /opt/osmo-egprs-web && git checkout test
+cd /opt/osmo-egprs-web && git checkout main
 UNIT=/etc/systemd/system/osmo-egprs-web.service
 
 # ajoute (ou met à jour) Environment=CAP_IFACE=any sous [Service], idempotent
