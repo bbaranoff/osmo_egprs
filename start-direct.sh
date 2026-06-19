@@ -451,6 +451,31 @@ auto_attach_tmux() {
 # on exporte PULSE_SERVER pour run.sh / gapk / pactl.
 #   AUDIO=0 → désactive toute la mise en place audio.
 PULSE_SOCK="/var/run/pulse/native"
+# FIFO live I/Q du shunt DSP : DOIT exister avant l'init QEMU, sinon le shunt
+# (stat/S_ISFIFO dans calypso_dsp_shunt.c) la voit absente -> crée un fichier
+# régulier à la place. Chemin = CALYPSO_SHUNT_IQ_CFILE (calypso.env), défaut
+# /dev/shm/dsp_iq.fifo. mkfifo idempotent ; on ne touche pas un fichier régulier
+# préexistant (rejeu .cfile) -> on ne crée la FIFO que si le chemin est libre ou
+# déjà une FIFO.
+ensure_iq_fifo() {
+    # Chemin = CALYPSO_SHUNT_IQ_CFILE. Pas dans notre env (posé par start-clean.sh
+    # via calypso.env) -> on le relit depuis le calypso.env qui SERA sourcé, pour
+    # rester en phase avec QEMU. Défaut /dev/shm/dsp_iq.fifo.
+    local f="${CALYPSO_SHUNT_IQ_CFILE:-}"
+    if [ -z "$f" ] && [ -f "$QEMU_SRC/calypso.env" ]; then
+        f=$(sed -n 's/^[[:space:]]*CALYPSO_SHUNT_IQ_CFILE=\([^[:space:]#]*\).*/\1/p' "$QEMU_SRC/calypso.env" | tail -n1)
+    fi
+    [ -n "$f" ] || f="/dev/shm/dsp_iq.fifo"
+    if [ -e "$f" ] && [ ! -p "$f" ]; then
+        echo -e "  ${YELLOW}[dsp-shunt] $f existe et n'est PAS une FIFO — laissé tel quel${NC}"
+        return 0
+    fi
+    [ -p "$f" ] && return 0
+    if mkfifo -m 0666 "$f" 2>/dev/null; then
+        echo -e "  ${GREEN}[dsp-shunt] FIFO live I/Q créée : $f${NC}"
+    fi
+}
+
 ensure_pulse() {
     [ "${AUDIO:-1}" = "1" ] || { echo -e "  ${YELLOW}[audio] désactivé (AUDIO=0)${NC}"; return 0; }
 
@@ -757,6 +782,7 @@ BTS1BLOCK
     echo -e "  ${GREEN}[faketrx-qemu] cfg mobile MS#2 → ${ms2_cfg}${NC}"
 
     # ── (e) pipeline QEMU (BTS#0) en arrière-plan via start-clean.sh ──
+    ensure_iq_fifo   # FIFO live I/Q avant l'init QEMU (sinon shunt -> fichier régulier)
     echo -e "  ${YELLOW}[faketrx-qemu] lancement pipeline QEMU (BTS#0) en arrière-plan${NC}"
     ( cd "$QEMU_SRC" && setsid env CALYPSO_NO_ATTACH=1 CALYPSO_ICOUNT=off CALYPSO_AUTO_GEN_DOC=0 \
         CALYPSO_L2_CLIENT=mobile \
@@ -875,6 +901,7 @@ run_single_op() {
     if [ "$self_contained" = "1" ]; then
         [ -d "$QEMU_SRC" ] || { echo -e "${RED}qemu-src introuvable : ${QEMU_SRC}${NC}"; exit 1; }
         ensure_gapk   # bridge audio MGW RTP → sink gsm_audio (avant l'exec start-clean.sh)
+        ensure_iq_fifo   # FIFO live I/Q avant l'init QEMU (sinon shunt -> fichier régulier)
         echo -e "  ${YELLOW}[$mode] pipeline auto-suffisant : osmo-start.sh + HLR + radio gérés par qemu-src/run.sh${NC}"
         echo -e "  ${CYAN}[*] exec qemu-src/start-clean.sh (terminal courant)${NC}"
         cd "$QEMU_SRC"
