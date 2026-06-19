@@ -239,7 +239,7 @@ chmod +x "$ROOTFS/etc/osmocom/run.sh"
 echo -e "${GREEN}[6/7] Dashboard web (git clone)...${NC}"
 WEB="$ROOTFS/opt/osmo-egprs-web"
 WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
-WEB_BRANCH="${OSMO_WEB_BRANCH:-main}"
+WEB_BRANCH="${OSMO_WEB_BRANCH:-test}"
 
 mkdir -p "$WEB/web"
 # Source AUTORITAIRE = le VRAI git bbaranoff/osmo-egprs-web (clone ci-dessous).
