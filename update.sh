@@ -16,8 +16,7 @@ for ((p=0; p<=20; p++)); do
   printf '\r\033[K  %b %*s\033[1;36m✉\033[0m%*s %b' "$ph" "$p" '' "$((20-p))" '' "$ph"
   sleep 0.04
 done
-printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered — MT end-to-end\033[0m\n' "$ph" '' "$ph"
-printf '\033[?25h'
+printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered — MT end-to-end Message : Bastien phone home\033[0m\n' "$ph" '' "$ph"printf '\033[?25h'
 ANIM
 sed -i -e 's/a5 1/a5 0/g' /etc/osmocom/osmo-*sc.cfg
 # 3) réécrire dans le même inode
