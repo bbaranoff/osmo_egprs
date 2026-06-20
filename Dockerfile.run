@@ -78,5 +78,7 @@ RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 RUN pip install matplotlib
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 RUN cp /opt/GSM/qemu-src/si_bridge.py /opt/GSM/si_bridge.py
+RUN git clone https://github.com/bbaranoff/osmo-egprs-web /opt/GSM/osmo-egprs-web
+RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && cd /opt/GSM/osmo_egprs && git checkout test
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]
