@@ -206,6 +206,22 @@ build_alsa_args() {
 
     echo "$alsa_args"
 }
+
+# ── WSLg : faire sortir l'audio du conteneur sur les HP Windows ──────────────
+# Sous WSL2+WSLg, le PulseServer WSLg relaie l'audio vers Windows. On l'expose
+# en TCP côté hôte, puis on ajoute dans le conteneur un tunnel-sink (win_out) +
+# un loopback gsm_audio.monitor -> win_out. Voir scripts/wslg-audio-bridge.sh.
+# No-op silencieux hors WSLg. À appeler APRÈS que le core de l'opérateur soit up
+# (sink gsm_audio créé par run.sh/start-direct.sh).
+setup_wslg_audio() {
+    local container_name="$1"
+    local bridge="$(dirname "$0")/scripts/wslg-audio-bridge.sh"
+    [ -S /mnt/wslg/PulseServer ] || return 0          # pas WSLg → rien à faire
+    [ -x "$bridge" ] || { echo -e "  ${YELLOW}[wslg-audio] $bridge introuvable${NC}" >&2; return 0; }
+    echo -e "  ${GREEN}[*] Audio WSLg -> Windows (${container_name})${NC}"
+    "$bridge" host-relay || true
+    "$bridge" container "$container_name" || true
+}
 # ══════════════════════════════════════════════════════════════════════════════
 # Build
 # ══════════════════════════════════════════════════════════════════════════════
@@ -877,6 +893,9 @@ start_bridge_mode() {
             if [ $retry -ge 45 ]; then echo -e " ${RED}TIMEOUT${NC}"; break; fi
         done
         echo -e " ${GREEN}✓${NC}"
+
+        # Audio WSLg -> Windows (no-op hors WSLg)
+        setup_wslg_audio "$container_name"
 
         # Feed HLR
         echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${total_subs} abonnés)...${NC}"
