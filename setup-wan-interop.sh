@@ -54,6 +54,7 @@ SIP_WAN_BASE=5080                  # Port SIP WAN de base
 RTP_WAN_BASE=20000                 # Port RTP WAN de base
 RTP_PER_OP=500                     # Ports RTP par opérateur
 CONTAINER_PREFIX="osmo-operator-"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # pour appeler firewall-wan.sh
 
 if [ -z "$LOCAL_IP" ] || [ -z "$REMOTE_IP" ]; then
     echo -e "${RED}Usage: sudo $0 <local_public_ip> <remote_public_ip> [n_operators]${NC}"
@@ -157,6 +158,25 @@ echo -e "  ${GREEN}✓ iptables configuré${NC}"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
+# [2bis/5] Firewall — ouverture automatique des ports entrants depuis le distant
+# Le DNAT ci-dessus redirige le trafic, mais si un firewall (ufw/firewalld/
+# iptables INPUT) filtre l'INPUT, SIP/RTP WAN sont droppes -> pas d'audio WAN.
+# On applique donc les regles a CHAQUE lancement du WAN (firewall-wan.sh est
+# idempotent : pas de doublon si relance).
+# ══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[2bis/5] Firewall — ouverture des ports WAN (entrant ${REMOTE_IP})...${NC}"
+if [ -x "$SCRIPT_DIR/firewall-wan.sh" ] || [ -f "$SCRIPT_DIR/firewall-wan.sh" ]; then
+    if bash "$SCRIPT_DIR/firewall-wan.sh" "$REMOTE_IP" "$N_OPS"; then
+        echo -e "  ${GREEN}✓ Firewall ouvert pour ${REMOTE_IP}${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ firewall-wan.sh a echoue — ouvre les ports a la main (voir resume).${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}⚠ firewall-wan.sh introuvable dans ${SCRIPT_DIR} — ports a ouvrir a la main.${NC}"
+fi
+echo ""
+
+# ══════════════════════════════════════════════════════════════════════════════
 # [3/5] Configuration RTP — plage de ports WAN par opérateur
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[3/5] Configuration RTP WAN dans chaque container...${NC}"
@@ -242,6 +262,7 @@ disallow=all
 allow=gsm
 allow=ulaw
 aors=wan_trunk_op${j}
+media_encryption=no
 direct_media=no
 rtp_symmetric=yes
 force_rport=yes
@@ -493,8 +514,10 @@ echo -e "    Ex: ${CYAN}${WAN_PREFIX}10001${NC} = appeler MS 10001 op1 sur ${REM
 echo -e "    Ex: ${CYAN}${WAN_PREFIX}20001${NC} = appeler MS 20001 op2 sur ${REMOTE_IP}"
 echo ""
 
-echo -e "  ${BOLD}Firewall — ports à ouvrir :${NC}"
-echo -e "    Sur CHAQUE serveur, autoriser le trafic depuis l'autre :"
+echo -e "  ${BOLD}Firewall :${NC} ${GREEN}déjà appliqué automatiquement sur CE serveur${NC} (étape 2bis)."
+echo -e "    Pense à lancer le WAN aussi sur ${CYAN}${REMOTE_IP}${NC} (il ouvrira son propre INPUT)."
+echo -e "    Pour ré-ouvrir manuellement : ${CYAN}sudo ${SCRIPT_DIR}/firewall-wan.sh ${REMOTE_IP} ${N_OPS}${NC}"
+echo -e "    Équivalent ufw :"
 echo ""
 for i in $(seq 1 "$N_OPS"); do
     sip_port=$(op_sip_port "$i")
