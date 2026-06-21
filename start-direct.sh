@@ -763,7 +763,7 @@ BTS1BLOCK
         awk -v blk="$bts1_block" '
             /^msc 0/ && !ins { while ((getline line < blk) > 0) print line; ins=1 }
             { print }
-        ' "$bsc_cfg" > "${bsc_cfg}.tmp" && mv -f "${bsc_cfg}.tmp" "$bsc_cfg"
+        ' "$bsc_cfg" > "${bsc_cfg}.tmp" && cat "${bsc_cfg}.tmp" > "$bsc_cfg" && rm -f "${bsc_cfg}.tmp"
         echo -e "  ${GREEN}[faketrx-qemu] bloc 'bts 1' (unit-id 6002 0, ARFCN 516) ajouté à osmo-bsc.cfg${NC}"
     else
         echo -e "  ${YELLOW}[faketrx-qemu] 'msc 0' introuvable — bts1 non inséré dans osmo-bsc.cfg${NC}"
