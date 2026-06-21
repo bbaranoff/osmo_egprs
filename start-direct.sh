@@ -760,10 +760,11 @@ BTS1BLOCK
     if grep -qE '^[[:space:]]*ipa unit-id 6002 0' "$bsc_cfg" 2>/dev/null; then
         echo -e "  ${CYAN}[faketrx-qemu] bloc bts 1 déjà présent — skip${NC}"
     elif grep -qE '^msc 0' "$bsc_cfg" 2>/dev/null; then
-        awk -v blk="$bts1_block" '
+        local _bsc_new
+        _bsc_new=$(awk -v blk="$bts1_block" '
             /^msc 0/ && !ins { while ((getline line < blk) > 0) print line; ins=1 }
             { print }
-        ' "$bsc_cfg" > "${bsc_cfg}.tmp" && cat "${bsc_cfg}.tmp" > "$bsc_cfg" && rm -f "${bsc_cfg}.tmp"
+        ' "$bsc_cfg") && printf '%s\n' "$_bsc_new" > "$bsc_cfg"
         echo -e "  ${GREEN}[faketrx-qemu] bloc 'bts 1' (unit-id 6002 0, ARFCN 516) ajouté à osmo-bsc.cfg${NC}"
     else
         echo -e "  ${YELLOW}[faketrx-qemu] 'msc 0' introuvable — bts1 non inséré dans osmo-bsc.cfg${NC}"
