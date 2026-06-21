@@ -537,6 +537,18 @@ ensure_pulse() {
 
     # 3. Démarrer le démon système
     mkdir -p /var/run/pulse "$LOG_DIR"
+    # Repartir propre : un démon résiduel (lancé avant le patch system.pa, ou un
+    # doublon) tourne sans auth-anonymous → 'pactl' = "Access denied" et un
+    # nouveau démon refuse de démarrer ("Daemon already running"). On ne tue
+    # QUE si pactl est injoignable (on est déjà dans cette branche), donc un
+    # démon sain n'est jamais touché (early-return plus haut).
+    if pgrep -x pulseaudio >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}[audio] démon PulseAudio résiduel/injoignable — redémarrage propre${NC}"
+        pkill -x pulseaudio 2>/dev/null || true
+        local _k=10; while pgrep -x pulseaudio >/dev/null 2>&1 && [ $_k -gt 0 ]; do sleep 0.3; ((_k--)) || true; done
+        pkill -9 -x pulseaudio 2>/dev/null || true
+    fi
+    rm -f /var/run/pulse/pid /var/run/pulse/native 2>/dev/null || true
     pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 \
         --log-target="file:${LOG_DIR}/pulse-system.log" >/dev/null 2>&1 || true
     local r=10

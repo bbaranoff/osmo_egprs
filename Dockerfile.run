@@ -98,6 +98,24 @@ RUN chmod +x /root/osmo-start.sh /root/run.sh \
     ln -sf /root/run.sh /etc/osmocom/run.sh && \
     ln -sf /root/run.sh /scripts/run.sh
 
+# ── PulseAudio system-mode : config bakée au build ────────────────────────────
+# Cause racine du warning "[audio] PulseAudio injoignable — audio dégradé" :
+# le démon system-mode lancé au runtime tournait SANS auth-anonymous (le patch
+# de start-direct.sh arrivait après son démarrage) → 'pactl' renvoyait
+# "Access denied", et un 2e démon ne pouvait pas démarrer ("Daemon already
+# running"). On bake ici la config pour que TOUT démon soit joignable dès son
+# lancement : socket anonyme + null-sink gsm_audio + root dans pulse-access.
+RUN set -eux; \
+    usermod -aG pulse-access root 2>/dev/null || true; \
+    test -f /etc/pulse/system.pa; \
+    sed -i 's|^#\?load-module module-native-protocol-unix.*|load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native|' /etc/pulse/system.pa; \
+    grep -q 'auth-anonymous=1' /etc/pulse/system.pa \
+      || echo 'load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native' >> /etc/pulse/system.pa; \
+    grep -q 'sink_name=gsm_audio' /etc/pulse/system.pa \
+      || echo 'load-module module-null-sink sink_name=gsm_audio format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Audio' >> /etc/pulse/system.pa; \
+    sed -i 's|^load-module module-suspend-on-idle|#load-module module-suspend-on-idle|' /etc/pulse/system.pa; \
+    mkdir -p /var/run/pulse && chown -R pulse:pulse /var/run/pulse
+
 # ── Vérification binaires proto-SMSC ──────────────────────────────────────────
 RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
     echo "proto-smsc binaries OK" || \
