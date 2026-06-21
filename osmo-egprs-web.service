@@ -1,0 +1,22 @@
+[Unit]
+Description=osmo_egprs Operations Console (web dashboard)
+Documentation=https://github.com/bbaranoff/osmo-egprs-weB
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/osmo-egprs-web
+Environment=HTTP_PORT=8080
+Environment=OSMO_NATIVE=1
+Environment=OSMO_OP_IDS=1
+Environment=PULSE_SERVER=unix:/var/run/pulse/native
+Environment=AUDIO_SOURCE=gsm_audio.monitor
+ExecStart=/usr/local/bin/node /opt/osmo-egprs-web/server.js --verbose
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osmo-egprs-web
+
+[Install]
+WantedBy=multi-user.target

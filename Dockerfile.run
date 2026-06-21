@@ -56,32 +56,10 @@ RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-lin
 # Dépendances JS (ws) — node_modules est versionné dans le repo, on (re)installe
 # pour garantir la cohérence ; non-fatal si déjà présent / réseau absent.
 RUN cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
-# Unit systemd (mêmes valeurs que le service déployé à chaud dans le container).
-RUN printf '%s\n' \
-    '[Unit]' \
-    'Description=osmo_egprs Operations Console (web dashboard)' \
-    'Documentation=https://github.com/bbaranoff/osmo-egprs-weB' \
-    'After=network.target' \
-    '' \
-    '[Service]' \
-    'Type=simple' \
-    'WorkingDirectory=/opt/osmo-egprs-web' \
-    'Environment=HTTP_PORT=8080' \
-    'Environment=OSMO_NATIVE=1' \
-    'Environment=OSMO_OP_IDS=1' \
-    'Environment=PULSE_SERVER=unix:/var/run/pulse/native' \
-    'Environment=AUDIO_SOURCE=gsm_audio.monitor' \
-    'ExecStart=/usr/local/bin/node /opt/osmo-egprs-web/server.js --verbose' \
-    'Restart=on-failure' \
-    'RestartSec=3' \
-    'StandardOutput=journal' \
-    'StandardError=journal' \
-    'SyslogIdentifier=osmo-egprs-web' \
-    '' \
-    '[Install]' \
-    'WantedBy=multi-user.target' \
-    > /etc/systemd/system/osmo-egprs-web.service && \
-    ln -sf /etc/systemd/system/osmo-egprs-web.service \
+# Unit systemd (fichier versionné dans le repo osmo_egprs, source unique).
+# Le START reste géré par start-direct.sh (`systemctl restart osmo-egprs-web`).
+COPY osmo-egprs-web.service /etc/systemd/system/osmo-egprs-web.service
+RUN ln -sf /etc/systemd/system/osmo-egprs-web.service \
         /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service
 
 # ── Scripts ────────────────────────────────────────────────────────────────────
