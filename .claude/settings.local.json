@@ -27,7 +27,15 @@
       "Bash(ps -eo pid,ppid,user,pcpu,pmem,etime,comm,args --sort=-pcpu)",
       "Bash(ps -eo pid,user,pcpu,args)",
       "Bash(sudo grep -rEn \"use_pty|requiretty|!use_pty\" /etc/sudoers /etc/sudoers.d/)",
-      "Bash(sudo -V)"
+      "Bash(sudo -V)",
+      "Bash(bash -n setup_osmo_egprs.sh)",
+      "Bash(npm run *)",
+      "Bash(node -e ' *)",
+      "Bash(sudo grep -nE \"includedir|use_pty\" /etc/sudoers)",
+      "Bash(tty)",
+      "Bash(echo \"tty hôte courant : $\\(tty 2>/dev/null || echo none\\)\")",
+      "Bash(sudo sh -c 'tty || echo none')",
+      "Bash(echo \"sous sudo        : $\\(sudo sh -c 'tty || echo none'\\)\")"
     ]
   }
 }
