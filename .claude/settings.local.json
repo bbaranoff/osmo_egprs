@@ -15,7 +15,14 @@
       "Bash(sudo ip netns del osmo-test-host)",
       "Bash(sudo docker exec osmo-operator-1 sh -c 'ip netns add osmo-test-ctr 2>&1; echo \"exit=$?\"; ip netns list 2>&1; ip netns del osmo-test-ctr 2>/dev/null')",
       "Bash(sudo docker exec osmo-operator-1 sh -c ' *)",
-      "Bash(bash -n start-direct.sh)"
+      "Bash(bash -n start-direct.sh)",
+      "Bash(sudo docker cp start-direct.sh osmo-operator-1:/opt/GSM/osmo_egprs/start-direct.sh)",
+      "Bash(sudo bash -c 'echo \"TERM=$TERM\"; echo \"LANG=$LANG\"; echo \"LC_ALL=${LC_ALL:-<unset>}\"; echo \"LINES=${LINES:-<unset>} COLUMNS=${COLUMNS:-<unset>}\"; locale 2>&1 | head -3')",
+      "Bash(sudo grep -rEi \"env_reset|env_keep|TERM\" /etc/sudoers /etc/sudoers.d/)",
+      "Bash(sudo docker exec osmo-operator-1 bash -c 'echo \"TERM=$TERM\"; echo \"LANG=${LANG:-<unset>} LC_ALL=${LC_ALL:-<unset>}\"; locale 2>&1 | head -2; ls -la /usr/bin/whiptail; whiptail -v')",
+      "Bash(sudo docker run --rm osmocom-run bash -c ' *)",
+      "Bash(cd *)",
+      "Bash(sudo docker run --rm --entrypoint bash osmocom-run -c 'grep -nE \"NO_MENU\" /opt/GSM/osmo_egprs/start-direct.sh | head')"
     ]
   }
 }

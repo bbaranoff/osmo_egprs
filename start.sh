@@ -42,6 +42,9 @@ WAN_SIP_BASE=5080
 WAN_RTP_BASE=20000
 WAN_RTP_PER_OP=500
 PHY_MODE="faketrx"   # faketrx | virtphy
+# Choix passés au start-direct.sh DANS le conteneur via le handoff (NO_MENU=1),
+# pour éviter les menus whiptail laggy en docker exec -ti. Fixés sur l'HÔTE.
+HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
@@ -729,14 +732,14 @@ start_bridge_mode() {
         fi
     fi
 
-    # ── PHY / RAN / Encryption : DÉLÉGUÉS à start-direct.sh ─────────────────
-    # Le menu radio (RAN : faketrx/virtphy/Calypso QEMU/…) et le chiffrement A5
-    # sont désormais choisis DANS le conteneur par start-direct.sh (menu CORE/RAN).
-    # start.sh ne fait plus que créer le(s) conteneur(s) avec un cœur no-process,
-    # puis passer la main à start-direct.sh (handoff qemu, cf. fin de cette fonction).
+    # ── RAN / Encryption : choisis SUR L'HÔTE (whiptail rapide) ────────────
+    # Auparavant délégués au menu de start-direct.sh DANS le conteneur, mais la
+    # navigation whiptail y est laggy (PTY docker exec). On collecte donc le
+    # pipeline Calypso + le chiffrement ici, et on les passe au conteneur via le
+    # handoff avec NO_MENU=1 (cf. fin de cette fonction) → zéro menu conteneur.
     PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
     ENCRYPTION="${ENCRYPTION:-a5 1}"
-    echo -e "  ${CYAN}[*] PHY/RAN/chiffrement délégués à start-direct.sh (menu CORE/RAN)${NC}"
+    choose_ran_host
     fi   # ── fin des prompts interactifs (intégralement sautés en PoC QEMU) ──
     # ── Détection IP hôte pour Linphone ────────────────────────────────────
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
@@ -1005,7 +1008,12 @@ start_bridge_mode() {
     if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
         local _qemu_container; _qemu_container=$(op_container 1)
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
-        exec docker exec -ti "$_qemu_container" bash -c "cd /opt/GSM/osmo_egprs && ./start-direct.sh"
+        echo -e "  ${CYAN}[*] pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hôte, NO_MENU)${NC}"
+        # NO_MENU=1 + MODE/QEMU_CHOICE/ENCRYPTION passés depuis l'hôte → start-direct.sh
+        # ne lance AUCUN menu whiptail dans le conteneur (navigation flèches laggy
+        # en docker exec -ti). Les choix ont déjà été faits par choose_ran_host.
+        exec docker exec -ti "$_qemu_container" bash -c \
+            "cd /opt/GSM/osmo_egprs && NO_MENU=1 MODE=qemu QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' ENCRYPTION='${ENCRYPTION}' ./start-direct.sh"
     fi
 }
 
@@ -1118,6 +1126,28 @@ choose_build_mode() {
         quick)  QUICK=1 ;;
         normal) QUICK=0 ;;
     esac
+}
+
+# Menu RAN (pipeline Calypso QEMU + chiffrement A5) fait SUR L'HÔTE — whiptail
+# rapide. Les choix sont passés au start-direct.sh du conteneur (NO_MENU=1), ce
+# qui évite les menus whiptail en docker exec -ti (navigation flèches laggy via
+# le PTY docker). Fixe HANDOFF_QEMU_CHOICE et ENCRYPTION.
+choose_ran_host() {
+    HANDOFF_QEMU_CHOICE=$(wt_menu "RAN — Pipeline QEMU Calypso" \
+        "Pipeline radio (conteneur de l'opérateur) :" \
+        "full-grgsm"  "gr-gsm = le DSP (défaut, validé)" \
+        "start-clean" "Pipeline historique (start-clean.sh)" \
+        "full"        "full radio + vrai c54x (WIP)" \
+        "shunt"       "DSP shunt canned (bissection FBSB)" \
+        "bare"        "QEMU + osmocon only" \
+        "free"        "menu complet run.sh (--menu)") || exit 1
+    local e
+    e=$(wt_menu "Chiffrement A5" "Chiffrement :" \
+        "1" "A5/1 — chiffrement legacy (défaut)" \
+        "0" "A5/0 — pas de chiffrement" \
+        "2" "A5/2 — (cassé, usage test)") || exit 1
+    case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 1" ;; esac
+    echo -e "  ${GREEN}[RAN] pipeline=${CYAN}${HANDOFF_QEMU_CHOICE}${NC}${GREEN} chiffrement=${CYAN}${ENCRYPTION}${NC}"
 }
 
 choose_network_mode() {

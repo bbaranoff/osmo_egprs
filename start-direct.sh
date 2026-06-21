@@ -291,6 +291,12 @@ ns_create() {
     ip netns exec "$nsn" ip link set "$vethp" up
     ip netns exec "$nsn" ip route replace default via 172.20.0.1 2>/dev/null || true
 }
+# Vrai si on tourne DANS un conteneur (docker/containerd/k8s).
+in_container() {
+    [ -f /.dockerenv ] && return 0
+    grep -qa 'docker\|containerd\|kubepods' /proc/1/cgroup 2>/dev/null
+}
+
 # Vérifie qu'on peut créer un network namespace. Échoue dans un conteneur non
 # privilégié : /run/netns ne peut pas être rendu partagé (mount --make-shared
 # refusé) même avec CAP_SYS_ADMIN. Donne un message actionnable plutôt que le
@@ -1194,10 +1200,21 @@ _ask_mobile_mode() {
 CORE_TOPO="mono"
 choose_core() {
     local t
-    t=$(wt_menu "CORE — cœur réseau" "Topologie du cœur :" \
-        "mono"  "Mono-opérateur (1 cœur osmocom)" \
-        "multi" "Multi-opérateurs SS7 (netns + inter-STP)") \
-        || { echo "Annulé."; exit 1; }
+    if in_container; then
+        # Dans un conteneur : multi-op netns impossible (mount --make-shared
+        # /run/netns refusé). On n'offre QUE mono. Le multi-op avec opérateurs
+        # distants se lance depuis l'HÔTE via ./start.sh virtual (déjà fait si on
+        # arrive ici par le handoff de start.sh — la stack multi-op tourne déjà).
+        t=$(wt_menu "CORE — cœur réseau (conteneur)" \
+            "Topologie (multi-op = ./start.sh virtual sur l'hôte) :" \
+            "mono" "Mono-opérateur — RAN/Calypso de CE conteneur") \
+            || { echo "Annulé."; exit 1; }
+    else
+        t=$(wt_menu "CORE — cœur réseau" "Topologie du cœur :" \
+            "mono"  "Mono-opérateur (1 cœur osmocom)" \
+            "multi" "Multi-opérateurs SS7 (netns + inter-STP)") \
+            || { echo "Annulé."; exit 1; }
+    fi
     CORE_TOPO="$t"
     if [ "$t" = "multi" ]; then
         # Le multi-op natif repose sur les network namespaces : impossible dans un
