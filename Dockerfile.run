@@ -33,7 +33,7 @@ RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/
 RUN rm -rf /opt/GSM/firmware
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
 # ── Repo du lab + interface web ──────────────────────────────────────────────
-RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && \
+RUN rm -rf /opt/GSM/osmo_egprs && git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && \
     cd /opt/GSM/osmo_egprs && git checkout test
 RUN git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
 # ── Scripts ────────────────────────────────────────────────────────────────────
@@ -82,7 +82,5 @@ RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 RUN pip install matplotlib
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 RUN cp /opt/GSM/qemu-src/si_bridge.py /opt/GSM/si_bridge.py
-RUN git clone https://github.com/bbaranoff/osmo-egprs-web /opt/GSM/osmo-egprs-web
-RUN rm -rf /opt/GSM/osmo_egprs && git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && cd /opt/GSM/osmo_egprs && git checkout test
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]
