@@ -32,6 +32,10 @@ RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/
     /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
 RUN rm -rf /opt/GSM/firmware
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
+# ── Repo du lab + interface web ──────────────────────────────────────────────
+RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && \
+    cd /opt/GSM/osmo_egprs && git checkout test
+RUN git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
 # ── Scripts ────────────────────────────────────────────────────────────────────
 COPY scripts/* /scripts/
 RUN chmod +x /scripts/*.sh
