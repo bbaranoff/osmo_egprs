@@ -254,8 +254,8 @@ audio_bridge() {
         [ -f /run/host-audio.pid ] && kill -- "-$(cat /run/host-audio.pid)" 2>/dev/null || true
         setsid sh -c '
           while true; do
-            parec -d gsm_audio.monitor --format=s16le --rate=8000 --channels=1 \
-              | paplay --server='"${relay}"' --raw --format=s16le --rate=8000 --channels=1
+            parec -d gsm_audio.monitor --latency-msec=30 --format=s16le --rate=8000 --channels=1 \
+              | paplay --server='"${relay}"' --latency-msec=250 --raw --format=s16le --rate=8000 --channels=1
             sleep 1
           done' >/var/log/osmocom/host-audio.log 2>&1 &
         echo $! > /run/host-audio.pid

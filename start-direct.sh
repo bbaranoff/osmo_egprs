@@ -45,6 +45,12 @@ MOBILE_MODE="${MOBILE_MODE:-combined}" # combined | split (1 process mobile par 
 # Choix pipeline Calypso (run.sh racine) — fixé par le menu qemu
 QEMU_CHOICE="${QEMU_CHOICE:-start-clean}"  # start-clean | full-grgsm | full | shunt | shunt-ipc | bridge | bare | free
 INTER_STP_IP="172.20.0.10"
+# SMS inter-WAN (vers un serveur osmo_egprs distant). Si WAN_REMOTE_IP est posé,
+# setup_sms_bridge injecte les routes WAN (préfixe → op distant → IP) dans
+# sms-routing.conf avant de lancer sms-interop-relay.py. Hérité de start.sh.
+WAN_REMOTE_IP="${WAN_REMOTE_IP:-}"
+WAN_PREFIX="${WAN_PREFIX:-66}"
+WAN_N_REMOTE="${WAN_N_REMOTE:-1}"
 
 # Contrat d'env pour le mode combiné (à honorer dans qemu-src/start-clean.sh) :
 #   QEMU_ATTACH_TRX=1  NO_LOCAL_BTS=1  NO_LOCAL_TRX=1
@@ -419,6 +425,38 @@ feed_hlr() {
 # Utilisé par le mode hybride ET les modes cœur (faketrx/noproc/virtphy/hw).
 # NB multi-op (netns) : NON appelé ici — /tmp/sendmt_socket + relay:7890 sont
 #     partagés (pas d'isolation /tmp entre netns) → collision. Cf. run_multi_op.
+# Injecte les routes SMS inter-WAN dans un sms-routing.conf LOCAL (équivalent
+# natif de setup-wan-sms.sh, sans docker exec). Ajoute, de façon idempotente :
+#   • [operators] : <100+j> = <REMOTE_IP>   (l'op distant j → IP serveur distant)
+#   • [routes]    : <prefix><msisdn> = <100+j>   (ex. 6610001 → op distant 1)
+# Les blocs sont insérés DANS leur section (avant [relay], sinon ignorés par le
+# relay) et bornés par des marqueurs pour pouvoir être ré-injectés sans doublon.
+inject_wan_sms_routes() {
+    local conf="$1" prefix="$2" remote_ip="$3" n_remote="$4" j ms msisdn wan_op_id
+    [ -f "$conf" ] || { echo -e "  ${YELLOW}[sms-wan] $conf absent — routes WAN non ajoutées${NC}"; return 0; }
+    # Purge d'éventuels blocs WAN précédents (deux ranges indépendants).
+    sed -i -e '/# WAN-OP-START/,/# WAN-OP-END/d' -e '/# WAN-RT-START/,/# WAN-RT-END/d' "$conf" 2>/dev/null || true
+    local tmp_ops tmp_rt; tmp_ops=$(mktemp); tmp_rt=$(mktemp)
+    { echo "# WAN-OP-START"
+      for j in $(seq 1 "$n_remote"); do echo "$((100 + j)) = ${remote_ip}"; done
+      echo "# WAN-OP-END"; } > "$tmp_ops"
+    { echo "# WAN-RT-START — serveur distant ${remote_ip} (préfixe ${prefix})"
+      for j in $(seq 1 "$n_remote"); do
+          wan_op_id=$((100 + j))
+          echo "${prefix}${j}0000 = ${wan_op_id}"
+          for ms in $(seq 1 8); do msisdn=$(( j * 10000 + ms )); echo "${prefix}${msisdn} = ${wan_op_id}"; done
+      done
+      echo "# WAN-RT-END"; } > "$tmp_rt"
+    # Insère chaque bloc juste après l'en-tête de SA section (reste dans la section).
+    awk -v opsf="$tmp_ops" -v rtf="$tmp_rt" '
+        { print }
+        /^\[operators\]/ { while ((getline l < opsf) > 0) print l; close(opsf) }
+        /^\[routes\]/    { while ((getline l < rtf)  > 0) print l; close(rtf) }
+    ' "$conf" > "${conf}.wan" && mv "${conf}.wan" "$conf"
+    rm -f "$tmp_ops" "$tmp_rt"
+    echo -e "  ${GREEN}[sms-wan] routes WAN → ${remote_ip} (préfixe ${prefix}, ${n_remote} op distant(s))${NC}"
+}
+
 setup_sms_bridge() {
     local op_id="${1:-1}" n_ms="${2:-1}"
     local sms_setup="$HERE/scripts/sms-routing-setup.sh"
@@ -438,6 +476,12 @@ setup_sms_bridge() {
             echo -e "  ${YELLOW}[sms] génération sms-routing.conf échouée — conf existant conservé${NC}"
         fi
         rm -rf "$sms_tmp"
+    fi
+    # ── SMS inter-WAN : injecte les routes vers le serveur distant AVANT le relay,
+    #    pour que sms-interop-relay.py les charge dès son démarrage. Gardé sur
+    #    WAN_REMOTE_IP : sans WAN configuré, rien n'est ajouté.
+    if [ -n "${WAN_REMOTE_IP:-}" ]; then
+        inject_wan_sms_routes "$sms_conf" "${WAN_PREFIX:-66}" "$WAN_REMOTE_IP" "${WAN_N_REMOTE:-1}"
     fi
     pkill -f 'proto-smsc-daemon' 2>/dev/null || true   # purge doublons résiduels
     local smsc_sh="/etc/osmocom/smsc-start.sh"; [ -x "$smsc_sh" ] || smsc_sh="$HERE/scripts/smsc-start.sh"
@@ -623,6 +667,32 @@ ensure_pulse() {
 # Lancé en session tmux DÉTACHÉE 'gapk' : survit aux 'exec' (start-clean.sh /
 # tmux attach) des modes qemu/hybride et poll jusqu'à ce que le MGW soit up.
 # Idempotent (relance la session), non-fatal. AUDIO=0 → désactivé.
+# Pont voix conteneur → hôte : parec(gsm_audio.monitor) | paplay(--server=relai).
+# run.sh (no-process) tente ce pont AVANT que PulseAudio soit prêt (course →
+# "PulseAudio injoignable après 30s" → pont jamais lancé → VOIX MUETTE dans docker).
+# On le (re)lance ICI, après ensure_pulse (sink gsm_audio garanti up). Idempotent,
+# gated sur HOST_AUDIO_RELAY (posé par start.sh = tcp:<gw>:4713).
+ensure_host_audio() {
+    local relay="${HOST_AUDIO_RELAY:-}"
+    [ -n "$relay" ] || return 0
+    if ! pactl --server="$relay" info >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}[host-audio] relai ${relay} injoignable — pont voix non lancé${NC}"; return 0
+    fi
+    pkill -f "paplay --server=${relay}" 2>/dev/null || true          # idempotent
+    [ -f /run/host-audio.pid ] && kill -- "-$(cat /run/host-audio.pid)" 2>/dev/null || true
+    # parec lit le pulse LOCAL (gsm_audio.monitor) ; paplay pousse vers l'hôte.
+    # --latency-msec : capture courte (30ms) + lecture TAMPONNÉE (250ms) pour
+    # absorber la gigue (ordonnancement/TCP/2 horloges pulse) — sinon voix HACHÉE.
+    setsid env PULSE_SERVER="unix:${PULSE_SOCK}" sh -c '
+      while true; do
+        parec -d gsm_audio.monitor --latency-msec=30 --format=s16le --rate=8000 --channels=1 \
+          | paplay --server='"${relay}"' --latency-msec=250 --raw --format=s16le --rate=8000 --channels=1
+        sleep 1
+      done' >"${LOG_DIR}/host-audio.log" 2>&1 &
+    echo $! > /run/host-audio.pid
+    echo -e "  ${GREEN}[host-audio] pont voix parec|paplay → hôte (${relay})${NC}"
+}
+
 ensure_gapk() {
     [ "${AUDIO:-1}" = "1" ] || return 0
     command -v tmux      >/dev/null 2>&1 || { echo -e "  ${YELLOW}[gapk] tmux absent — bridge audio non lancé${NC}"; return 0; }
@@ -634,6 +704,7 @@ ensure_gapk() {
     tmux new-session -d -s gapk \
         "GAPK_ALSA_DEV=gsm_out PULSE_SERVER=unix:${PULSE_SOCK} bash '$gapk_sh' auto gsmfr gsm_out 2>&1 | tee ${LOG_DIR}/gapk-auto.log"
     echo -e "  ${GREEN}[gapk] auto lancé (RTP MGW → sink gsm_audio) — tmux 'gapk', log ${LOG_DIR}/gapk-auto.log${NC}"
+    ensure_host_audio   # (re)lance le pont voix → hôte maintenant que pulse+sink sont up
 }
 
 # ══════════════════════════════════════════════════════════════════════════

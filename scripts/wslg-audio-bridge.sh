@@ -101,8 +101,8 @@ mkdir -p /var/log/osmocom
 # Pont supervisé : redémarre si parec/paplay tombe. setsid = nouveau groupe → kill propre.
 setsid sh -c '
   while true; do
-    parec -d gsm_audio.monitor --format=s16le --rate=8000 --channels=1 \
-      | paplay --server='"${RELAY}"' --raw --format=s16le --rate=8000 --channels=1
+    parec -d gsm_audio.monitor --latency-msec=30 --format=s16le --rate=8000 --channels=1 \
+      | paplay --server='"${RELAY}"' --latency-msec=250 --raw --format=s16le --rate=8000 --channels=1
     sleep 1
   done' >/var/log/osmocom/host-audio.log 2>&1 &
 echo $! > /run/host-audio.pid

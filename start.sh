@@ -1013,8 +1013,15 @@ start_bridge_mode() {
         # NO_MENU=1 + MODE/QEMU_CHOICE/ENCRYPTION passés depuis l'hôte → start-direct.sh
         # ne lance AUCUN menu whiptail dans le conteneur (navigation flèches laggy
         # en docker exec -ti). Les choix ont déjà été faits par choose_ran_host.
+        # WAN_* : si WAN activé, transmis pour que setup_sms_bridge injecte les
+        # routes SMS inter-WAN (vers le serveur distant) dans le run faketrx+qemu.
+        local _wan_env=""
+        if [ "$WAN_ENABLED" = "true" ]; then
+            _wan_env="WAN_REMOTE_IP='${WAN_REMOTE_IP}' WAN_PREFIX='${WAN_PREFIX}' WAN_N_REMOTE='${WAN_N_REMOTE:-$n_operators}'"
+            echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (préfixe ${WAN_PREFIX})${NC}"
+        fi
         exec docker exec -ti "$_qemu_container" bash -c \
-            "cd /opt/GSM/osmo_egprs && NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' ENCRYPTION='${ENCRYPTION}' ./start-direct.sh"
+            "cd /opt/GSM/osmo_egprs && NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' ENCRYPTION='${ENCRYPTION}' ${_wan_env} ./start-direct.sh"
     fi
 }
 
