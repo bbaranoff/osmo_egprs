@@ -20,7 +20,8 @@ RUN mkdir -p \
     /var/log/osmocom
 
 RUN apt-get update && apt-get install -y --no-install-recommends telnet nano iproute2 tmux \
-    libasound2-plugins pulseaudio-utils psmisc whiptail git tcpdump && \
+    libasound2-plugins pulseaudio-utils psmisc whiptail git tcpdump \
+    ca-certificates curl xz-utils && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Patch fake_trx : forcer TRXD v0 ─────────────────────────────────────────
@@ -36,6 +37,53 @@ RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
 RUN rm -rf /opt/GSM/osmo_egprs && git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && \
     cd /opt/GSM/osmo_egprs
 RUN rm -rf /opt/osmo-egprs-web && git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
+
+# ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
+# Le dashboard /opt/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
+# local, pas de docker) et est servi sur :8080. Le DÉMARRAGE est géré par
+# start-direct.sh (`systemctl restart osmo-egprs-web`) — ici on ne fait
+# qu'INSTALLER le runtime + les dépendances + le unit (enable au boot).
+ARG NODE_VERSION=v20.20.2
+RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz" \
+        -o /tmp/node.tar.xz && \
+    mkdir -p /opt/node && \
+    tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 && \
+    rm -f /tmp/node.tar.xz && \
+    ln -sf /opt/node/bin/node /usr/local/bin/node && \
+    ln -sf /opt/node/bin/npm  /usr/local/bin/npm && \
+    ln -sf /opt/node/bin/npx  /usr/local/bin/npx && \
+    node --version
+# Dépendances JS (ws) — node_modules est versionné dans le repo, on (re)installe
+# pour garantir la cohérence ; non-fatal si déjà présent / réseau absent.
+RUN cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
+# Unit systemd (mêmes valeurs que le service déployé à chaud dans le container).
+RUN printf '%s\n' \
+    '[Unit]' \
+    'Description=osmo_egprs Operations Console (web dashboard)' \
+    'Documentation=https://github.com/bbaranoff/osmo-egprs-weB' \
+    'After=network.target' \
+    '' \
+    '[Service]' \
+    'Type=simple' \
+    'WorkingDirectory=/opt/osmo-egprs-web' \
+    'Environment=HTTP_PORT=8080' \
+    'Environment=OSMO_NATIVE=1' \
+    'Environment=OSMO_OP_IDS=1' \
+    'Environment=PULSE_SERVER=unix:/var/run/pulse/native' \
+    'Environment=AUDIO_SOURCE=gsm_audio.monitor' \
+    'ExecStart=/usr/local/bin/node /opt/osmo-egprs-web/server.js --verbose' \
+    'Restart=on-failure' \
+    'RestartSec=3' \
+    'StandardOutput=journal' \
+    'StandardError=journal' \
+    'SyslogIdentifier=osmo-egprs-web' \
+    '' \
+    '[Install]' \
+    'WantedBy=multi-user.target' \
+    > /etc/systemd/system/osmo-egprs-web.service && \
+    ln -sf /etc/systemd/system/osmo-egprs-web.service \
+        /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service
+
 # ── Scripts ────────────────────────────────────────────────────────────────────
 COPY scripts/* /scripts/
 RUN chmod +x /scripts/*.sh
