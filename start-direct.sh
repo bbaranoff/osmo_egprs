@@ -275,7 +275,13 @@ ns_create() {
     local i=$1 nsn vethh vethp bb priv
     nsn=$(op_netns "$i"); vethh="vop${i}"; vethp="vop${i}p"
     bb=$(op_backbone_ip "$i"); priv=$(op_private_ip "$i")
-    ip netns add "$nsn" 2>/dev/null || true
+    if ! ip netns list 2>/dev/null | awk '{print $1}' | grep -qx "$nsn"; then
+        local _err; _err=$(ip netns add "$nsn" 2>&1) || true
+        if ! ip netns list 2>/dev/null | awk '{print $1}' | grep -qx "$nsn"; then
+            echo -e "  ${RED}✗ ip netns add ${nsn} : ${_err}${NC}" >&2
+            return 1
+        fi
+    fi
     ip netns exec "$nsn" ip link set lo up
     ip link show "$vethh" &>/dev/null || ip link add "$vethh" type veth peer name "$vethp"
     ip link set "$vethh" master "$BRIDGE"; ip link set "$vethh" up
@@ -284,6 +290,30 @@ ns_create() {
     ip netns exec "$nsn" ip addr add "${priv}/24" dev "$vethp" 2>/dev/null || true
     ip netns exec "$nsn" ip link set "$vethp" up
     ip netns exec "$nsn" ip route replace default via 172.20.0.1 2>/dev/null || true
+}
+# Vérifie qu'on peut créer un network namespace. Échoue dans un conteneur non
+# privilégié : /run/netns ne peut pas être rendu partagé (mount --make-shared
+# refusé) même avec CAP_SYS_ADMIN. Donne un message actionnable plutôt que le
+# cryptique « Cannot open network namespace » émis plus tard par netns exec.
+netns_preflight() {
+    local probe="osmo-op-probe-$$" err
+    err=$(ip netns add "$probe" 2>&1) && : || :
+    if ip netns list 2>/dev/null | awk '{print $1}' | grep -qx "$probe"; then
+        ip netns del "$probe" 2>/dev/null || true
+        return 0
+    fi
+    echo -e "${RED}✗ Impossible de créer un network namespace.${NC}" >&2
+    [ -n "$err" ] && echo -e "  ${YELLOW}${err}${NC}" >&2
+    if [ -f /.dockerenv ] || grep -qa 'docker\|containerd\|kubepods' /proc/1/cgroup 2>/dev/null; then
+        echo -e "  ${YELLOW}Cause : exécution DANS un conteneur — /run/netns non partageable${NC}" >&2
+        echo -e "  ${CYAN}→ Le mode multi-op netns ('virtual') doit tourner sur l'HÔTE :${NC}" >&2
+        echo -e "      ${CYAN}sudo ./start-direct.sh virtual${NC}" >&2
+        echo -e "  ${CYAN}→ Ou multi-op containerisé (1 conteneur + réseau docker / opérateur) :${NC}" >&2
+        echo -e "      ${CYAN}sudo ./start.sh virtual${NC}" >&2
+    else
+        echo -e "  ${CYAN}→ Lancer en root (sudo) sur un hôte Linux avec iproute2.${NC}" >&2
+    fi
+    return 1
 }
 ns_destroy_all() {
     local nsn
@@ -1038,6 +1068,7 @@ run_single_op() {
 run_multi_op() {
     local n_operators=$N_OPERATORS ms=$MS_PER_OP i
     [ "$n_operators" -ge 1 ] || { echo -e "${RED}N_OPERATORS invalide${NC}"; exit 1; }
+    netns_preflight || exit 1
     detect_host_ip
     ensure_tun
     echo -e "${GREEN}Multi-op SS7 natif : ${CYAN}${n_operators} op × ${ms} MS${NC} (netns)${NC}"

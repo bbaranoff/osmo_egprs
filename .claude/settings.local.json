@@ -13,7 +13,8 @@
       "Bash(sudo ip netns add osmo-test-host)",
       "Bash(echo \"exit=$?\")",
       "Bash(sudo ip netns del osmo-test-host)",
-      "Bash(sudo docker exec osmo-operator-1 sh -c 'ip netns add osmo-test-ctr 2>&1; echo \"exit=$?\"; ip netns list 2>&1; ip netns del osmo-test-ctr 2>/dev/null')"
+      "Bash(sudo docker exec osmo-operator-1 sh -c 'ip netns add osmo-test-ctr 2>&1; echo \"exit=$?\"; ip netns list 2>&1; ip netns del osmo-test-ctr 2>/dev/null')",
+      "Bash(sudo docker exec osmo-operator-1 sh -c ' *)"
     ]
   }
 }
