@@ -500,7 +500,19 @@ ensure_pulse() {
             pactl load-module module-null-sink sink_name=gsm_audio \
                 format=s16le rate=8000 channels=1 \
                 sink_properties=device.description=GSM_Audio >/dev/null 2>&1 || true
-        echo -e "  ${GREEN}[audio] PulseAudio déjà actif (sink gsm_audio assuré)${NC}"; return 0
+        # Dédoublonnage : sur une PipeWire/Pulse PARTAGÉE entre containers, chaque
+        # ensure_pulse charge son propre module-null-sink gsm_audio → doublons.
+        # parec (flux /audio du dashboard) lit alors le monitor d'un sink que gapk
+        # n'alimente PAS → audio muet pour les clients distants (navigateur/Windows ;
+        # en local l'hôte entend via le module-loopback vers ses enceintes, d'où
+        # « ça marche sur Linux mais pas sur Windows »). On garde UN seul gsm_audio
+        # (le 1er module) et on décharge les suivants.
+        pactl list short modules 2>/dev/null \
+            | awk '/module-null-sink/ && /sink_name=gsm_audio/ {print $1}' \
+            | tail -n +2 \
+            | while read -r _m; do [ -n "$_m" ] && pactl unload-module "$_m" >/dev/null 2>&1 \
+                && echo -e "  ${YELLOW}[audio] sink gsm_audio en double déchargé (module $_m)${NC}"; done
+        echo -e "  ${GREEN}[audio] PulseAudio déjà actif (sink gsm_audio unique assuré)${NC}"; return 0
     fi
 
     # 1. Installer pulseaudio si absent (le binaire démon, pas que les clients)
