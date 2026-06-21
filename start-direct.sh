@@ -38,6 +38,12 @@ LOG_DIR="${LOG_DIR:-/var/log/osmocom}"
 N_OPERATORS="${N_OPERATORS:-2}"
 MS_PER_OP="${MS_PER_OP:-8}"
 MS_COUNT="${MS_COUNT:-1}"          # MS (abonnés HLR) en mono-op core
+# Modes scripts/run.sh (cœur osmocom) — surchargables / fixés par le menu osmocom
+PHY_MODE="${PHY_MODE:-faketrx}"        # faketrx | virtphy | trx(hw)
+RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"  # 1 = cœur seul (configs + HLR), pas de radio/mobile
+MOBILE_MODE="${MOBILE_MODE:-combined}" # combined | split (1 process mobile par MS)
+# Choix pipeline Calypso (run.sh racine) — fixé par le menu qemu
+QEMU_CHOICE="${QEMU_CHOICE:-start-clean}"  # start-clean | full-grgsm | full | shunt | shunt-ipc | bridge | bare | free
 INTER_STP_IP="172.20.0.10"
 
 # Contrat d'env pour le mode combiné (à honorer dans qemu-src/start-clean.sh) :
@@ -327,6 +333,7 @@ start_core_native() {
         HOST_IP="$HOST_IP" SIP_HOST_PORT="$(linphone_sip_port "$op_id")" \
         PULSE_SERVER="${PULSE_SERVER:-}" \
         PHY_MODE="$PHY_MODE" \
+        MOBILE_MODE="$MOBILE_MODE" \
         ALSA_OUTPUT="$ALSA_OUTPUT" ALSA_INPUT="$ALSA_INPUT" \
         ${EXTRA_ENV:-} \
         bash "$run_sh" > "${LOG_DIR}/run-op${op_id}.log" 2>&1 < /dev/null &
@@ -944,6 +951,8 @@ run_single_op() {
     # ici, sinon double-cœur + collision STP. On passe juste la main.
     local self_contained=0 post="none"
     case "$mode" in
+        # osmocom : PHY_MODE/RUN_NO_PROCESS/MOBILE_MODE déjà fixés (menu ou env).
+        osmocom)       : "${PHY_MODE:=faketrx}" "${RUN_NO_PROCESS:=0}" "${MOBILE_MODE:=combined}"; post="none" ;;
         noproc)        PHY_MODE="faketrx"; RUN_NO_PROCESS=1; post="none" ;;
         faketrx)       PHY_MODE="faketrx"; RUN_NO_PROCESS=0; post="none" ;;
         virtphy)       PHY_MODE="virtphy"; RUN_NO_PROCESS=0; post="none" ;;
@@ -959,20 +968,42 @@ run_single_op() {
     # ── Modes qemu : passthrough pur vers le pipeline auto-suffisant ────────
     if [ "$self_contained" = "1" ]; then
         [ -d "$QEMU_SRC" ] || { echo -e "${RED}qemu-src introuvable : ${QEMU_SRC}${NC}"; exit 1; }
-        ensure_gapk   # bridge audio MGW RTP → sink gsm_audio (avant l'exec start-clean.sh)
+        ensure_gapk      # bridge audio MGW RTP → sink gsm_audio (avant l'exec)
         ensure_iq_fifo   # FIFO live I/Q avant l'init QEMU (sinon shunt -> fichier régulier)
-        echo -e "  ${YELLOW}[$mode] pipeline auto-suffisant : osmo-start.sh + HLR + radio gérés par qemu-src/run.sh${NC}"
-        echo -e "  ${CYAN}[*] exec qemu-src/start-clean.sh (terminal courant)${NC}"
+        export ENCRYPTION   # propagé au pipeline qemu (start-clean.sh / run.sh)
         cd "$QEMU_SRC"
-        if [ "$post" = "qemu-attach" ]; then
-            echo -e "  ${YELLOW}[combiné] fake_trx partagé @ ${TRX_BIND}:${TRX_BASE_PORT}${NC}"
-            echo -e "  ${YELLOW}           contrat : QEMU_ATTACH_TRX/NO_LOCAL_BTS/NO_LOCAL_TRX${NC}"
-            exec env \
-                QEMU_ATTACH_TRX=1 NO_LOCAL_BTS=1 NO_LOCAL_TRX=1 \
-                TRX_REMOTE="$TRX_BIND" TRX_BASE_PORT="$TRX_BASE_PORT" \
-                ./start-clean.sh
-        fi
-        exec ./start-clean.sh
+        local _runsh="$QEMU_SRC/run.sh"; [ -f "$_runsh" ] || _runsh="$HERE/run.sh"
+        echo -e "  ${YELLOW}[$mode] pipeline auto-suffisant : osmo-start.sh + HLR + radio gérés par le pipeline QEMU${NC}"
+        # QEMU_CHOICE (menu Calypso) : start-clean.sh historique, ou run.sh racine
+        # avec un CALYPSO_MODE, ou run.sh --menu (free).
+        case "${QEMU_CHOICE:-start-clean}" in
+            start-clean)
+                echo -e "  ${CYAN}[*] exec start-clean.sh (terminal courant)${NC}"
+                if [ "$post" = "qemu-attach" ]; then
+                    echo -e "  ${YELLOW}[combiné] fake_trx partagé @ ${TRX_BIND}:${TRX_BASE_PORT}${NC}"
+                    echo -e "  ${YELLOW}           contrat : QEMU_ATTACH_TRX/NO_LOCAL_BTS/NO_LOCAL_TRX${NC}"
+                    exec env \
+                        QEMU_ATTACH_TRX=1 NO_LOCAL_BTS=1 NO_LOCAL_TRX=1 \
+                        TRX_REMOTE="$TRX_BIND" TRX_BASE_PORT="$TRX_BASE_PORT" \
+                        ./start-clean.sh
+                fi
+                exec ./start-clean.sh
+                ;;
+            free)
+                [ -f "$_runsh" ] || { echo -e "${RED}run.sh introuvable (${_runsh})${NC}"; exit 1; }
+                echo -e "  ${CYAN}[*] exec run.sh --menu (menu Calypso 4-niveaux)${NC}"
+                exec bash "$_runsh" --menu
+                ;;
+            full|full-grgsm|shunt|shunt-ipc|bridge|bare)
+                [ -f "$_runsh" ] || { echo -e "${RED}run.sh introuvable (${_runsh})${NC}"; exit 1; }
+                echo -e "  ${CYAN}[*] exec run.sh (CALYPSO_MODE=${QEMU_CHOICE})${NC}"
+                exec env CALYPSO_MODE="${QEMU_CHOICE}" bash "$_runsh"
+                ;;
+            *)
+                echo -e "  ${YELLOW}QEMU_CHOICE inconnu (${QEMU_CHOICE}) → start-clean.sh${NC}"
+                exec ./start-clean.sh
+                ;;
+        esac
     fi
 
     # ── Modes cœur osmo_egprs (noproc/faketrx/virtphy/hw) ──────────────────
@@ -1108,34 +1139,123 @@ pre_start() {
 # ── Menu whiptail (optionnel) ───────────────────────────────────────────────
 _validate_int() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
 
+# Demande le nombre de MS (abonnés HLR) — partagé par les modes cœur.
+_ask_ms_count() {
+    MS_COUNT=$(wt_input "MS" "Nombre de MS / abonnés HLR (1-64) :" "$MS_COUNT") || exit 1
+    _validate_int "$MS_COUNT" 1 64 || MS_COUNT=1
+    N_MS="$MS_COUNT"
+}
+
+# combined | split (lancement des MS) — partagé par les RAN faketrx/virtphy.
+_ask_mobile_mode() {
+    local mm
+    mm=$(wt_menu "Mobile (MS)" "Lancement des MS :" \
+        "combined" "combined — MS groupés (défaut)" \
+        "split"    "split — 1 process mobile par MS") || exit 1
+    MOBILE_MODE="$mm"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# PARTIE 1/2 — CORE (cœur réseau : osmo-start HLR/MSC/BSC, topologie, chiffrement)
+# ════════════════════════════════════════════════════════════════════════════
+# CORE_TOPO = mono | multi. Fixe N_OPERATORS/MS_PER_OP (multi) ou MS_COUNT (mono)
+# + ENCRYPTION. Ne lance rien : la combinaison avec le RAN se fait dans choose_mode.
+CORE_TOPO="mono"
+choose_core() {
+    local t
+    t=$(wt_menu "CORE — cœur réseau" "Topologie du cœur :" \
+        "mono"  "Mono-opérateur (1 cœur osmocom)" \
+        "multi" "Multi-opérateurs SS7 (netns + inter-STP)") \
+        || { echo "Annulé."; exit 1; }
+    CORE_TOPO="$t"
+    if [ "$t" = "multi" ]; then
+        N_OPERATORS=$(wt_input "Multi-op" "Nombre d'opérateurs (1-36) :" "$N_OPERATORS") || exit 1
+        _validate_int "$N_OPERATORS" 1 36 || N_OPERATORS=2
+        MS_PER_OP=$(wt_input "Multi-op" "MS par opérateur (1-64) :" "$MS_PER_OP") || exit 1
+        _validate_int "$MS_PER_OP" 1 64 || MS_PER_OP=8
+    else
+        _ask_ms_count
+    fi
+    choose_encryption
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# PARTIE 2/2 — RAN (accès radio : faketrx / virtphy / Calypso QEMU / SDR)
+# ════════════════════════════════════════════════════════════════════════════
+# Combine avec le CORE choisi : fixe MODE + PHY_MODE/RUN_NO_PROCESS/MOBILE_MODE
+# (ou MODE=qemu/faketrx-qemu via choose_calypso_mode). Dépend de CORE_TOPO :
+# en multi-op, seuls les RAN faketrx/virtphy s'appliquent (Calypso = auto-suffisant
+# mono-op).
+choose_ran() {
+    local r
+    if [ "$CORE_TOPO" = "multi" ]; then
+        r=$(wt_menu "RAN — accès radio (multi-op)" "PHY par opérateur :" \
+            "faketrx" "fake_trx + trxcon + mobile" \
+            "virtphy" "osmo-bts-virtual + virtphy") \
+            || { echo "Annulé."; exit 1; }
+        PHY_MODE="$r"; MODE="virtual"
+        _ask_mobile_mode
+        return
+    fi
+    r=$(wt_menu "RAN — accès radio" "Accès radio :" \
+        "none"     "Aucun — cœur seul (no-process)" \
+        "faketrx"  "fake_trx + trxcon + mobile" \
+        "virtphy"  "osmo-bts-virtual + virtphy" \
+        "qemu"     "Calypso QEMU (modem émulé — pipeline run.sh)" \
+        "hw"       "SDR physique (net-host)") \
+        || { echo "Annulé."; exit 1; }
+    case "$r" in
+        none)    MODE="osmocom"; PHY_MODE=faketrx; RUN_NO_PROCESS=1; MOBILE_MODE=combined ;;
+        faketrx) MODE="osmocom"; PHY_MODE=faketrx; RUN_NO_PROCESS=0; _ask_mobile_mode ;;
+        virtphy) MODE="osmocom"; PHY_MODE=virtphy; RUN_NO_PROCESS=0; _ask_mobile_mode ;;
+        qemu)    choose_calypso_mode ;;   # fixe MODE=qemu|faketrx-qemu + QEMU_CHOICE
+        hw)      MODE="hw"; PHY_MODE="${PHY_MODE:-trx}"; RUN_NO_PROCESS=0 ;;
+    esac
+}
+
+# Sous-menu PIPELINE CALYPSO QEMU : tous les modes du run.sh racine (CALYPSO_MODE)
+# + le pipeline historique start-clean.sh + le combiné faketrx-qemu.
+choose_calypso_mode() {
+    QEMU_CHOICE=$(wt_menu "Pipeline QEMU Calypso" "Pipeline / mode radio :" \
+        "start-clean"  "Pipeline historique (start-clean.sh)" \
+        "full-grgsm"   "run.sh : gr-gsm = le DSP (défaut, validé)" \
+        "full"         "run.sh : full radio + vrai c54x (WIP)" \
+        "shunt"        "run.sh : DSP shunt canned (bissection FBSB)" \
+        "shunt-ipc"    "run.sh : DSP shunt + radio chain" \
+        "bridge"       "run.sh : legacy bridge.py Python" \
+        "bare"         "run.sh : QEMU + osmocon only" \
+        "faketrx-qemu" "COMBINÉ : fake_trx vivant + Calypso QEMU" \
+        "free"         "run.sh : menu complet 4-niveaux (--menu)") \
+        || { echo "Annulé."; exit 1; }
+    # faketrx-qemu reste un mode dédié (handle_faketrx_qemu) ; les autres = mode qemu.
+    if [ "$QEMU_CHOICE" = "faketrx-qemu" ]; then MODE="faketrx-qemu"; else MODE="qemu"; fi
+}
+
+# Choix du chiffrement A5 (repris de start.sh) — fixe ENCRYPTION (template config).
+choose_encryption() {
+    local e
+    e=$(wt_menu "Encryption A5" "Chiffrement :" \
+        "0" "A5/0 — pas de chiffrement" \
+        "1" "A5/1 — chiffrement legacy" \
+        "2" "A5/2 — (cassé, usage test)") || exit 1
+    case "$e" in
+        1) ENCRYPTION="a5 1" ;;
+        2) ENCRYPTION="a5 2" ;;
+        *) ENCRYPTION="a5 0" ;;
+    esac
+    echo -e "  ${GREEN}Encryption : ${ENCRYPTION}${NC}"
+}
+
 choose_mode() {
     export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
     case "${TERM:-}" in dumb|"") export TERM=xterm-256color ;; esac
 
-    MODE=$(wt_menu "Mode" "Lancer en natif :" \
-        "qemu"         "PoC QEMU Calypso (défaut)" \
-        "faketrx"      "fake_trx + trxcon + mobile" \
-        "virtphy"      "osmo-bts-virtual + virtphy" \
-        "noproc"       "cœur seul (configs + HLR)" \
-        "faketrx-qemu" "COMBINÉ : fake_trx vivant + Calypso QEMU" \
-        "hw"           "SDR physique (net-host)" \
-        "virtual"      "Multi-opérateurs SS7 (netns)") || { echo "Annulé."; exit 1; }
-
-    case "$MODE" in
-        virtual)
-            N_OPERATORS=$(wt_input "Multi-op" "Nombre d'opérateurs (1-36) :" "$N_OPERATORS") || exit 1
-            _validate_int "$N_OPERATORS" 1 36 || N_OPERATORS=2
-            MS_PER_OP=$(wt_input "Multi-op" "MS par opérateur (1-64) :" "$MS_PER_OP") || exit 1
-            _validate_int "$MS_PER_OP" 1 64 || MS_PER_OP=8
-            ;;
-        qemu|faketrx-qemu)
-            : # pipeline auto-suffisant : le MS = le Calypso émulé, pas de prompt
-            ;;
-        *)  # noproc / faketrx / virtphy / hw : nombre d'abonnés HLR
-            MS_COUNT=$(wt_input "MS" "Nombre de MS / abonnés HLR (1-64) :" "$MS_COUNT") || exit 1
-            _validate_int "$MS_COUNT" 1 64 || MS_COUNT=1
-            ;;
-    esac
+    # Deux parties séquentielles (modèle télécom CN + RAN) :
+    #   1) CORE — topologie cœur (mono/multi-op) + nb MS + chiffrement A5
+    #   2) RAN  — accès radio (none/faketrx/virtphy/Calypso QEMU/SDR)
+    # La combinaison fixe MODE + PHY_MODE/RUN_NO_PROCESS/MOBILE_MODE/QEMU_CHOICE.
+    choose_core
+    choose_ran
 }
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1195,8 +1315,8 @@ pkill -f 'fft-web/fft_web.py' 2>/dev/null || true
 rm -f "${RUN_DIR}/fft-web.pid" 2>/dev/null || true
 
 case "$MODE" in
-    qemu|faketrx|virtphy|noproc|faketrx-qemu|hw) run_single_op "$MODE" ;;
-    virtual)                                     run_multi_op ;;
+    osmocom|qemu|faketrx|virtphy|noproc|faketrx-qemu|hw) run_single_op "$MODE" ;;
+    virtual)                                             run_multi_op ;;
     *) echo -e "${RED}Mode inconnu : ${MODE}${NC}"
-       echo "  modes : qemu faketrx virtphy noproc faketrx-qemu hw virtual"; exit 1 ;;
+       echo "  modes : osmocom qemu faketrx virtphy noproc faketrx-qemu hw virtual"; exit 1 ;;
 esac

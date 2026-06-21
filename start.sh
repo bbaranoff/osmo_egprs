@@ -718,35 +718,14 @@ start_bridge_mode() {
         fi
     fi
 
-    # ── PHY Mode ──
-    local phy_choice
-    phy_choice=$(wt_menu "PHY Mode" "Mode PHY :" \
-        "1" "faketrx     — fake_trx + trxcon (TRXD, défaut)" \
-        "2" "virtphy     — osmo-bts-virtual + virtphy (EXPERIMENTAL)" \
-        "3" "no-process  — core seul (configs + HLR)" \
-        "4" "qemu        — no-process puis qemu-src/run.sh") || exit 1
-    BRIDGE_NO_PROCESS=0
-    BRIDGE_QEMU=0
-    case "$phy_choice" in
-        2) PHY_MODE="virtphy" ;;
-        3) PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1 ;;
-        4) PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1 ;;
-        *) PHY_MODE="faketrx" ;;
-    esac
-    echo -e "  ${GREEN}PHY : ${PHY_MODE}${NC}$([ "$BRIDGE_NO_PROCESS" = 1 ] && echo -e "  ${YELLOW}(no-process)${NC}")$([ "$BRIDGE_QEMU" = 1 ] && echo -e "  ${CYAN}(qemu)${NC}")"
-
-    # ── Encryption ──
-    local enc_choice
-    enc_choice=$(wt_menu "Encryption A5" "Choix du chiffrement :" \
-        "0" "A5/0 — pas de chiffrement" \
-        "1" "A5/1 — chiffrement legacy" \
-        "2" "A5/2 — (cassé, usage test)") || exit 1
-    case "$enc_choice" in
-        1) ENCRYPTION="a5 1" ;;
-        2) ENCRYPTION="a5 2" ;;
-        *) ENCRYPTION="a5 0" ;;
-    esac
-    echo -e "  ${GREEN}Encryption : ${ENCRYPTION}${NC}"
+    # ── PHY / RAN / Encryption : DÉLÉGUÉS à start-direct.sh ─────────────────
+    # Le menu radio (RAN : faketrx/virtphy/Calypso QEMU/…) et le chiffrement A5
+    # sont désormais choisis DANS le conteneur par start-direct.sh (menu CORE/RAN).
+    # start.sh ne fait plus que créer le(s) conteneur(s) avec un cœur no-process,
+    # puis passer la main à start-direct.sh (handoff qemu, cf. fin de cette fonction).
+    PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
+    ENCRYPTION="${ENCRYPTION:-a5 1}"
+    echo -e "  ${CYAN}[*] PHY/RAN/chiffrement délégués à start-direct.sh (menu CORE/RAN)${NC}"
     fi   # ── fin des prompts interactifs (intégralement sautés en PoC QEMU) ──
     # ── Détection IP hôte pour Linphone ────────────────────────────────────
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
@@ -1043,6 +1022,12 @@ start_host_mode() {
     vol_args=$(build_vol_args "$tmpdir")
     alsa_args=$(build_alsa_args)
 
+    # Audio : relai pulse de l'hôte. En --net host le conteneur partage le réseau
+    # de l'hôte → le relai est joignable en 127.0.0.1 (pas via une gateway docker).
+    ensure_host_audio_relay
+    local nethost_relay=""
+    [ -n "$HOST_AUDIO_RELAY" ] && nethost_relay="tcp:127.0.0.1:${WSLG_TCP_PORT}"
+
     # shellcheck disable=SC2086
     docker run -d --rm --name egprs --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW \
@@ -1057,6 +1042,7 @@ start_host_mode() {
         -e INTER_STP_IP="127.0.0.1" \
         -e HOST_IP="${HOST_IP}" -e SIP_HOST_PORT="5060" \
         -e ALSA_OUTPUT="${ALSA_OUTPUT}" -e ALSA_INPUT="${ALSA_INPUT}" \
+        -e HOST_AUDIO_RELAY="${nethost_relay}" \
         $vol_args \
         "$IMAGE_RUN" /root/run.sh
 
