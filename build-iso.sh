@@ -157,7 +157,7 @@ docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
 docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
 docker cp "$CID:/usr/local/include/." "$ROOTFS/usr/local/include/" 2>/dev/null||true
 docker cp "$CID:/opt/GSM"             "$ROOTFS/opt/GSM"     2>/dev/null||true
-# venv python (gr-gsm + bridges) attendu par /opt/GSM/qemu-src/start-clean.sh
+# venv python (gr-gsm + bridges) attendu par /opt/GSM/osmo_egprs/start-direct.sh
 docker cp "$CID:/root/.env"           "$ROOTFS/root/"       2>/dev/null||true
 docker cp "$CID:/etc/osmocom/."       "$ROOTFS/etc/osmocom/" 2>/dev/null||true
 docker cp "$CID:/etc/asterisk/."      "$ROOTFS/etc/asterisk/" 2>/dev/null||true

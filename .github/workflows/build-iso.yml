@@ -116,7 +116,7 @@ jobs:
             sudo dd if=osmo_egprs.iso of=/dev/sdX bs=4M status=progress && sync
 
             # Premier boot (lancement manuel de la stack)
-            /opt/GSM/qemu-src/start-clean.sh
+            /opt/GSM/osmo_egprs/start-direct.sh
             ```
           files: |
             ${{ env.ISO_NAME }}.part-*
