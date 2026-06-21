@@ -68,6 +68,10 @@ linphone_rtp_end()   { echo $(( 30000 + $1 * 200 - 1 )); }
 HOST_IP="127.0.0.1"
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
+# Audio : endpoint TCP du pulse de l'hôte, transmis aux conteneurs (run.sh).
+# Vide tant que le relai n'a pas été ouvert par ensure_host_audio_relay.
+HOST_AUDIO_RELAY=""
+WSLG_TCP_PORT="${WSLG_TCP_PORT:-4713}"
 
 banner() {
     echo -e "${CYAN}"
@@ -207,20 +211,24 @@ build_alsa_args() {
     echo "$alsa_args"
 }
 
-# ── WSLg : faire sortir l'audio du conteneur sur les HP Windows ──────────────
-# Sous WSL2+WSLg, le PulseServer WSLg relaie l'audio vers Windows. On l'expose
-# en TCP côté hôte, puis on ajoute dans le conteneur un tunnel-sink (win_out) +
-# un loopback gsm_audio.monitor -> win_out. Voir scripts/wslg-audio-bridge.sh.
-# No-op silencieux hors WSLg. À appeler APRÈS que le core de l'opérateur soit up
-# (sink gsm_audio créé par run.sh/start-direct.sh).
-setup_wslg_audio() {
-    local container_name="$1"
+# ── Audio hôte : expose le pulse de l'hôte en TCP (idempotent, une fois) ──────
+# Le pont audio réel (parec|paplay gsm_audio.monitor → hôte) est lancé DANS le
+# conteneur par scripts/run.sh::audio_bridge, qui lit HOST_AUDIO_RELAY. Ici on
+# ne fait qu'OUVRIR le relai côté hôte (WSLg→Windows en WSL, ou pulse de session
+# en Linux natif) et publier l'endpoint dans la globale HOST_AUDIO_RELAY.
+# Voir scripts/wslg-audio-bridge.sh.
+ensure_host_audio_relay() {
+    [ -n "${HOST_AUDIO_RELAY_DONE:-}" ] && return 0   # une seule fois
+    HOST_AUDIO_RELAY_DONE=1
     local bridge="$(dirname "$0")/scripts/wslg-audio-bridge.sh"
-    [ -S /mnt/wslg/PulseServer ] || return 0          # pas WSLg → rien à faire
-    [ -x "$bridge" ] || { echo -e "  ${YELLOW}[wslg-audio] $bridge introuvable${NC}" >&2; return 0; }
-    echo -e "  ${GREEN}[*] Audio WSLg -> Windows (${container_name})${NC}"
-    "$bridge" host-relay || true
-    "$bridge" container "$container_name" || true
+    [ -x "$bridge" ] || { echo -e "  ${YELLOW}[host-audio] $bridge introuvable${NC}" >&2; return 0; }
+    if "$bridge" host-relay; then
+        HOST_AUDIO_RELAY="tcp:${INTER_NET_GATEWAY}:${WSLG_TCP_PORT:-4713}"
+        echo -e "  ${GREEN}[host-audio] relai prêt → ${HOST_AUDIO_RELAY}${NC}"
+    else
+        HOST_AUDIO_RELAY=""
+        echo -e "  ${YELLOW}[host-audio] relai non ouvert — fallback carte locale dans le conteneur${NC}"
+    fi
 }
 # ══════════════════════════════════════════════════════════════════════════════
 # Build
@@ -844,6 +852,8 @@ start_bridge_mode() {
             echo -e "  WAN        : SIP ${sip_port} RTP ${rtp_start}-${rtp_end}"
         fi
         docker rm -f "$container_name" 2>/dev/null || true
+        # Audio : ouvre le relai pulse de l'hôte AVANT le conteneur (run.sh le lit)
+        ensure_host_audio_relay
         # shellcheck disable=SC2086
         docker run -d \
             --rm \
@@ -873,6 +883,7 @@ start_bridge_mode() {
             -e HOST_IP="${HOST_IP}" \
             -e SIP_HOST_PORT="${lsip_port}" \
             -e PHY_MODE="${PHY_MODE}" \
+            -e HOST_AUDIO_RELAY="${HOST_AUDIO_RELAY}" \
             $vol_args \
             "$IMAGE_RUN" \
             sleep infinity
@@ -894,8 +905,8 @@ start_bridge_mode() {
         done
         echo -e " ${GREEN}✓${NC}"
 
-        # Audio WSLg -> Windows (no-op hors WSLg)
-        setup_wslg_audio "$container_name"
+        # Audio : le pont parec|paplay est lancé DANS le conteneur par run.sh
+        # (audio_bridge, via HOST_AUDIO_RELAY). Rien à faire ici.
 
         # Feed HLR
         echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${total_subs} abonnés)...${NC}"

@@ -225,6 +225,53 @@ inject_handover() {
     echo -e "  ${GREEN}✓ Handover algo 2${NC}"
 }
 
+# ── Bridge audio UNIVERSEL ───────────────────────────────────────────────────
+# gapk (RTP réseau → sink gsm_audio) + sortie son. Appelé en mode faketrx/virtphy
+# ET en mode no-process (qemu) — c'est CE bridge qui manquait en qemu (run.sh
+# sortait avant [6c] → gsm_audio muet → « pas d'audio en qemu »).
+#
+# Sortie : si le pulse de l'HÔTE est joignable en TCP (relai ouvert par start.sh,
+# = WSLg→Windows en WSL, = pulse de session en Linux natif), on fait un pont
+# direct parec|paplay (1 seule horloge, pas de dérive → pas de son « pété »).
+# Sinon, fallback loopback local vers le sink par défaut du conteneur (carte).
+audio_bridge() {
+    pactl info >/dev/null 2>&1 || { echo -e "  ${YELLOW}PulseAudio indisponible — bridge audio non lancé${NC}"; return 0; }
+
+    # gapk : RTP réseau → sink gsm_audio
+    local GAPK=/scripts/gapk-start.sh; [ -f "$GAPK" ] || GAPK=/etc/osmocom/gapk-start.sh
+    if [ -f "$GAPK" ]; then
+        run_in_tmux "gapk" "GAPK_ALSA_DEV=gsm_out bash '$GAPK' auto gsmfr gsm_out"
+        echo -e "  ${GREEN}✓ gapk auto (RTP réseau → gsm_audio)${NC}"
+    else
+        echo -e "  ${YELLOW}gapk-start.sh absent — pas de bridge RTP${NC}"
+    fi
+
+    # Sortie vers le pulse de l'hôte si le relai TCP est ouvert (HOST_AUDIO_RELAY
+    # est positionné par start.sh quand le relai a été activé : tcp:<gw>:4713).
+    local relay="${HOST_AUDIO_RELAY:-}"
+    if [ -n "$relay" ] && pactl --server="$relay" info >/dev/null 2>&1; then
+        pkill -f "paplay --server=${relay}" 2>/dev/null || true
+        [ -f /run/host-audio.pid ] && kill -- "-$(cat /run/host-audio.pid)" 2>/dev/null || true
+        setsid sh -c '
+          while true; do
+            parec -d gsm_audio.monitor --format=s16le --rate=8000 --channels=1 \
+              | paplay --server='"${relay}"' --raw --format=s16le --rate=8000 --channels=1
+            sleep 1
+          done' >/var/log/osmocom/host-audio.log 2>&1 &
+        echo $! > /run/host-audio.pid
+        echo -e "  ${GREEN}✓ pont audio parec|paplay → hôte (${relay})${NC}"
+    else
+        # Fallback natif sans relai : loopback vers le sink par défaut (carte).
+        if ! pactl list short modules 2>/dev/null | grep -q 'source=gsm_audio.monitor'; then
+            pactl load-module module-loopback source=gsm_audio.monitor latency_msec=20 >/dev/null 2>&1 \
+                && echo -e "  ${GREEN}✓ loopback gsm_audio → sink par défaut (carte)${NC}" \
+                || echo -e "  ${YELLOW}loopback non chargé (pas de sortie son ?)${NC}"
+        else
+            echo -e "  ${GREEN}✓ loopback gsm_audio déjà actif${NC}"
+        fi
+    fi
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -269,6 +316,10 @@ if [ "$RUN_NO_PROCESS" = "1" ]; then
     if [ -f "$PULSE_SETUP" ]; then
         "$PULSE_SETUP" || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo)${NC}"
     fi
+    # Bridge audio AUSSI en no-process : sans ça, gapk n'est jamais lancé et le
+    # pipeline qemu n'a aucun audio (bug « pas de son en qemu »).
+    echo -e "${GREEN}=== Bridge audio (no-process / qemu) ===${NC}"
+    audio_bridge
     echo ""
     echo -e "${GREEN}Core Osmocom prêt (no-process). PHY/mobile/asterisk/smsc NON lancés.${NC}"
     echo -e "  tmux : ${CYAN}tmux -S ${TMUX_SOCKET} attach -t ${SESSION}${NC}"
@@ -374,29 +425,9 @@ if [ -f "$PULSE_SETUP" ]; then
 fi
 echo ""
 
-# ── [6c] Bridge audio : gapk auto (RTP réseau → sink gsm_audio) + loopback ────
-#    gsm_audio.monitor → carte son par défaut (haut-parleurs). Non-fatal.
-echo -e "${GREEN}=== [6c/10] Bridge audio (gapk + loopback) ===${NC}"
-if pactl info >/dev/null 2>&1; then
-    GAPK=/scripts/gapk-start.sh; [ -f "$GAPK" ] || GAPK=/etc/osmocom/gapk-start.sh
-    if [ -f "$GAPK" ]; then
-        # auto : surveille le MGW et bridge RTP↔ALSA(gsm_out=sink gsm_audio)
-        run_in_tmux "gapk" "GAPK_ALSA_DEV=gsm_out bash '$GAPK' auto gsmfr gsm_out"
-        echo -e "  ${GREEN}✓ gapk auto (RTP réseau → gsm_audio)${NC}"
-    else
-        echo -e "  ${YELLOW}gapk-start.sh absent — pas de bridge RTP${NC}"
-    fi
-    # loopback gsm_audio.monitor → sink par défaut (carte), dédupliqué
-    if ! pactl list short modules 2>/dev/null | grep -q 'source=gsm_audio.monitor'; then
-        pactl load-module module-loopback source=gsm_audio.monitor latency_msec=20 >/dev/null 2>&1 \
-            && echo -e "  ${GREEN}✓ loopback gsm_audio → carte son${NC}" \
-            || echo -e "  ${YELLOW}loopback non chargé (pas de sink de sortie ?)${NC}"
-    else
-        echo -e "  ${GREEN}✓ loopback déjà actif${NC}"
-    fi
-else
-    echo -e "  ${YELLOW}PulseAudio indisponible — bridge audio non lancé${NC}"
-fi
+# ── [6c] Bridge audio : gapk (RTP → gsm_audio) + sortie vers l'hôte ───────────
+echo -e "${GREEN}=== [6c/10] Bridge audio (gapk + sortie hôte) ===${NC}"
+audio_bridge
 echo ""
 
 echo -e "${GREEN}=== [7/10] Mobile ===${NC}"
