@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n start.sh)",
+      "Bash(sudo find / -name \"server.js\" -path \"*egprs*\")",
+      "Bash(sudo find / -type d -name \"osmo-egprs-web\")",
+      "Bash(sudo docker exec osmo-operator-1 bash -c 'ls -la /opt/osmo-egprs-web 2>/dev/null; pgrep -af \"parec|server.js|lame|ffmpeg|node\" 2>/dev/null')",
+      "Bash(sudo docker exec osmo-operator-1 bash -c \"grep -nE \\\\\"/audio|parec|lame|ffmpeg|spawn|Content-Type|bitrate|-b:a|--bitrate|mpeg|mp3|chunk|highWaterMark|flush\\\\\" /opt/osmo-egprs-web/server.js\")",
+      "Bash(sudo docker exec osmo-operator-1 bash -c \"grep -nE \\\\\"AUDIO_BITRATE|AUDIO_SOURCE|AUDIO_RATE|=.*8000\\\\\" /opt/osmo-egprs-web/server.js | head; echo '---752-792---'; sed -n '752,792p' /opt/osmo-egprs-web/server.js; echo '---979-995---'; sed -n '979,995p' /opt/osmo-egprs-web/server.js\")",
+      "Bash(sudo docker exec osmo-operator-1 bash -c \"ffmpeg -hide_banner -version 2>/dev/null | head -1; ffmpeg -hide_banner -encoders 2>/dev/null | grep -iE 'mp3|opus|aac' | head\")",
+      "Bash(sudo docker exec osmo-operator-1 bash -c \"grep -nE 'AUDIO_RATE|process.env.AUDIO' /opt/osmo-egprs-web/server.js\")",
+      "Bash(sudo docker exec osmo-operator-1 bash -c ' *)",
+      "Bash(sudo ip netns add osmo-test-host)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(sudo ip netns del osmo-test-host)",
+      "Bash(sudo docker exec osmo-operator-1 sh -c 'ip netns add osmo-test-ctr 2>&1; echo \"exit=$?\"; ip netns list 2>&1; ip netns del osmo-test-ctr 2>/dev/null')"
+    ]
+  }
+}

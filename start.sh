@@ -738,9 +738,14 @@ start_bridge_mode() {
     echo -e "${GREEN}IP hôte : ${CYAN}${HOST_IP}${NC}  (Linphone)${NC}"
     echo ""
 
-    # ── Réseau backbone ────────────────────────────────────────────────────
-    docker network inspect "$INTER_NET" &>/dev/null || \
-        docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" "$INTER_NET" &>/dev/null
+    # ── Réseau backbone (auto) ─────────────────────────────────────────────
+    if docker network inspect "$INTER_NET" &>/dev/null; then
+        echo -e "  ${CYAN}Réseau backbone ${INTER_NET} déjà présent${NC}"
+    elif docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" "$INTER_NET" &>/dev/null; then
+        echo -e "  ${GREEN}✓ Réseau backbone ${INTER_NET} (${INTER_NET_SUBNET}) créé${NC}"
+    else
+        echo -e "  ${RED}✗ Échec création réseau backbone ${INTER_NET} (${INTER_NET_SUBNET})${NC}"; exit 1
+    fi
 
     # ── SMS Routing ────────────────────────────────────────────────────────
     SMS_ROUTING_DIR=$(mktemp -d)
@@ -792,8 +797,13 @@ start_bridge_mode() {
         echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Privé : ${CYAN}${container_ip}${NC}"
         echo -e "  STP PC     : 1.${i}.2  RCTX : ${rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
 
-        docker network inspect "$net_name" &>/dev/null || \
-            docker network create --subnet="$subnet" --gateway="$gateway" "$net_name" &>/dev/null
+        if docker network inspect "$net_name" &>/dev/null; then
+            echo -e "  Réseau     : ${CYAN}${net_name}${NC} (déjà présent)"
+        elif docker network create --subnet="$subnet" --gateway="$gateway" "$net_name" &>/dev/null; then
+            echo -e "  Réseau     : ${GREEN}✓ ${net_name} (${subnet}) créé${NC}"
+        else
+            echo -e "  ${RED}✗ Échec création réseau ${net_name} (${subnet})${NC}"; exit 1
+        fi
 
         local tmpdir
         tmpdir=$(mktemp -d)
@@ -1112,15 +1122,34 @@ docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
 docker rm -f $(docker ps -aq --filter "name=egprs") 2>/dev/null || true
 docker network ls --filter "name=gsm-" -q | xargs -r docker network rm 2>/dev/null || true
 
-# 1. Mode : QEMU direct par defaut (PAS de menu core/infra/operateurs).
-#    Menu complet (qemu/virtual/hw + prompts) : OSMO_MENU=1 ./start.sh
-if [ "${OSMO_MENU:-0}" = "1" ]; then
-    check_whiptail
-    choose_network_mode
-else
-    NETWORK_MODE="qemu"
-    echo -e "${GREEN}Mode : ${CYAN}qemu${NC} ${YELLOW}(menu desactive — OSMO_MENU=1 pour l'afficher)${NC}"
-fi
+# 1. Sélection du mode.
+#    Priorité : 1er argument explicite > OSMO_MENU > OSMO_MULTI > défaut qemu.
+#      ./start.sh qemu|virtual|hw   → mode direct, sans menu
+#      OSMO_MENU=1   ./start.sh     → menu whiptail complet (qemu/virtual/hw)
+#      OSMO_MULTI=1  ./start.sh     → multi-opérateurs SS7 (bridge) direct
+#      ./start.sh                   → PoC QEMU (défaut, 1 opérateur)
+case "${1:-}" in
+    qemu)    NETWORK_MODE="qemu" ;;
+    virtual) NETWORK_MODE="bridge" ;;
+    hw)      NETWORK_MODE="host" ;;
+    "")
+        if [ "${OSMO_MENU:-0}" = "1" ]; then
+            check_whiptail
+            choose_network_mode
+        elif [ "${OSMO_MULTI:-0}" = "1" ]; then
+            NETWORK_MODE="bridge"
+        else
+            NETWORK_MODE="qemu"
+        fi
+        ;;
+    *) echo -e "${RED}Mode inconnu : '$1' (attendu : qemu|virtual|hw|stop)${NC}"; exit 1 ;;
+esac
+
+# Le mode 'virtual' (bridge) lance les prompts opérateurs + opérateurs distants
+# (WAN interop) via whiptail et crée automatiquement les réseaux docker
+# (gsm-inter + gsm-net-opN). On s'assure donc que whiptail est présent.
+[ "$NETWORK_MODE" = "bridge" ] && check_whiptail
+echo -e "${GREEN}Mode : ${CYAN}${NETWORK_MODE}${NC}${YELLOW}  (qemu|virtual|hw en 1er arg ; OSMO_MENU=1 ; OSMO_MULTI=1)${NC}"
 # 2. Ensuite le restart docker + build
 ./helpers/prepare_host.sh
 build_run_image
