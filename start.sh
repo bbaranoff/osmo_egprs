@@ -216,7 +216,7 @@ build_alsa_args() {
 # ══════════════════════════════════════════════════════════════════════════════
 build_run_image() {
     echo -e "${GREEN}Build de l'image run...${NC}"
-    docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
+    docker build --no-cache --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
 }
 
@@ -353,10 +353,10 @@ apply_config_templates() {
         cp "$f" "$dest/asterisk/"
     done
 
-    # Scripts
-    for s in entrypoint.sh osmo-start.sh status.sh run.sh gapk-start.sh; do
-        [ -f "scripts/$s" ] && cp "scripts/$s" "$dest/osmocom/$s" && chmod +x "$dest/osmocom/$s"
-    done
+    # Scripts — copie TOUT scripts/ (miroir de l'image, qui fait COPY scripts/. /etc/osmocom/)
+    # pour que le montage RÉPERTOIRE de /etc/osmocom (cf. build_vol_args) ne masque aucun script.
+    cp scripts/* "$dest/osmocom/" 2>/dev/null || true
+    chmod +x "$dest/osmocom"/*.sh 2>/dev/null || true
 
     # mobile.cfg
     if [ -f "configs/mobile.cfg.template" ]; then
@@ -459,10 +459,11 @@ apply_config_templates() {
 build_vol_args() {
     local tmpdir=$1
     local vol_args=""
-    for f in "$tmpdir/osmocom"/*.cfg "$tmpdir/osmocom"/*.sh "$tmpdir/osmocom"/*.conf; do
-        [ -f "$f" ] || continue
-        vol_args="$vol_args -v $f:/etc/osmocom/$(basename "$f")"
-    done
+    # Montage RÉPERTOIRE (et non fichier par fichier) : si chaque cfg est monté
+    # individuellement, il devient un point de montage et tout 'mv'/'sed -i'
+    # par-dessus échoue (Device or resource busy). En montant le dossier, les
+    # fichiers à l'intérieur restent des fichiers normaux → éditables.
+    [ -d "$tmpdir/osmocom" ] && vol_args="$vol_args -v $tmpdir/osmocom:/etc/osmocom"
     for f in "$tmpdir/asterisk"/*.conf; do
         [ -f "$f" ] || continue
         vol_args="$vol_args -v $f:/etc/asterisk/$(basename "$f")"
