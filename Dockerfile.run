@@ -19,9 +19,15 @@ RUN mkdir -p \
     /var/run/asterisk \
     /var/log/osmocom
 
-RUN apt-get update && apt-get install -y --no-install-recommends telnet nano iproute2 tmux \
+# tshark -> wireshark-common pose une question debconf (capture non-root) qui
+# bloque un build non-interactif : on y répond « yes » d'avance (preseed) et on
+# force DEBIAN_FRONTEND=noninteractive, puis on donne les caps à dumpcap.
+RUN echo 'wireshark-common wireshark-common/install-setuid boolean true' | debconf-set-selections && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends telnet nano iproute2 tmux \
     libasound2-plugins pulseaudio-utils psmisc whiptail git tcpdump tshark \
     ca-certificates curl xz-utils && \
+    setcap cap_net_raw,cap_net_admin+eip "$(command -v dumpcap)" && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Patch fake_trx : forcer TRXD v0 ─────────────────────────────────────────
