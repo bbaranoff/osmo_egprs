@@ -535,28 +535,40 @@ ensure_pulse() {
             echo 'load-module module-null-sink sink_name=gsm_audio format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Audio' >> "$sp"
     fi
 
-    # 3. Démarrer le démon système
+    # 3. (Re)démarrer le démon système — SÉRIALISÉ
     mkdir -p /var/run/pulse "$LOG_DIR"
-    # Repartir propre : un démon résiduel (lancé avant le patch system.pa, ou un
-    # doublon) tourne sans auth-anonymous → 'pactl' = "Access denied" et un
-    # nouveau démon refuse de démarrer ("Daemon already running"). On ne tue
-    # QUE si pactl est injoignable (on est déjà dans cette branche), donc un
-    # démon sain n'est jamais touché (early-return plus haut).
-    if pgrep -x pulseaudio >/dev/null 2>&1; then
-        echo -e "  ${YELLOW}[audio] démon PulseAudio résiduel/injoignable — redémarrage propre${NC}"
-        pkill -x pulseaudio 2>/dev/null || true
-        local _k=10; while pgrep -x pulseaudio >/dev/null 2>&1 && [ $_k -gt 0 ]; do sleep 0.3; ((_k--)) || true; done
-        pkill -9 -x pulseaudio 2>/dev/null || true
-    fi
-    rm -f /var/run/pulse/pid /var/run/pulse/native 2>/dev/null || true
-    pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 \
-        --log-target="file:${LOG_DIR}/pulse-system.log" >/dev/null 2>&1 || true
-    local r=10
-    while [ $r -gt 0 ]; do pactl info >/dev/null 2>&1 && break; sleep 1; ((r--)) || true; done
+    # ensure_pulse est appelé en parallèle (flux principal + ensure_gapk via la
+    # session tmux 'gapk') → deux 'pulseaudio --system' se lançaient en même
+    # temps et se disputaient /var/run/pulse/native → "bind(): Address already
+    # in use" → le module socket échoue → démon mort → injoignable.
+    # flock garantit UN SEUL (re)démarrage à la fois ; un démon résiduel détenant
+    # un socket périmé (parfois sous un autre uid) est tué et le socket effacé
+    # par root avant le bind.
+    (
+        flock 9
+        if ! pactl info >/dev/null 2>&1; then
+            pkill -x pulseaudio 2>/dev/null || true
+            local _k=10
+            while pgrep -x pulseaudio >/dev/null 2>&1 && [ $_k -gt 0 ]; do sleep 0.3; ((_k--)) || true; done
+            pkill -9 -x pulseaudio 2>/dev/null || true
+            rm -f /var/run/pulse/pid /var/run/pulse/native 2>/dev/null || true
+            chown -R pulse:pulse /var/run/pulse 2>/dev/null || true
+            pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 \
+                --log-target="file:${LOG_DIR}/pulse-system.log" >/dev/null 2>&1 || true
+            local r=10
+            while [ $r -gt 0 ]; do pactl info >/dev/null 2>&1 && break; sleep 1; ((r--)) || true; done
+        fi
+    ) 9>/run/osmo-pulse.lock
+
     if pactl info >/dev/null 2>&1; then
+        pactl list short sinks 2>/dev/null | grep -q gsm_audio || \
+            pactl load-module module-null-sink sink_name=gsm_audio \
+                format=s16le rate=8000 channels=1 \
+                sink_properties=device.description=GSM_Audio >/dev/null 2>&1 || true
         echo -e "  ${GREEN}[audio] PulseAudio prêt (sink gsm_audio) @ ${PULSE_SOCK}${NC}"
     else
         echo -e "  ${YELLOW}[audio] PulseAudio injoignable — audio dégradé${NC}"
+        echo -e "  ${YELLOW}        → voir ${LOG_DIR}/pulse-system.log${NC}"
     fi
 }
 

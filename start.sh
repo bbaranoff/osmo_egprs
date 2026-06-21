@@ -175,22 +175,17 @@ build_alsa_args() {
         fi
     fi
 
-    # PulseAudio socket forwarding
-    local real_user="${SUDO_USER:-$USER}"
-    local real_uid; real_uid=$(id -u "$real_user" 2>/dev/null || echo "")
-    local pulse_sock="/run/user/${real_uid}/pulse/native"
-    local has_pulse="false"
-
-    if [ -n "$real_uid" ] && [ -S "$pulse_sock" ]; then
-        alsa_args="${alsa_args} -v ${pulse_sock}:/run/pulse/native"
-        alsa_args="${alsa_args} -e PULSE_SERVER=unix:/run/pulse/native"
-        local pulse_cookie="/home/${real_user}/.config/pulse/cookie"
-        [ ! -f "$pulse_cookie" ] && pulse_cookie="/home/${real_user}/.pulse-cookie"
-        if [ -f "$pulse_cookie" ]; then
-            alsa_args="${alsa_args} -v ${pulse_cookie}:/root/.config/pulse/cookie"
-        fi
-        has_pulse="true"
-    fi
+    # PulseAudio — CONTENEUR AUTONOME.
+    # On NE monte PAS le socket PulseAudio de l'hôte. Il appartient à
+    # l'utilisateur de session (uid != root) et, bind-monté sur /run/pulse/native,
+    # il masquait le chemin où le démon du conteneur (ensure_pulse, start-direct.sh)
+    # doit créer SON socket → "Device or resource busy" / "Address already in use"
+    # et "Access denied" (on parlait au Pulse de l'hôte, qui refuse l'auth root).
+    # Le conteneur lance son propre démon system-mode (sink gsm_audio) ; parec →
+    # dashboard web lit le monitor. On se contente de pointer PULSE_SERVER vers
+    # le socket local du conteneur.
+    local has_pulse="true"
+    alsa_args="${alsa_args} -e PULSE_SERVER=unix:/run/pulse/native"
 
     # asound.conf : copie depuis configs/
     if [ -f "$src_asound" ]; then
