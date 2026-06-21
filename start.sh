@@ -233,9 +233,20 @@ ensure_host_audio_relay() {
 # ══════════════════════════════════════════════════════════════════════════════
 # Build
 # ══════════════════════════════════════════════════════════════════════════════
+# QUICK=1 : build rapide (réutilise le cache docker, pas de --no-cache).
+# QUICK=0 (défaut) : build complet avec --no-cache (image reconstruite à neuf).
+QUICK="${OSMO_QUICK:-0}"
+# Vrai si le build a été choisi explicitement (arg quick|normal ou OSMO_QUICK) :
+# dans ce cas on NE redemande PAS dans le menu.
+QUICK_EXPLICIT=0; [ -n "${OSMO_QUICK:-}" ] && QUICK_EXPLICIT=1
 build_run_image() {
-    echo -e "${GREEN}Build de l'image run...${NC}"
-    docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
+    if [ "${QUICK:-0}" = "1" ]; then
+        echo -e "${GREEN}Build de l'image run...${NC} ${YELLOW}(quick — cache docker réutilisé)${NC}"
+        docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
+    else
+        echo -e "${GREEN}Build de l'image run...${NC} ${CYAN}(normal — --no-cache)${NC}"
+        docker build --no-cache --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
+    fi
     echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
 }
 
@@ -1094,6 +1105,21 @@ stop_all() {
     disable_user_loopback
 }
 
+# Premier menu : choix du build (quick = cache docker / normal = --no-cache).
+# Fixe QUICK. Sauté si déjà fixé explicitement (arg quick|normal ou OSMO_QUICK).
+choose_build_mode() {
+    [ "${QUICK_EXPLICIT:-0}" = "1" ] && return 0
+    local choice
+    choice=$(wt_menu "Build de l'image" "Comment (re)construire l'image run ?" \
+        "quick"  "Quick — réutilise le cache docker (rapide)" \
+        "normal" "Normal — docker build --no-cache (image à neuf)") \
+        || { echo "Annulé."; exit 1; }
+    case "$choice" in
+        quick)  QUICK=1 ;;
+        normal) QUICK=0 ;;
+    esac
+}
+
 choose_network_mode() {
     local choice
     # Premier menu. Défaut = PoC QEMU (1ʳᵉ entrée = surlignée par whiptail).
@@ -1117,29 +1143,40 @@ banner
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
 
+# Flag de build : 'quick' (cache docker) ou 'normal' (--no-cache, défaut).
+# Peut précéder le mode :  ./start.sh quick            → menu, build rapide
+#                          ./start.sh quick virtual    → bridge, build rapide
+#                          ./start.sh normal           → menu, build --no-cache
+# Ou via env :             OSMO_QUICK=1 ./start.sh
+case "${1:-}" in
+    quick)  QUICK=1; QUICK_EXPLICIT=1; shift ;;
+    normal) QUICK=0; QUICK_EXPLICIT=1; shift ;;
+esac
+
 # Cleanup résiduel
 docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
 docker rm -f $(docker ps -aq --filter "name=egprs") 2>/dev/null || true
 docker network ls --filter "name=gsm-" -q | xargs -r docker network rm 2>/dev/null || true
 
 # 1. Sélection du mode.
-#    Priorité : 1er argument explicite > OSMO_MENU > OSMO_MULTI > défaut qemu.
+#    Priorité : 1er argument explicite > OSMO_MULTI > OSMO_MENU > défaut MENU.
 #      ./start.sh qemu|virtual|hw   → mode direct, sans menu
-#      OSMO_MENU=1   ./start.sh     → menu whiptail complet (qemu/virtual/hw)
+#      ./start.sh                   → menu whiptail complet (qemu/virtual/hw) [DÉFAUT]
 #      OSMO_MULTI=1  ./start.sh     → multi-opérateurs SS7 (bridge) direct
-#      ./start.sh                   → PoC QEMU (défaut, 1 opérateur)
+#      OSMO_MENU=0   ./start.sh     → PoC QEMU direct (ancien défaut, sans menu)
 case "${1:-}" in
     qemu)    NETWORK_MODE="qemu" ;;
     virtual) NETWORK_MODE="bridge" ;;
     hw)      NETWORK_MODE="host" ;;
     "")
-        if [ "${OSMO_MENU:-0}" = "1" ]; then
-            check_whiptail
-            choose_network_mode
-        elif [ "${OSMO_MULTI:-0}" = "1" ]; then
+        if [ "${OSMO_MULTI:-0}" = "1" ]; then
             NETWORK_MODE="bridge"
-        else
+        elif [ "${OSMO_MENU:-1}" = "0" ]; then
             NETWORK_MODE="qemu"
+        else
+            check_whiptail
+            choose_build_mode      # 1er menu : quick / normal (build)
+            choose_network_mode    # 2e menu : qemu / virtual / hw
         fi
         ;;
     *) echo -e "${RED}Mode inconnu : '$1' (attendu : qemu|virtual|hw|stop)${NC}"; exit 1 ;;
@@ -1149,7 +1186,7 @@ esac
 # (WAN interop) via whiptail et crée automatiquement les réseaux docker
 # (gsm-inter + gsm-net-opN). On s'assure donc que whiptail est présent.
 [ "$NETWORK_MODE" = "bridge" ] && check_whiptail
-echo -e "${GREEN}Mode : ${CYAN}${NETWORK_MODE}${NC}${YELLOW}  (qemu|virtual|hw en 1er arg ; OSMO_MENU=1 ; OSMO_MULTI=1)${NC}"
+echo -e "${GREEN}Mode : ${CYAN}${NETWORK_MODE}${NC}  ${GREEN}Build : ${CYAN}$([ "${QUICK:-0}" = "1" ] && echo "quick (cache)" || echo "normal (--no-cache)")${NC}"
 # 2. Ensuite le restart docker + build
 ./helpers/prepare_host.sh
 build_run_image

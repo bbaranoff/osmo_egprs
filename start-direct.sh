@@ -1200,6 +1200,15 @@ choose_core() {
         || { echo "Annulé."; exit 1; }
     CORE_TOPO="$t"
     if [ "$t" = "multi" ]; then
+        # Le multi-op natif repose sur les network namespaces : impossible dans un
+        # conteneur non privilégié. On échoue ICI (avant tout bring-up) avec la
+        # redirection vers le système d'opérateurs (distants) containerisé.
+        netns_preflight || {
+            echo -e "${YELLOW}Pour le multi-opérateur AVEC opérateurs distants (WAN interop),${NC}" >&2
+            echo -e "  utilisez le système containerisé depuis l'hôte :" >&2
+            echo -e "      ${CYAN}sudo ./start.sh virtual${NC}   (puis répondez OUI à « WAN vers un serveur distant »)" >&2
+            exit 1
+        }
         N_OPERATORS=$(wt_input "Multi-op" "Nombre d'opérateurs (1-36) :" "$N_OPERATORS") || exit 1
         _validate_int "$N_OPERATORS" 1 36 || N_OPERATORS=2
         MS_PER_OP=$(wt_input "Multi-op" "MS par opérateur (1-64) :" "$MS_PER_OP") || exit 1
