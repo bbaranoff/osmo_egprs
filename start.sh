@@ -44,6 +44,7 @@ WAN_RTP_PER_OP=500
 PHY_MODE="faketrx"   # faketrx | virtphy
 # Choix passés au start-direct.sh DANS le conteneur via le handoff (NO_MENU=1),
 # pour éviter les menus whiptail laggy en docker exec -ti. Fixés sur l'HÔTE.
+HANDOFF_MODE="${HANDOFF_MODE:-qemu}"               # qemu | faketrx-qemu (combiné)
 HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1008,12 +1009,12 @@ start_bridge_mode() {
     if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
         local _qemu_container; _qemu_container=$(op_container 1)
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
-        echo -e "  ${CYAN}[*] pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hôte, NO_MENU)${NC}"
+        echo -e "  ${CYAN}[*] mode=${HANDOFF_MODE} pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hôte, NO_MENU)${NC}"
         # NO_MENU=1 + MODE/QEMU_CHOICE/ENCRYPTION passés depuis l'hôte → start-direct.sh
         # ne lance AUCUN menu whiptail dans le conteneur (navigation flèches laggy
         # en docker exec -ti). Les choix ont déjà été faits par choose_ran_host.
         exec docker exec -ti "$_qemu_container" bash -c \
-            "cd /opt/GSM/osmo_egprs && NO_MENU=1 MODE=qemu QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' ENCRYPTION='${ENCRYPTION}' ./start-direct.sh"
+            "cd /opt/GSM/osmo_egprs && NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' ENCRYPTION='${ENCRYPTION}' ./start-direct.sh"
     fi
 }
 
@@ -1133,21 +1134,30 @@ choose_build_mode() {
 # qui évite les menus whiptail en docker exec -ti (navigation flèches laggy via
 # le PTY docker). Fixe HANDOFF_QEMU_CHOICE et ENCRYPTION.
 choose_ran_host() {
-    HANDOFF_QEMU_CHOICE=$(wt_menu "RAN — Pipeline QEMU Calypso" \
+    local r
+    r=$(wt_menu "RAN — Pipeline QEMU Calypso" \
         "Pipeline radio (conteneur de l'opérateur) :" \
-        "full-grgsm"  "gr-gsm = le DSP (défaut, validé)" \
-        "start-clean" "Pipeline historique (start-clean.sh)" \
-        "full"        "full radio + vrai c54x (WIP)" \
-        "shunt"       "DSP shunt canned (bissection FBSB)" \
-        "bare"        "QEMU + osmocon only" \
-        "free"        "menu complet run.sh (--menu)") || exit 1
+        "full-grgsm"   "gr-gsm = le DSP (défaut, validé)" \
+        "start-clean"  "Pipeline historique (start-clean.sh)" \
+        "full"         "full radio + vrai c54x (WIP)" \
+        "shunt"        "DSP shunt canned (bissection FBSB)" \
+        "bare"         "QEMU + osmocon only" \
+        "faketrx-qemu" "COMBINÉ : fake_trx vivant + Calypso QEMU" \
+        "free"         "menu complet run.sh (--menu)") || exit 1
+    # Le combiné a son propre MODE (faketrx-qemu) ; les autres sont des pipelines
+    # du MODE qemu (passés via QEMU_CHOICE).
+    if [ "$r" = "faketrx-qemu" ]; then
+        HANDOFF_MODE="faketrx-qemu"; HANDOFF_QEMU_CHOICE="faketrx-qemu"
+    else
+        HANDOFF_MODE="qemu";         HANDOFF_QEMU_CHOICE="$r"
+    fi
     local e
     e=$(wt_menu "Chiffrement A5" "Chiffrement :" \
         "1" "A5/1 — chiffrement legacy (défaut)" \
         "0" "A5/0 — pas de chiffrement" \
         "2" "A5/2 — (cassé, usage test)") || exit 1
     case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 1" ;; esac
-    echo -e "  ${GREEN}[RAN] pipeline=${CYAN}${HANDOFF_QEMU_CHOICE}${NC}${GREEN} chiffrement=${CYAN}${ENCRYPTION}${NC}"
+    echo -e "  ${GREEN}[RAN] mode=${CYAN}${HANDOFF_MODE}${NC}${GREEN} pipeline=${CYAN}${HANDOFF_QEMU_CHOICE}${NC}${GREEN} chiffrement=${CYAN}${ENCRYPTION}${NC}"
 }
 
 choose_network_mode() {

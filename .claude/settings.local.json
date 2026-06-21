@@ -22,7 +22,12 @@
       "Bash(sudo docker exec osmo-operator-1 bash -c 'echo \"TERM=$TERM\"; echo \"LANG=${LANG:-<unset>} LC_ALL=${LC_ALL:-<unset>}\"; locale 2>&1 | head -2; ls -la /usr/bin/whiptail; whiptail -v')",
       "Bash(sudo docker run --rm osmocom-run bash -c ' *)",
       "Bash(cd *)",
-      "Bash(sudo docker run --rm --entrypoint bash osmocom-run -c 'grep -nE \"NO_MENU\" /opt/GSM/osmo_egprs/start-direct.sh | head')"
+      "Bash(sudo docker run --rm --entrypoint bash osmocom-run -c 'grep -nE \"NO_MENU\" /opt/GSM/osmo_egprs/start-direct.sh | head')",
+      "Bash(sudo docker run --rm --entrypoint bash osmocom-run -c 'grep -nE \"faketrx-qemu\\\\\\)\" /opt/GSM/osmo_egprs/start-direct.sh; echo \"--- dispatch case ---\"; grep -nE \"osmocom\\\\|qemu\\\\|faketrx\\\\|virtphy\\\\|noproc\\\\|faketrx-qemu\\\\|hw\\\\\\) \" /opt/GSM/osmo_egprs/start-direct.sh')",
+      "Bash(ps -eo pid,ppid,user,pcpu,pmem,etime,comm,args --sort=-pcpu)",
+      "Bash(ps -eo pid,user,pcpu,args)",
+      "Bash(sudo grep -rEn \"use_pty|requiretty|!use_pty\" /etc/sudoers /etc/sudoers.d/)",
+      "Bash(sudo -V)"
     ]
   }
 }
