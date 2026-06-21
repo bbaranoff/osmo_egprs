@@ -451,6 +451,31 @@ auto_attach_tmux() {
 # on exporte PULSE_SERVER pour run.sh / gapk / pactl.
 #   AUDIO=0 → désactive toute la mise en place audio.
 PULSE_SOCK="/var/run/pulse/native"
+# FIFO live I/Q du shunt DSP : DOIT exister avant l'init QEMU, sinon le shunt
+# (stat/S_ISFIFO dans calypso_dsp_shunt.c) la voit absente -> crée un fichier
+# régulier à la place. Chemin = CALYPSO_SHUNT_IQ_CFILE (calypso.env), défaut
+# /dev/shm/dsp_iq.fifo. mkfifo idempotent ; on ne touche pas un fichier régulier
+# préexistant (rejeu .cfile) -> on ne crée la FIFO que si le chemin est libre ou
+# déjà une FIFO.
+ensure_iq_fifo() {
+    # Chemin = CALYPSO_SHUNT_IQ_CFILE. Pas dans notre env (posé par start-clean.sh
+    # via calypso.env) -> on le relit depuis le calypso.env qui SERA sourcé, pour
+    # rester en phase avec QEMU. Défaut /dev/shm/dsp_iq.fifo.
+    local f="${CALYPSO_SHUNT_IQ_CFILE:-}"
+    if [ -z "$f" ] && [ -f "$QEMU_SRC/calypso.env" ]; then
+        f=$(sed -n 's/^[[:space:]]*CALYPSO_SHUNT_IQ_CFILE=\([^[:space:]#]*\).*/\1/p' "$QEMU_SRC/calypso.env" | tail -n1)
+    fi
+    [ -n "$f" ] || f="/dev/shm/dsp_iq.fifo"
+    if [ -e "$f" ] && [ ! -p "$f" ]; then
+        echo -e "  ${YELLOW}[dsp-shunt] $f existe et n'est PAS une FIFO — laissé tel quel${NC}"
+        return 0
+    fi
+    [ -p "$f" ] && return 0
+    if mkfifo -m 0666 "$f" 2>/dev/null; then
+        echo -e "  ${GREEN}[dsp-shunt] FIFO live I/Q créée : $f${NC}"
+    fi
+}
+
 ensure_pulse() {
     [ "${AUDIO:-1}" = "1" ] || { echo -e "  ${YELLOW}[audio] désactivé (AUDIO=0)${NC}"; return 0; }
 
@@ -735,10 +760,11 @@ BTS1BLOCK
     if grep -qE '^[[:space:]]*ipa unit-id 6002 0' "$bsc_cfg" 2>/dev/null; then
         echo -e "  ${CYAN}[faketrx-qemu] bloc bts 1 déjà présent — skip${NC}"
     elif grep -qE '^msc 0' "$bsc_cfg" 2>/dev/null; then
-        awk -v blk="$bts1_block" '
+        local _bsc_new
+        _bsc_new=$(awk -v blk="$bts1_block" '
             /^msc 0/ && !ins { while ((getline line < blk) > 0) print line; ins=1 }
             { print }
-        ' "$bsc_cfg" > "${bsc_cfg}.tmp" && mv -f "${bsc_cfg}.tmp" "$bsc_cfg"
+        ' "$bsc_cfg") && printf '%s\n' "$_bsc_new" > "$bsc_cfg"
         echo -e "  ${GREEN}[faketrx-qemu] bloc 'bts 1' (unit-id 6002 0, ARFCN 516) ajouté à osmo-bsc.cfg${NC}"
     else
         echo -e "  ${YELLOW}[faketrx-qemu] 'msc 0' introuvable — bts1 non inséré dans osmo-bsc.cfg${NC}"
@@ -757,6 +783,7 @@ BTS1BLOCK
     echo -e "  ${GREEN}[faketrx-qemu] cfg mobile MS#2 → ${ms2_cfg}${NC}"
 
     # ── (e) pipeline QEMU (BTS#0) en arrière-plan via start-clean.sh ──
+    ensure_iq_fifo   # FIFO live I/Q avant l'init QEMU (sinon shunt -> fichier régulier)
     echo -e "  ${YELLOW}[faketrx-qemu] lancement pipeline QEMU (BTS#0) en arrière-plan${NC}"
     ( cd "$QEMU_SRC" && setsid env CALYPSO_NO_ATTACH=1 CALYPSO_ICOUNT=off CALYPSO_AUTO_GEN_DOC=0 \
         CALYPSO_L2_CLIENT=mobile \
@@ -795,11 +822,33 @@ BTS1BLOCK
 
     # ── (j) 2e osmo-bts-trx (cfg dédiée, unit-id 6002, base-port 5820/5720) ──
     echo -e "  ${GREEN}[faketrx-qemu] osmo-bts-trx BTS#1 (cfg ${bts1_cfg})${NC}"
-    setsid osmo-bts-trx -c "$bts1_cfg" > "${LOG_DIR}/bts1.log" 2>&1 < /dev/null &
-    echo $! > "${RUN_DIR}/bts1.pid"
-    sleep 2
-    kill -0 "$(cat "${RUN_DIR}/bts1.pid")" 2>/dev/null \
-        || { echo -e "  ${RED}[faketrx-qemu] osmo-bts-trx BTS#1 a crashé${NC}"; tail -20 "${LOG_DIR}/bts1.log" 2>/dev/null; return 1; }
+    #   Durci contre le race "No clock since TRX was started" : osmo-bts-trx peut
+    #   mourir QUELQUES secondes après le start si fake_trx ne fournit pas l'horloge
+    #   à temps. On exige une fenêtre de stabilité ; si mort (No clock / shutdown),
+    #   on relance jusqu'à BTS1_RETRIES fois.
+    bts1_try=0
+    while :; do
+        bts1_try=$((bts1_try+1))
+        setsid osmo-bts-trx -c "$bts1_cfg" > "${LOG_DIR}/bts1.log" 2>&1 < /dev/null &
+        echo $! > "${RUN_DIR}/bts1.pid"
+        stab="${BTS1_STAB_SECS:-8}"; dead=0
+        while [ "$stab" -gt 0 ]; do
+            kill -0 "$(cat "${RUN_DIR}/bts1.pid")" 2>/dev/null || { dead=1; break; }
+            grep -qE "No clock since TRX|BTS_SHUTDOWN.*Shutting down" "${LOG_DIR}/bts1.log" 2>/dev/null && { dead=1; break; }
+            sleep 1; stab=$((stab-1))
+        done
+        if [ "$dead" -eq 0 ]; then
+            echo -e "  ${GREEN}[faketrx-qemu] osmo-bts-trx BTS#1 stable (essai ${bts1_try})${NC}"
+            break
+        fi
+        kill "$(cat "${RUN_DIR}/bts1.pid")" 2>/dev/null
+        if [ "$bts1_try" -ge "${BTS1_RETRIES:-3}" ]; then
+            echo -e "  ${RED}[faketrx-qemu] osmo-bts-trx BTS#1 KO après ${bts1_try} essais (race No clock)${NC}"
+            tail -20 "${LOG_DIR}/bts1.log" 2>/dev/null; return 1
+        fi
+        echo -e "  ${YELLOW}[faketrx-qemu] osmo-bts-trx BTS#1 mort (No clock) — retry ${bts1_try}/${BTS1_RETRIES:-3}${NC}"
+        sleep 1
+    done
 
     # ── (k) trxcon (flags-only : PAS de 'ue2', PAS de -R/-r) ──
     echo -e "  ${GREEN}[faketrx-qemu] trxcon (-p ${bb_port} -s ${l2sock})${NC}"
@@ -875,6 +924,7 @@ run_single_op() {
     if [ "$self_contained" = "1" ]; then
         [ -d "$QEMU_SRC" ] || { echo -e "${RED}qemu-src introuvable : ${QEMU_SRC}${NC}"; exit 1; }
         ensure_gapk   # bridge audio MGW RTP → sink gsm_audio (avant l'exec start-clean.sh)
+        ensure_iq_fifo   # FIFO live I/Q avant l'init QEMU (sinon shunt -> fichier régulier)
         echo -e "  ${YELLOW}[$mode] pipeline auto-suffisant : osmo-start.sh + HLR + radio gérés par qemu-src/run.sh${NC}"
         echo -e "  ${CYAN}[*] exec qemu-src/start-clean.sh (terminal courant)${NC}"
         cd "$QEMU_SRC"

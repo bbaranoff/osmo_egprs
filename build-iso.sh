@@ -3,13 +3,14 @@
 # Aucun docker build direct dans ce script, tout passe par les scripts existants.
 set -euo pipefail
 
-OUTPUT="osmo_egprs.iso"
+VERSION="${OSMO_ISO_VERSION:-v2}"
+OUTPUT="osmo_egprs-${VERSION}.iso"
 # Répertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
 # space left on device" car le rootfs est volumineux). Overridable via OSMO_ISO_WORK.
 WORK="${OSMO_ISO_WORK:-/var/tmp}/iso-build-$$"
 ROOTFS="$WORK/rootfs"
 ISOROOT="$WORK/isoroot"
-LABEL="OSMO_EGPRS"
+LABEL="OSMO_EGPRS_V2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 NO_CACHE=""
@@ -166,17 +167,34 @@ done
 docker rm "$CID" &>/dev/null
 echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectés"
 
-# ── osmo_egprs : SOURCE à jour depuis GitHub (remplace la copie de l'image) ──
-# La copie docker cp ci-dessus peut être périmée ; on récupère la dernière version
+# ── osmo_egprs : SOURCE à jour depuis GitHub (branche test) ──
+# La copie docker cp ci-dessus peut être périmée ; on récupère la branche test
 # du repo (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh…) dans l'ISO.
-echo -e "${GREEN}[5d/7] git clone osmo_egprs (source à jour)...${NC}"
-if git clone --depth 1 https://github.com/bbaranoff/osmo_egprs /tmp/osmo_egprs.clone 2>&1 | tail -2; then
+EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-test}"
+echo -e "${GREEN}[5d/7] git clone osmo_egprs (branche ${EGPRS_BRANCH})...${NC}"
+if git clone --depth 1 -b "$EGPRS_BRANCH" https://github.com/bbaranoff/osmo_egprs /tmp/osmo_egprs.clone 2>&1 | tail -2; then
     rm -rf "$ROOTFS/opt/GSM/osmo_egprs"
     mv /tmp/osmo_egprs.clone "$ROOTFS/opt/GSM/osmo_egprs"
-    echo -e "  ${GREEN}✓${NC} osmo_egprs cloné depuis GitHub"
+    echo -e "  ${GREEN}✓${NC} osmo_egprs cloné depuis GitHub (${EGPRS_BRANCH})"
 else
     rm -rf /tmp/osmo_egprs.clone
     echo -e "  ${YELLOW}⚠ git clone osmo_egprs échoué (réseau ?) — copie de l'image conservée${NC}"
+fi
+
+# ── qemu-src : checkout LOCAL (branche test, build/qemu-system-arm recompilé) ──
+# La copie docker cp ($CID:/opt/GSM) peut être périmée / sur une autre branche. On
+# écrase qemu-src par le checkout local de la VM, déjà sur 'test' avec le binaire
+# build/ à jour. On retire .git (historique QEMU = lourd, inutile à l'exécution).
+QEMU_SRC_LOCAL="${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}"
+echo -e "${GREEN}[5d/7] qemu-src depuis checkout local (${QEMU_SRC_LOCAL})...${NC}"
+if [ -x "$QEMU_SRC_LOCAL/build/qemu-system-arm" ]; then
+    qbr="$(git -C "$QEMU_SRC_LOCAL" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+    rm -rf "$ROOTFS/opt/GSM/qemu-src"
+    cp -a "$QEMU_SRC_LOCAL" "$ROOTFS/opt/GSM/qemu-src"
+    rm -rf "$ROOTFS/opt/GSM/qemu-src/.git"
+    echo -e "  ${GREEN}✓${NC} qemu-src copié (branche ${qbr}, build/ inclus, .git retiré)"
+else
+    echo -e "  ${YELLOW}⚠ ${QEMU_SRC_LOCAL}/build/qemu-system-arm absent — copie de l'image conservée${NC}"
 fi
 echo -e "${GREEN}[5c/7] Ajustements osmocom dans le rootfs...${NC}"
 echo -e "${GREEN}[5b/7] Patch configs ISO...${NC}"
@@ -856,7 +874,7 @@ EOF
 chmod +x "$XORRISO_WRAP"
 
 grub-mkrescue --xorriso="$XORRISO_WRAP" -o "$OUTPUT" "$ISOROOT" \
-    --product-name "osmo_egprs" -- -volid "$LABEL"
+    --product-name "osmo_egprs $VERSION" -- -volid "$LABEL"
     if command -v isohybrid &>/dev/null; then
     isohybrid --uefi "$OUTPUT"
 fi

@@ -187,7 +187,7 @@ build_alsa_args() {
         local pulse_cookie="/home/${real_user}/.config/pulse/cookie"
         [ ! -f "$pulse_cookie" ] && pulse_cookie="/home/${real_user}/.pulse-cookie"
         if [ -f "$pulse_cookie" ]; then
-            alsa_args="${alsa_args} -v ${pulse_cookie}:/root/.config/pulse/cookie:ro"
+            alsa_args="${alsa_args} -v ${pulse_cookie}:/root/.config/pulse/cookie"
         fi
         has_pulse="true"
     fi
@@ -519,7 +519,7 @@ start_inter_stp() {
         --network "$INTER_NET" \
         --ip "$INTER_STP_IP" \
         --cap-add NET_ADMIN \
-        -v "${inter_cfg}:/etc/osmocom/osmo-stp-interop.cfg:ro" \
+        -v "${inter_cfg}:/etc/osmocom/osmo-stp-interop.cfg" \
         --entrypoint bash \
         "$IMAGE_RUN" \
         -c "sleep infinity" > /dev/null
