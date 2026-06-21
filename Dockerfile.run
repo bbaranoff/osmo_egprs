@@ -111,6 +111,8 @@ RUN printf '%s\n' '' \
     "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️# '" \
     '### end calypso-prompt ###' >> /root/.bashrc
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
+RUN cd /opt/GSM/osmo_egprs && git pull
+RNU cd /opt/osmo-egprs-web && git pull
 RUN pip install matplotlib
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 RUN cp /opt/GSM/qemu-src/si_bridge.py /opt/GSM/si_bridge.py
