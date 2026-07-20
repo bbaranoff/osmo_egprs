@@ -29,12 +29,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 MODE="${MODE:-qemu}"
 IFACE="${IFACE:-enp0s3}"
 BRIDGE="${BRIDGE:-gsm-inter}"
-# qemu-src migré dans osmo_egprs : on lance run.sh/start-clean.sh/calypso.env du dossier
-# courant ($HERE). Fallback /opt/GSM/qemu-src si start-clean.sh absent ici.
-QEMU_SRC="${QEMU_SRC:-$HERE}"; [ -f "$QEMU_SRC/start-clean.sh" ] || QEMU_SRC="/opt/GSM/qemu-src"
+# Source unique du pipeline Calypso : run.sh/start-clean.sh/calypso.env vivent dans
+# /opt/GSM/qemu-src (canonique). start-direct.sh reste ici (osmo_egprs) et delegue la.
+QEMU_SRC="${QEMU_SRC:-/opt/GSM/qemu-src}"; [ -f "$QEMU_SRC/start-clean.sh" ] || { echo "[start-direct] start-clean.sh introuvable dans $QEMU_SRC" >&2; exit 1; }
 ENCRYPTION="${ENCRYPTION:-a5 0}"
 RUN_DIR="${RUN_DIR:-/run/osmo-direct}"
-LOG_DIR="${LOG_DIR:-/var/log/osmocom}"
+LOG_DIR="${LOG_DIR:-/root}"   # logs consolides dans /root (diag)
 N_OPERATORS="${N_OPERATORS:-2}"
 MS_PER_OP="${MS_PER_OP:-8}"
 MS_COUNT="${MS_COUNT:-1}"          # MS (abonnés HLR) en mono-op core
@@ -754,7 +754,6 @@ build_hybrid_tmux() {
 
 handle_faketrx_qemu() {
     local bsc_cfg="/etc/osmocom/osmo-bsc.cfg"
-    local bsc_bak="${RUN_DIR}/osmo-bsc.cfg.backup"
     local bts1_cfg="/etc/osmocom/osmo-bts-trx-bts1.cfg"
     local bts1_block="${RUN_DIR}/bts1.block"
     local ms2_cfg="/root/.osmocom/bb/mobile_faketrx_bts1.cfg"
@@ -902,11 +901,7 @@ BTS1CFG
     hopping enabled 0
 BTS1BLOCK
 
-    # ── (c) backup osmo-bsc.cfg + insertion idempotente du bloc bts1 (avant 'msc 0') ──
-    if [ -f "$bsc_cfg" ] && [ ! -f "$bsc_bak" ]; then
-        cp -f "$bsc_cfg" "$bsc_bak"
-        echo -e "  ${GREEN}[faketrx-qemu] backup osmo-bsc.cfg → ${bsc_bak}${NC}"
-    fi
+    # ── (c) insertion idempotente du bloc bts1 (avant 'msc 0') ──
     if grep -qE '^[[:space:]]*ipa unit-id 6002 0' "$bsc_cfg" 2>/dev/null; then
         echo -e "  ${CYAN}[faketrx-qemu] bloc bts 1 déjà présent — skip${NC}"
     elif grep -qE '^msc 0' "$bsc_cfg" 2>/dev/null; then
@@ -1079,7 +1074,7 @@ run_single_op() {
         ensure_iq_fifo   # FIFO live I/Q avant l'init QEMU (sinon shunt -> fichier régulier)
         export ENCRYPTION   # propagé au pipeline qemu (start-clean.sh / run.sh)
         cd "$QEMU_SRC"
-        local _runsh="$QEMU_SRC/run.sh"; [ -f "$_runsh" ] || _runsh="$HERE/run.sh"
+        local _runsh="$QEMU_SRC/run.sh"
         echo -e "  ${YELLOW}[$mode] pipeline auto-suffisant : osmo-start.sh + HLR + radio gérés par le pipeline QEMU${NC}"
         # QEMU_CHOICE (menu Calypso) : start-clean.sh historique, ou run.sh racine
         # avec un CALYPSO_MODE, ou run.sh --menu (free).
@@ -1211,11 +1206,7 @@ cleanup_procs() {
     command -v tmux >/dev/null 2>&1 && { tmux kill-session -t calypso 2>/dev/null; tmux kill-session -t hybrid 2>/dev/null; tmux kill-session -t gapk 2>/dev/null; } || true
     ns_destroy_all
     ip addr del "${INTER_STP_IP}/24" dev "$IFACE" 2>/dev/null || true
-    # ── [faketrx-qemu] restore osmo-bsc.cfg + purge artefacts BTS#1 (AVANT rm RUN_DIR) ──
-    if [ -f "${RUN_DIR}/osmo-bsc.cfg.backup" ]; then
-        cp -f "${RUN_DIR}/osmo-bsc.cfg.backup" /etc/osmocom/osmo-bsc.cfg 2>/dev/null \
-            && echo -e "  ${GREEN}[cleanup] osmo-bsc.cfg restauré depuis backup${NC}" || true
-    fi
+    # ── [faketrx-qemu] purge artefacts BTS#1 (AVANT rm RUN_DIR) ──
     if [ -f "${RUN_DIR}/sms-routing.conf.backup" ]; then
         cp -f "${RUN_DIR}/sms-routing.conf.backup" /etc/osmocom/sms-routing.conf 2>/dev/null || true
     fi
