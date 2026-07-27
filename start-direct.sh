@@ -748,6 +748,10 @@ build_hybrid_tmux() {
           tmux new-window -t "$S" -n app-qemu "bash -c 'tail -F ${LOG_DIR}/run-op1.log'"
       fi
       tmux new-window -t "$S" -n app-faketrx "bash -c 'tail -F ${LOG_DIR}/mobile-bts1.log'"
+      # Fenetre pytest (auto) : grafcet + rapport_final.pdf, re-run en loop contre la pile vivante
+      if [ "${CALYPSO_SKIP_GENDOC:-0}" != "1" ]; then
+          tmux new-window -t "$S" -n pytest "bash -c 'sleep 25; exec bash /opt/GSM/qemu-src/tests/run_tests.sh loop'"
+      fi
       tmux select-window -t "$S:mobile2"
     ) || true
 }
