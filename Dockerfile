@@ -253,7 +253,7 @@ RUN cd /opt/GSM \
 RUN mkdir -p /opt/GSM/qemu/build \
     && cp /opt/GSM/qemu-src/*.py /opt/GSM/qemu/ 2>/dev/null || true \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
-    && ln -sf /opt/GSM/osmo-qemu-calypso/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
+    && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
 # Build le DEVICE IPC calypso-ipc-device (tools/) — le Dockerfile ne le buildait
 # PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS

@@ -39,10 +39,6 @@ RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/
     /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
 RUN rm -rf /opt/GSM/firmware
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
-# ── Repo du lab + interface web ──────────────────────────────────────────────
-RUN rm -rf /opt/GSM/osmo-nitb-for-calypso && git clone https://github.com/bbaranoff/osmo-nitb-for-calypso /opt/GSM/osmo-nitb-for-calypso && \
-    cd /opt/GSM/osmo-nitb-for-calypso
-RUN rm -rf /opt/osmo-egprs-web && git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
 
 # ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
 # Le dashboard /opt/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
@@ -132,8 +128,6 @@ RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 RUN cd /opt/GSM/osmo-nitb-for-calypso && git pull
 RUN cd /opt/osmo-egprs-web && git pull
 RUN pip install matplotlib
-
-RUN cd /opt/GSM && git clone https://github.com/bbaranoff/osmo_egprs
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 RUN cp /opt/GSM/osmo-qemu-calypso/si_bridge.py /opt/GSM/si_bridge.py
