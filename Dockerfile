@@ -238,8 +238,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build QEMU fork bbaranoff/qemu (cible arm-softmmu, machine "calypso")
 RUN cd /opt/GSM \
-    && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/osmo-qemu-calypso \
-    && cd /opt/GSM/osmo-qemu-calypso && git checkout checkout_1 \
+    && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
+    && cd /opt/GSM/qemusrc \
     && python3 -m venv /root/.venv-qemu \
     && . /root/.venv-qemu/bin/activate \
     && pip install --no-cache-dir tomli \
@@ -251,7 +251,7 @@ RUN cd /opt/GSM \
 
 # Layout stable attendu par scripts/run.sh : /opt/GSM/qemu/{build,bridge.py,sercomm_udp.py,...}
 RUN mkdir -p /opt/GSM/qemu/build \
-    && cp /opt/GSM/osmo-qemu-calypso/*.py /opt/GSM/qemu/ 2>/dev/null || true \
+    && cp /opt/GSM/qemu-src/*.py /opt/GSM/qemu/ 2>/dev/null || true \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
     && ln -sf /opt/GSM/osmo-qemu-calypso/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
