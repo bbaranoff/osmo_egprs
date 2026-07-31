@@ -39,8 +39,8 @@ RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/
     /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
 RUN rm -rf /opt/GSM/firmware
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
-RUN bash if [ -a /opt/osmo-egprs-web/ ]; then git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web; fi
-RUN bash if [ -a /opt/GSM/osmo_egprs/ ]; then git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs; fi
+RUN if [ -d "/opt/osmo-egprs-web/" ]; then git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web; fi
+RUN if [ -d "/opt/GSM/osmo_egprs/" ]; then git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs; fi
 
 # ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
 # Le dashboard /opt/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
