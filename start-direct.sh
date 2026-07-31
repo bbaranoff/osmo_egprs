@@ -3,13 +3,13 @@
 #
 # Port direct de start.sh. Chaque `docker run/exec` est remplacé par un
 # process hôte. Rien n'est réimplémenté : on réutilise scripts/run.sh
-# (cœur + radio, piloté par PHY_MODE/RUN_NO_PROCESS) et osmo-qemu-calypso/start-clean.sh.
+# (cœur + radio, piloté par PHY_MODE/RUN_NO_PROCESS) et qemu-src/start-clean.sh.
 #
 # Modes :
 #   noproc        cœur seul (STP+HLR+MSC+MGW+BSC+Asterisk)            [1 op]
 #   faketrx       cœur + osmo-bts + fake_trx + trxcon + mobile        [1 op]
 #   virtphy       cœur + osmo-bts-virtual + virtphy + mobile          [1 op]
-#   qemu          cœur (no-process) + osmo-qemu-calypso/start-clean.sh         [1 op]
+#   qemu          cœur (no-process) + qemu-src/start-clean.sh         [1 op]
 #   faketrx-qemu  cœur + fake_trx vivant, Calypso QEMU attaché        [1 op] *combiné*
 #   hw            SDR physique (net-host natif)                       [1 op]
 #   virtual       multi-opérateurs SS7 via ip netns (ex-bridge)       [N op]
@@ -38,10 +38,10 @@ if [ -f "$HERE/environnement/load.env" ]; then
 else
     : "${GSM_ROOT:=/opt/GSM}"
     : "${NITB_TREE:=$HERE}"
-    if [ -x "$HERE/../osmo-qemu-calypso/run.sh" ]; then
-        : "${OQC_ROOT:=$(cd "$HERE/../osmo-qemu-calypso" && pwd)}"
+    if [ -x "$HERE/../qemu-src/run.sh" ]; then
+        : "${OQC_ROOT:=$(cd "$HERE/../qemu-src" && pwd)}"
     else
-        : "${OQC_ROOT:=$GSM_ROOT/osmo-qemu-calypso}"
+        : "${OQC_ROOT:=$GSM_ROOT/qemu-src}"
     fi
 fi
 
@@ -72,7 +72,7 @@ WAN_REMOTE_IP="${WAN_REMOTE_IP:-}"
 WAN_PREFIX="${WAN_PREFIX:-66}"
 WAN_N_REMOTE="${WAN_N_REMOTE:-1}"
 
-# Contrat d'env pour le mode combiné (à honorer dans osmo-qemu-calypso/start-clean.sh) :
+# Contrat d'env pour le mode combiné (à honorer dans qemu-src/start-clean.sh) :
 #   QEMU_ATTACH_TRX=1  NO_LOCAL_BTS=1  NO_LOCAL_TRX=1
 #   TRX_REMOTE=<ip fake_trx>  TRX_BASE_PORT=<port base, défaut 6700>
 TRX_BASE_PORT="${TRX_BASE_PORT:-6700}"
@@ -738,7 +738,7 @@ ensure_gapk() {
 #   Les 2 MS s'enregistrent sur le même osmo-bsc/MSC/HLR → appel intra-MSC.
 #   1 BTS = 1 horloge (clk_s par process osmo-bts-trx) → pas de conflit d'horloge :
 #   une seule osmo-bts-trx 2-PHY est IMPOSSIBLE (clk_s partagé, reset ping-pong),
-#   d'où 2 process distincts. On NE TOUCHE NI osmo-qemu-calypso/run.sh NI osmo-bts-trx.cfg.
+#   d'où 2 process distincts. On NE TOUCHE NI qemu-src/run.sh NI osmo-bts-trx.cfg.
 # ══════════════════════════════════════════════════════════════════════════
 build_hybrid_tmux() {
     command -v tmux >/dev/null 2>&1 || { echo -e "  ${YELLOW}[tmux] tmux absent${NC}"; return 0; }
@@ -785,7 +785,7 @@ handle_faketrx_qemu() {
     local bts_port=5720 bb_port=6720 l2sock="/tmp/ms2_l2"
     local r
 
-    [ -d "$QEMU_SRC" ] || { echo -e "${RED}osmo-qemu-calypso introuvable : ${QEMU_SRC}${NC}"; return 1; }
+    [ -d "$QEMU_SRC" ] || { echo -e "${RED}qemu-src introuvable : ${QEMU_SRC}${NC}"; return 1; }
     mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb
     echo -e "  ${CYAN}[faketrx-qemu] Approche C : BTS#0 QEMU (5700/ARFCN514) + BTS#1 faketrx (5720/ARFCN516)${NC}"
 
@@ -1072,7 +1072,7 @@ run_single_op() {
     # collision (même VTY 4239 / m3ua sur loopback). L'ASP asp-to-inter du cœur
     # est mis 'shutdown' pour éviter les connect-fail vers un inter-STP absent.
 
-    # SELF_CONTAINED : le pipeline osmo-qemu-calypso/run.sh fait DÉJÀ tout (osmo-start.sh
+    # SELF_CONTAINED : le pipeline qemu-src/run.sh fait DÉJÀ tout (osmo-start.sh
     # = cœur complet + feed HLR + radio). On ne lance NI cœur, NI HLR, NI inter-STP
     # ici, sinon double-cœur + collision STP. On passe juste la main.
     local self_contained=0 post="none"
@@ -1093,7 +1093,7 @@ run_single_op() {
 
     # ── Modes qemu : passthrough pur vers le pipeline auto-suffisant ────────
     if [ "$self_contained" = "1" ]; then
-        [ -d "$QEMU_SRC" ] || { echo -e "${RED}osmo-qemu-calypso introuvable : ${QEMU_SRC}${NC}"; exit 1; }
+        [ -d "$QEMU_SRC" ] || { echo -e "${RED}qemu-src introuvable : ${QEMU_SRC}${NC}"; exit 1; }
         ensure_gapk      # bridge audio MGW RTP → sink gsm_audio (avant l'exec)
         ensure_iq_fifo   # FIFO live I/Q avant l'init QEMU (sinon shunt -> fichier régulier)
         export ENCRYPTION   # propagé au pipeline qemu (start-clean.sh / run.sh)

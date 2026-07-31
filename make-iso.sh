@@ -181,18 +181,18 @@ else
     echo -e "  ${YELLOW}⚠ git clone osmo-nitb-for-calypso échoué (réseau ?) — copie de l'image conservée${NC}"
 fi
 
-# ── osmo-qemu-calypso : checkout LOCAL (branche test, build/qemu-system-arm recompilé) ──
+# ── qemu-src : checkout LOCAL (branche test, build/qemu-system-arm recompilé) ──
 # La copie docker cp ($CID:/opt/GSM) peut être périmée / sur une autre branche. On
-# écrase osmo-qemu-calypso par le checkout local de la VM, déjà sur 'test' avec le binaire
+# écrase qemu-src par le checkout local de la VM, déjà sur 'test' avec le binaire
 # build/ à jour. On retire .git (historique QEMU = lourd, inutile à l'exécution).
 QEMU_SRC_LOCAL="${OSMO_QEMU_SRC:-${OQC_ROOT}}"
-echo -e "${GREEN}[5d/7] osmo-qemu-calypso depuis checkout local (${QEMU_SRC_LOCAL})...${NC}"
+echo -e "${GREEN}[5d/7] qemu-src depuis checkout local (${QEMU_SRC_LOCAL})...${NC}"
 if [ -x "$QEMU_SRC_LOCAL/build/qemu-system-arm" ]; then
     qbr="$(git -C "$QEMU_SRC_LOCAL" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
     rm -rf "$ROOTFS${OQC_ROOT}"
     cp -a "$QEMU_SRC_LOCAL" "$ROOTFS${OQC_ROOT}"
     rm -rf "$ROOTFS${OQC_ROOT}/.git"
-    echo -e "  ${GREEN}✓${NC} osmo-qemu-calypso copié (branche ${qbr}, build/ inclus, .git retiré)"
+    echo -e "  ${GREEN}✓${NC} qemu-src copié (branche ${qbr}, build/ inclus, .git retiré)"
 else
     echo -e "  ${YELLOW}⚠ ${QEMU_SRC_LOCAL}/build/qemu-system-arm absent — copie de l'image conservée${NC}"
 fi
