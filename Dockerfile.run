@@ -130,6 +130,7 @@ RUN cd /opt/osmo-egprs-web && git pull
 RUN pip install matplotlib
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
-RUN cp /opt/GSM/osmo-qemu-calypso/si_bridge.py /opt/GSM/si_bridge.py
+RUN cp /opt/GSM/qemu-src/si_bridge.py /opt/GSM/si_bridge.py
+
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]
