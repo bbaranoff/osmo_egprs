@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # fft_web.py — 2 FFT (MS + BTS) sur UNE page, serveur web autonome (port 8081).
 #
-# Reprend la logique de fft.sh / fft2.sh (PSD Welch sur l'I/Q fc32) mais :
+# Reprend la logique de outils/fft.sh / outils/fft2.sh (PSD Welch sur l'I/Q fc32) mais :
 #   - NATIF : lit directement les sources de l'hôte, pas de docker exec.
 #   - HEADLESS : pas de matplotlib/X. numpy calcule la PSD → JSON → le navigateur dessine (canvas).
 #   - LIVE FIFO : le spectre BTS lit /tmp/iq_fft.fifo EN CONTINU (le tap FFT
@@ -15,12 +15,21 @@
 #   Chaque source accepte indifféremment un .cfile (lecture tail) OU un .fifo
 #   (lecture live) : auto-détecté. Override par env CFILE_MS / CFILE_BTS.
 #
-# Lancement :  python3 /opt/GSM/osmo_egprs/fft-web/fft_web.py
+# Lancement :  python3 /opt/GSM/osmo-nitb-for-calypso/fft-web/fft_web.py
 #   FFT_WEB_PORT=8081 RATE=1083333 NSAMP=262144 NFFT=4096 ...  (overridables par env)
 import os, json, stat, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import numpy as np
+
+# --- racine de l'installation, resolue sans chemin en dur --------------------
+# GSM_ROOT si l'environnement le pose (c'est le cas quand on passe par run.sh),
+# sinon le parent du depot : les deux depots vivent cote a cote.
+import os as _os
+GSM_ROOT = _os.environ.get(
+    "GSM_ROOT",
+    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 
 PORT  = int(os.environ.get('FFT_WEB_PORT', '8081'))
 RATE  = float(os.environ.get('RATE', '1083333'))   # 4 SPS natif = 26e6/24 (= Fs du relay/FIFO)

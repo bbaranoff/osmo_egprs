@@ -3,13 +3,13 @@
 #
 # Port direct de start.sh. Chaque `docker run/exec` est remplacé par un
 # process hôte. Rien n'est réimplémenté : on réutilise scripts/run.sh
-# (cœur + radio, piloté par PHY_MODE/RUN_NO_PROCESS) et qemu-src/start-clean.sh.
+# (cœur + radio, piloté par PHY_MODE/RUN_NO_PROCESS) et osmo-qemu-calypso/start-clean.sh.
 #
 # Modes :
 #   noproc        cœur seul (STP+HLR+MSC+MGW+BSC+Asterisk)            [1 op]
 #   faketrx       cœur + osmo-bts + fake_trx + trxcon + mobile        [1 op]
 #   virtphy       cœur + osmo-bts-virtual + virtphy + mobile          [1 op]
-#   qemu          cœur (no-process) + qemu-src/start-clean.sh         [1 op]
+#   qemu          cœur (no-process) + osmo-qemu-calypso/start-clean.sh         [1 op]
 #   faketrx-qemu  cœur + fake_trx vivant, Calypso QEMU attaché        [1 op] *combiné*
 #   hw            SDR physique (net-host natif)                       [1 op]
 #   virtual       multi-opérateurs SS7 via ip netns (ex-bridge)       [N op]
@@ -25,16 +25,36 @@ DEBUG=
 
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 
+# ── Manifeste du depot ──────────────────────────────────────────────────────
+# Ce script n'est PAS lance par run.sh : il doit charger lui-meme
+# environnement/load.env, sinon OQC_ROOT / GSM_ROOT / NITB_TREE sont indefinis
+# et `set -u` (l.22) tue le script des la premiere utilisation.
+# Ses propres repertoires de travail sont poses AVANT, pour qu'ils gagnent
+# (tout environnement/*.env utilise l'idiome `:=` : le premier pose gagne).
+: "${RUN_DIR:=/run/osmo-direct}"
+: "${LOG_DIR:=$RUN_DIR/logs}"
+if [ -f "$HERE/environnement/load.env" ]; then
+    set -a; . "$HERE/environnement/load.env"; set +a
+else
+    : "${GSM_ROOT:=/opt/GSM}"
+    : "${NITB_TREE:=$HERE}"
+    if [ -x "$HERE/../osmo-qemu-calypso/run.sh" ]; then
+        : "${OQC_ROOT:=$(cd "$HERE/../osmo-qemu-calypso" && pwd)}"
+    else
+        : "${OQC_ROOT:=$GSM_ROOT/osmo-qemu-calypso}"
+    fi
+fi
+
 # ── Paramètres surchargables ────────────────────────────────────────────────
 MODE="${MODE:-qemu}"
 IFACE="${IFACE:-enp0s3}"
 BRIDGE="${BRIDGE:-gsm-inter}"
 # Source unique du pipeline Calypso : run.sh/start-clean.sh/calypso.env vivent dans
-# /opt/GSM/qemu-src (canonique). start-direct.sh reste ici (osmo_egprs) et delegue la.
-QEMU_SRC="${QEMU_SRC:-/opt/GSM/qemu-src}"; [ -f "$QEMU_SRC/start-clean.sh" ] || { echo "[start-direct] start-clean.sh introuvable dans $QEMU_SRC" >&2; exit 1; }
+# ${OQC_ROOT} (canonique). start-direct.sh reste ici (osmo-nitb-for-calypso) et delegue la.
+QEMU_SRC="${QEMU_SRC:-${OQC_ROOT}}"; [ -f "$QEMU_SRC/start-clean.sh" ] || { echo "[start-direct] start-clean.sh introuvable dans $QEMU_SRC" >&2; exit 1; }
 ENCRYPTION="${ENCRYPTION:-a5 0}"
 RUN_DIR="${RUN_DIR:-/run/osmo-direct}"
-LOG_DIR="${LOG_DIR:-/root}"   # logs consolides dans /root (diag)
+LOG_DIR="${LOG_DIR:-$RUN_DIR/logs}"   # logs consolides (diag) — jamais /root
 N_OPERATORS="${N_OPERATORS:-2}"
 MS_PER_OP="${MS_PER_OP:-8}"
 MS_COUNT="${MS_COUNT:-1}"          # MS (abonnés HLR) en mono-op core
@@ -45,14 +65,14 @@ MOBILE_MODE="${MOBILE_MODE:-combined}" # combined | split (1 process mobile par 
 # Choix pipeline Calypso (run.sh racine) — fixé par le menu qemu
 QEMU_CHOICE="${QEMU_CHOICE:-start-clean}"  # start-clean | full-grgsm | full | shunt | shunt-ipc | bridge | bare | free
 INTER_STP_IP="172.20.0.10"
-# SMS inter-WAN (vers un serveur osmo_egprs distant). Si WAN_REMOTE_IP est posé,
+# SMS inter-WAN (vers un serveur osmo-nitb-for-calypso distant). Si WAN_REMOTE_IP est posé,
 # setup_sms_bridge injecte les routes WAN (préfixe → op distant → IP) dans
 # sms-routing.conf avant de lancer sms-interop-relay.py. Hérité de start.sh.
 WAN_REMOTE_IP="${WAN_REMOTE_IP:-}"
 WAN_PREFIX="${WAN_PREFIX:-66}"
 WAN_N_REMOTE="${WAN_N_REMOTE:-1}"
 
-# Contrat d'env pour le mode combiné (à honorer dans qemu-src/start-clean.sh) :
+# Contrat d'env pour le mode combiné (à honorer dans osmo-qemu-calypso/start-clean.sh) :
 #   QEMU_ATTACH_TRX=1  NO_LOCAL_BTS=1  NO_LOCAL_TRX=1
 #   TRX_REMOTE=<ip fake_trx>  TRX_BASE_PORT=<port base, défaut 6700>
 TRX_BASE_PORT="${TRX_BASE_PORT:-6700}"
@@ -61,7 +81,7 @@ TRX_BIND="${TRX_BIND:-127.0.0.1}"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
 
-# ── Helpers IP (identiques à start.sh) ──────────────────────────────────────
+# ── Helpers IP (identiques à lancement/start.sh) ──────────────────────────────────────
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 op_private_ip()   { echo "172.20.$1.10"; }
 op_private_gw()   { echo "172.20.$1.1"; }
@@ -90,7 +110,7 @@ banner() {
     echo -e "${NC}"
 }
 
-# ── Whiptail (repris de start.sh) ───────────────────────────────────────────
+# ── Whiptail (repris de lancement/start.sh) ───────────────────────────────────────────
 WT_BACKTITLE="Osmocom GSM/EGPRS — natif"; WT_WIDTH=72
 wt_menu() {
     local title="$1" prompt="$2"; shift 2
@@ -102,7 +122,7 @@ wt_input() {
         --inputbox "$2" 10 "$WT_WIDTH" "$3" 3>&1 1>&2 2>&3
 }
 
-# ── Générateurs de config (verbatim de start.sh) ────────────────────────────
+# ── Générateurs de config (verbatim de lancement/start.sh) ────────────────────────────
 generate_pjsip_interop_trunks() {
     local op_id=$1 n_operators=$2 remote_op remote_ip
     for remote_op in $(seq 1 "$n_operators"); do
@@ -321,7 +341,7 @@ netns_preflight() {
         echo -e "  ${CYAN}→ Le mode multi-op netns ('virtual') doit tourner sur l'HÔTE :${NC}" >&2
         echo -e "      ${CYAN}sudo ./start-direct.sh virtual${NC}" >&2
         echo -e "  ${CYAN}→ Ou multi-op containerisé (1 conteneur + réseau docker / opérateur) :${NC}" >&2
-        echo -e "      ${CYAN}sudo ./start.sh virtual${NC}" >&2
+        echo -e "      ${CYAN}sudo ./lancement/start.sh virtual${NC}" >&2
     else
         echo -e "  ${CYAN}→ Lancer en root (sudo) sur un hôte Linux avec iproute2.${NC}" >&2
     fi
@@ -426,7 +446,7 @@ feed_hlr() {
 # NB multi-op (netns) : NON appelé ici — /tmp/sendmt_socket + relay:7890 sont
 #     partagés (pas d'isolation /tmp entre netns) → collision. Cf. run_multi_op.
 # Injecte les routes SMS inter-WAN dans un sms-routing.conf LOCAL (équivalent
-# natif de setup-wan-sms.sh, sans docker exec). Ajoute, de façon idempotente :
+# natif de reseau/setup-wan-sms.sh, sans docker exec). Ajoute, de façon idempotente :
 #   • [operators] : <100+j> = <REMOTE_IP>   (l'op distant j → IP serveur distant)
 #   • [routes]    : <prefix><msisdn> = <100+j>   (ex. 6610001 → op distant 1)
 # Les blocs sont insérés DANS leur section (avant [relay], sinon ignorés par le
@@ -549,8 +569,8 @@ ensure_iq_fifo() {
     # via calypso.env) -> on le relit depuis le calypso.env qui SERA sourcé, pour
     # rester en phase avec QEMU. Défaut /dev/shm/dsp_iq.fifo.
     local f="${CALYPSO_SHUNT_IQ_CFILE:-}"
-    if [ -z "$f" ] && [ -f "$QEMU_SRC/calypso.env" ]; then
-        f=$(sed -n 's/^[[:space:]]*CALYPSO_SHUNT_IQ_CFILE=\([^[:space:]#]*\).*/\1/p' "$QEMU_SRC/calypso.env" | tail -n1)
+    if [ -z "$f" ] && [ -f "$QEMU_SRC/environnement/calypso.env" ]; then
+        f=$(sed -n 's/^[[:space:]]*CALYPSO_SHUNT_IQ_CFILE=\([^[:space:]#]*\).*/\1/p' "$QEMU_SRC/environnement/calypso.env" | tail -n1)
     fi
     [ -n "$f" ] || f="/dev/shm/dsp_iq.fifo"
     if [ -e "$f" ] && [ ! -p "$f" ]; then
@@ -671,7 +691,7 @@ ensure_pulse() {
 # run.sh (no-process) tente ce pont AVANT que PulseAudio soit prêt (course →
 # "PulseAudio injoignable après 30s" → pont jamais lancé → VOIX MUETTE dans docker).
 # On le (re)lance ICI, après ensure_pulse (sink gsm_audio garanti up). Idempotent,
-# gated sur HOST_AUDIO_RELAY (posé par start.sh = tcp:<gw>:4713).
+# gated sur HOST_AUDIO_RELAY (posé par lancement/start.sh = tcp:<gw>:4713).
 ensure_host_audio() {
     local relay="${HOST_AUDIO_RELAY:-}"
     [ -n "$relay" ] || return 0
@@ -718,7 +738,7 @@ ensure_gapk() {
 #   Les 2 MS s'enregistrent sur le même osmo-bsc/MSC/HLR → appel intra-MSC.
 #   1 BTS = 1 horloge (clk_s par process osmo-bts-trx) → pas de conflit d'horloge :
 #   une seule osmo-bts-trx 2-PHY est IMPOSSIBLE (clk_s partagé, reset ping-pong),
-#   d'où 2 process distincts. On NE TOUCHE NI qemu-src/run.sh NI osmo-bts-trx.cfg.
+#   d'où 2 process distincts. On NE TOUCHE NI osmo-qemu-calypso/run.sh NI osmo-bts-trx.cfg.
 # ══════════════════════════════════════════════════════════════════════════
 build_hybrid_tmux() {
     command -v tmux >/dev/null 2>&1 || { echo -e "  ${YELLOW}[tmux] tmux absent${NC}"; return 0; }
@@ -750,7 +770,7 @@ build_hybrid_tmux() {
       tmux new-window -t "$S" -n app-faketrx "bash -c 'tail -F ${LOG_DIR}/mobile-bts1.log'"
       # Fenetre pytest (auto) : grafcet + rapport_final.pdf, re-run en loop contre la pile vivante
       if [ "${CALYPSO_SKIP_GENDOC:-0}" != "1" ]; then
-          tmux new-window -t "$S" -n pytest "bash -c 'sleep 25; exec bash /opt/GSM/qemu-src/tests/run_tests.sh loop'"
+          tmux new-window -t "$S" -n pytest "bash -c 'sleep 25; exec bash ${OQC_ROOT}/tests/run_tests.sh loop'"
       fi
       tmux select-window -t "$S:mobile2"
     ) || true
@@ -761,11 +781,11 @@ handle_faketrx_qemu() {
     local bts1_cfg="/etc/osmocom/osmo-bts-trx-bts1.cfg"
     local bts1_block="${RUN_DIR}/bts1.block"
     local ms2_cfg="/root/.osmocom/bb/mobile_faketrx_bts1.cfg"
-    local faketrx_py="/opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py"
+    local faketrx_py="${GSM_ROOT}/osmocom-bb/src/target/trx_toolkit/fake_trx.py"
     local bts_port=5720 bb_port=6720 l2sock="/tmp/ms2_l2"
     local r
 
-    [ -d "$QEMU_SRC" ] || { echo -e "${RED}qemu-src introuvable : ${QEMU_SRC}${NC}"; return 1; }
+    [ -d "$QEMU_SRC" ] || { echo -e "${RED}osmo-qemu-calypso introuvable : ${QEMU_SRC}${NC}"; return 1; }
     mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb
     echo -e "  ${CYAN}[faketrx-qemu] Approche C : BTS#0 QEMU (5700/ARFCN514) + BTS#1 faketrx (5720/ARFCN516)${NC}"
 
@@ -920,7 +940,7 @@ BTS1BLOCK
     fi
 
     # ── (d) cfg mobile MS#2 (VTY 4248, socket /tmp/ms2_l2 HORS glob, ARFCN 516, IMSI ...0002) ──
-    local ms2_src="/opt/GSM/qemu-src/cfgs/mobile_group1.cfg"
+    local ms2_src="${OQC_ROOT}/cfgs/mobile_group1.cfg"
     [ -f "$ms2_src" ] || ms2_src="/root/.osmocom/bb/mobile_group1.cfg"
     sed -e 's|bind 127.0.0.1 4247|bind 127.0.0.1 4248|' \
         -e 's|layer2-socket /tmp/osmocom_l2[_0-9]*|layer2-socket /tmp/ms2_l2|' \
@@ -947,7 +967,7 @@ BTS1BLOCK
     done
     [ "$r" -gt 0 ] && echo -e " ${GREEN}✓${NC}" || echo -e " ${YELLOW}(timeout, on continue)${NC}"
 
-    # ── (g+h) Feed HLR « comme start.sh » sur les 2 MS (attente 4258 + create/msisdn/ki) ──
+    # ── (g+h) Feed HLR « comme lancement/start.sh » sur les 2 MS (attente 4258 + create/msisdn/ki) ──
     #     feed_hlr = portage natif EXACT du feed start.sh. op=1, ms∈{1,2} :
     #       IMSI 001010001000001 (MS#1 QEMU) / 001010001000002 (MS#2 faketrx)
     #       msisdn 10001 / 10002   ki …0101 / …0201 (aud2g comp128v1)
@@ -1052,7 +1072,7 @@ run_single_op() {
     # collision (même VTY 4239 / m3ua sur loopback). L'ASP asp-to-inter du cœur
     # est mis 'shutdown' pour éviter les connect-fail vers un inter-STP absent.
 
-    # SELF_CONTAINED : le pipeline qemu-src/run.sh fait DÉJÀ tout (osmo-start.sh
+    # SELF_CONTAINED : le pipeline osmo-qemu-calypso/run.sh fait DÉJÀ tout (osmo-start.sh
     # = cœur complet + feed HLR + radio). On ne lance NI cœur, NI HLR, NI inter-STP
     # ici, sinon double-cœur + collision STP. On passe juste la main.
     local self_contained=0 post="none"
@@ -1073,7 +1093,7 @@ run_single_op() {
 
     # ── Modes qemu : passthrough pur vers le pipeline auto-suffisant ────────
     if [ "$self_contained" = "1" ]; then
-        [ -d "$QEMU_SRC" ] || { echo -e "${RED}qemu-src introuvable : ${QEMU_SRC}${NC}"; exit 1; }
+        [ -d "$QEMU_SRC" ] || { echo -e "${RED}osmo-qemu-calypso introuvable : ${QEMU_SRC}${NC}"; exit 1; }
         ensure_gapk      # bridge audio MGW RTP → sink gsm_audio (avant l'exec)
         ensure_iq_fifo   # FIFO live I/Q avant l'init QEMU (sinon shunt -> fichier régulier)
         export ENCRYPTION   # propagé au pipeline qemu (start-clean.sh / run.sh)
@@ -1112,7 +1132,7 @@ run_single_op() {
         esac
     fi
 
-    # ── Modes cœur osmo_egprs (noproc/faketrx/virtphy/hw) ──────────────────
+    # ── Modes cœur osmo-nitb-for-calypso (noproc/faketrx/virtphy/hw) ──────────────────
     echo -e "  ${CYAN}PHY=${PHY_MODE} no_process=${RUN_NO_PROCESS}${NC}"
     local tmpdir; tmpdir=$(mktemp -d)
     apply_config_templates "$tmpdir" "$cip" "$gw" "$op_id" \
@@ -1269,10 +1289,10 @@ choose_core() {
     if in_container; then
         # Dans un conteneur : multi-op netns impossible (mount --make-shared
         # /run/netns refusé). On n'offre QUE mono. Le multi-op avec opérateurs
-        # distants se lance depuis l'HÔTE via ./start.sh virtual (déjà fait si on
-        # arrive ici par le handoff de start.sh — la stack multi-op tourne déjà).
+        # distants se lance depuis l'HÔTE via ./lancement/start.sh virtual (déjà fait si on
+        # arrive ici par le handoff de lancement/start.sh — la stack multi-op tourne déjà).
         t=$(wt_menu "CORE — cœur réseau (conteneur)" \
-            "Topologie (multi-op = ./start.sh virtual sur l'hôte) :" \
+            "Topologie (multi-op = ./lancement/start.sh virtual sur l'hôte) :" \
             "mono" "Mono-opérateur — RAN/Calypso de CE conteneur") \
             || { echo "Annulé."; exit 1; }
     else
@@ -1289,7 +1309,7 @@ choose_core() {
         netns_preflight || {
             echo -e "${YELLOW}Pour le multi-opérateur AVEC opérateurs distants (WAN interop),${NC}" >&2
             echo -e "  utilisez le système containerisé depuis l'hôte :" >&2
-            echo -e "      ${CYAN}sudo ./start.sh virtual${NC}   (puis répondez OUI à « WAN vers un serveur distant »)" >&2
+            echo -e "      ${CYAN}sudo ./lancement/start.sh virtual${NC}   (puis répondez OUI à « WAN vers un serveur distant »)" >&2
             exit 1
         }
         N_OPERATORS=$(wt_input "Multi-op" "Nombre d'opérateurs (1-36) :" "$N_OPERATORS") || exit 1
@@ -1354,7 +1374,7 @@ choose_calypso_mode() {
     if [ "$QEMU_CHOICE" = "faketrx-qemu" ]; then MODE="faketrx-qemu"; else MODE="qemu"; fi
 }
 
-# Choix du chiffrement A5 (repris de start.sh) — fixe ENCRYPTION (template config).
+# Choix du chiffrement A5 (repris de lancement/start.sh) — fixe ENCRYPTION (template config).
 choose_encryption() {
     local e
     e=$(wt_menu "Encryption A5" "Chiffrement :" \

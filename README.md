@@ -1,8 +1,8 @@
-# osmo_egprs — Architecture Multi-PLMN SS7/IP
+# osmo-nitb-for-calypso — Architecture Multi-PLMN SS7/IP
 
-Documentation d'architecture du projet **osmo_egprs** : simulation multi-opérateur GSM complète avec interconnexion SS7 sur IP, entièrement conteneurisée via Docker.
+Documentation d'architecture du projet **osmo-nitb-for-calypso** : simulation multi-opérateur GSM complète avec interconnexion SS7 sur IP, entièrement conteneurisée via Docker.
 
-Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisation complète d'une configuration SS7 inter-opérateurs habituellement réalisée à la main, reproductible d'un simple `build.sh && start.sh`.
+Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisation complète d'une configuration SS7 inter-opérateurs habituellement réalisée à la main, reproductible d'un simple `make-docker-image.sh && lancement/start.sh`.
 
 **Support N opérateurs** : le démarrage en mode bridge accepte de 1 à 9 opérateurs sans modifier aucune configuration. Tous les fichiers (pjsip, dialplan, SMS routing, inter-STP) sont générés dynamiquement selon N.
 
@@ -167,7 +167,7 @@ Toutes les configurations dépendant de N sont **générées au démarrage**. Au
 
 ### 5.1 Template engine (placeholders)
 
-`apply_config_templates()` dans `start.sh` résout en **1 seul passage `sed`** :
+`apply_config_templates()` dans `lancement/start.sh` résout en **1 seul passage `sed`** :
 
 | Placeholder | Formule | Exemple N=2 |
 |------------|---------|-------------|
@@ -183,7 +183,7 @@ Toutes les configurations dépendant de N sont **générées au démarrage**. Au
 
 ### 5.2 Sections générées (dépendent de N total)
 
-Après la substitution sed, `start.sh` **appende** à chaque opérateur :
+Après la substitution sed, `lancement/start.sh` **appende** à chaque opérateur :
 
 | Section | Fichier | Contenu |
 |---------|---------|---------|
@@ -195,7 +195,7 @@ Après la substitution sed, `start.sh` **appende** à chaque opérateur :
 ### 5.3 Séquence de démarrage
 
 ```
-./start.sh  [bridge mode]
+./lancement/start.sh  [bridge mode]
  ├── Saisie N opérateurs + MCC/MNC/nom par opérateur
  ├── Création réseau gsm-inter (172.20.0.0/24)
  ├── create_interop.sh N → osmo-stp-interop.cfg
@@ -278,9 +278,9 @@ Le dialplan `[interop_out]` route automatiquement sur le premier chiffre du num�
 ### 8.1 Démarrage et arrêt
 
 ```bash
-sudo ./build.sh          # Build l'image Docker (1 fois)
-sudo ./start.sh          # Lance tout (choisir bridge, saisir N opérateurs)
-sudo ./start.sh stop     # Arrête tous les containers
+sudo ./make-docker-image.sh          # Build l'image Docker (1 fois)
+sudo ./lancement/start.sh          # Lance tout (choisir bridge, saisir N opérateurs)
+sudo ./lancement/start.sh stop     # Arrête tous les containers
 
 sudo ./provision_hlr.sh  # Provisionne les abonnés de test dans les HLR
 ```
@@ -453,9 +453,9 @@ flowchart LR
 | Composant | Path container | Source |
 |-----------|---------------|--------|
 | `qemu-system-arm` (machine `calypso`) | `/usr/local/bin/qemu-system-arm` | bbaranoff/qemu |
-| Firmware Calypso layer1 | `/opt/GSM/firmware/board/compal_e88/layer1.highram.elf` | osmocom-bb (build container) |
-| ROM DSP | `/opt/GSM/calypso_dsp.txt` | bbaranoff/qemu (symlink) |
-| Bridge BTS↔BSP | `/opt/GSM/qemu-src/bridge.py` | bbaranoff/qemu |
+| Firmware Calypso layer1 | `${GSM_ROOT}/firmware/board/compal_e88/layer1.highram.elf` | osmocom-bb (build container) |
+| ROM DSP | `${GSM_ROOT}/calypso_dsp.txt` | bbaranoff/qemu (symlink) |
+| Bridge BTS↔BSP | `${OQC_ROOT}/bridge.py` | bbaranoff/qemu |
 | `transceiver` (BTS soft-SDR Calypso) | `/usr/local/bin/transceiver` | osmocom-bb branche jolly/testing |
 | `ccch_scan`, `bcch_scan`, `cell_log` | `/usr/local/bin/` | osmocom-bb branche fixeria/burst_ind |
 
@@ -466,8 +466,8 @@ la machine.
 ### 11.3 Lancement
 
 ```bash
-sudo ./build.sh
-sudo ./start.sh        # mode opérateur unique (single)
+sudo ./make-docker-image.sh
+sudo ./lancement/start.sh        # mode opérateur unique (single)
 docker exec -ti osmo-operator-1 bash
 # dans le container :
 PHY_MODE=qemu /root/run.sh
@@ -479,10 +479,10 @@ sur UDP 6700 → `mobile`. Tout est lancé dans des fenêtres tmux distinctes.
 
 | Variable | Défaut | Rôle |
 |----------|--------|------|
-| `QEMU_BIN` | `/opt/GSM/qemu/build/qemu-system-arm` | Binaire QEMU |
-| `QEMU_FW` | `/opt/GSM/firmware/board/compal_e88/layer1.highram.elf` | Firmware ARM |
-| `QEMU_DSP_ROM` | `/opt/GSM/calypso_dsp.txt` | ROM DSP C54x |
-| `QEMU_BRIDGE` | `/opt/GSM/qemu-src/bridge.py` | Script bridge BTS↔BSP |
+| `QEMU_BIN` | `${GSM_ROOT}/qemu/build/qemu-system-arm` | Binaire QEMU |
+| `QEMU_FW` | `${GSM_ROOT}/firmware/board/compal_e88/layer1.highram.elf` | Firmware ARM |
+| `QEMU_DSP_ROM` | `${GSM_ROOT}/calypso_dsp.txt` | ROM DSP C54x |
+| `QEMU_BRIDGE` | `${OQC_ROOT}/bridge.py` | Script bridge BTS↔BSP |
 | `QEMU_L1CTL_SOCK` | `/tmp/osmocom_l2` | Socket L1CTL publié par QEMU |
 | `QEMU_MON_SOCK` | `/tmp/qemu-calypso-mon.sock` | Monitor QEMU (HMP) |
 
@@ -527,4 +527,4 @@ L'intégration QEMU est en développement actif côté DSP (voir
 
 ---
 
-*Projet osmo_egprs — plateforme pédagogique télécom multi-PLMN, entièrement conteneurisée, support N opérateurs.*
+*Projet osmo-nitb-for-calypso — plateforme pédagogique télécom multi-PLMN, entièrement conteneurisée, support N opérateurs.*
