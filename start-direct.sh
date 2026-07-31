@@ -22,18 +22,14 @@
 #     puis exec run.sh avec le profil choisi.
 # -----------------------------------------------------------------------------
 set -uo pipefail
-
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
-
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
 LIST=0
-
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
-
   Modes (profils) :
     faketrx-qemu   cœur + BTS#0 QEMU + BTS#1 faketrx (défaut)
     faketrx        cœur + fake_trx + trxcon + mobile
@@ -43,7 +39,6 @@ Usage : ./start-direct.sh [options] [mode]
     core           alias noproc
     hybrid         alias faketrx-qemu
     hw             SDR physique
-
   Options :
     --list              affiche le plan (délègue à run.sh --list)
     --dry-run           déroule sans effet de bord
@@ -54,12 +49,10 @@ Usage : ./start-direct.sh [options] [mode]
     --verbose           montre la sortie des modules
     --check-paths       vérifie les dépendances déclarées
     -h, --help          cette aide
-
 Toute variable CALYPSO_* passée en préfixe est transmise à run.sh / QEMU :
   CALYPSO_MODE=native ./start-direct.sh
 USAGE
 }
-
 while [ $# -gt 0 ]; do
     case "$1" in
         --list)        ACTION=list ;;
@@ -80,7 +73,6 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-
 # --- affichage (identique à run.sh) -------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     TTY=1
@@ -90,7 +82,6 @@ else
     TTY=0
     C_OK=""; C_KO=""; C_SK=""; C_DIM=""; C_CYAN=""; C_BOLD=""; C_Z=""
 fi
-
 say_begin() {
     if [ $TTY -eq 1 ]; then
         printf '[ %s.. %s] %s' "$C_DIM" "$C_Z" "$1"
@@ -104,7 +95,6 @@ say_end() { # $1=tag $2=couleur $3=libellé $4=détail
     [ -n "${4:-}" ] && printf ' %s(%s)%s' "$C_DIM" "$4" "$C_Z"
     printf '\n'
 }
-
 banner() {
     echo -e "${C_CYAN}"
     echo "╔══════════════════════════════════════════════════════╗"
@@ -112,7 +102,6 @@ banner() {
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${C_Z}"
 }
-
 # --- 1. configuration ---------------------------------------------------------
 say_begin "Chargement de l'environnement"
 if [ -f "$HERE/environnement/load.env" ]; then
@@ -134,36 +123,24 @@ else
     fi
     say_end " OK " "$C_OK" "Chargement de l'environnement" "fallback minimal"
 fi
-
 : "${RUN_DIR:=/run/osmo-direct}"
 : "${LOG_DIR:=$RUN_DIR/logs}"
 : "${ENCRYPTION:=a5 0}"
 : "${MS_COUNT:=2}"
 : "${HOST_IP:=127.0.0.1}"
 mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb 2>/dev/null || true
-
 # --- 2. détection des chemins / binaires --------------------------------------
 say_begin "Résolution de run.sh"
-RUN_SH=""
-for candidate in \
-    "$HERE/run.sh" \
-    "${OQC_ROOT:-}/run.sh" \
-    "$HERE/../qemu-src/run.sh" \
-    "${GSM_ROOT:-}/qemu-src/run.sh"
-do
-    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-        RUN_SH="$(cd "$(dirname "$candidate")" && pwd)/$(basename "$candidate")"
-        break
-    fi
-done
-if [ -z "$RUN_SH" ]; then
-    say_end "FAIL" "$C_KO" "Résolution de run.sh" "introuvable"
-    printf '       %s→ posez OQC_ROOT ou placez run.sh à côté de start-direct.sh%s\n' "$C_DIM" "$C_Z"
+# Forcer explicitement le chemin demandé
+RUN_SH="/opt/GSM/qemu-src/run.sh"
+# Vérifier que le fichier existe et est exécutable
+if [ ! -x "$RUN_SH" ]; then
+    say_end "FAIL" "$C_KO" "Résolution de run.sh" "$RUN_SH introuvable ou non exécutable"
+    printf '       %s→ Vérifiez que /opt/GSM/qemu-src/run.sh existe et est exécutable%s\n' "$C_DIM" "$C_Z"
     exit 1
 fi
 say_end " OK " "$C_OK" "Résolution de run.sh" "$RUN_SH"
 RUN_ROOT="$(dirname "$RUN_SH")"
-
 # Profil → mapping vers les profils attendus par run.sh
 case "$PROFILE" in
     faketrx-qemu|hybrid) CALYPSO_PROFILE=hybrid;   MODE=faketrx-qemu ;;
@@ -179,7 +156,6 @@ export PHY_MODE="${PHY_MODE:-faketrx}"
 export RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 export ENCRYPTION MS_COUNT HOST_IP
 export LOG_DIR RUN_DIR
-
 # --- 3. validation des chemins critiques --------------------------------------
 say_begin "Validation des chemins"
 path_ok=1
@@ -204,12 +180,10 @@ if [ $path_ok -eq 1 ]; then
 else
     say_end "WARN" "$C_SK" "Validation des chemins" "certains chemins manquent (run.sh vérifiera)"
 fi
-
 # --- 4. génération des configs mobile -----------------------------------------
 # MS#1 (QEMU / mobile principal) et MS#2 (faketrx side-car) pour le profil hybrid.
 BB_DIR="/root/.osmocom/bb"
 mkdir -p "$BB_DIR"
-
 # Sources possibles pour le template mobile
 MS_TEMPLATE=""
 for t in \
@@ -222,7 +196,6 @@ for t in \
 do
     if [ -f "$t" ]; then MS_TEMPLATE="$t"; break; fi
 done
-
 generate_mobile_cfg() {
     local dest="$1" vty_port="$2" l2sock="$3" sapsock="$4" arfcn="$5" imsi="$6" ki="$7"
     if [ -n "$MS_TEMPLATE" ]; then
@@ -261,7 +234,6 @@ ms 1
 EOF
     fi
 }
-
 say_begin "Génération mobile MS#1"
 MS1_CFG="$BB_DIR/mobile.cfg"
 generate_mobile_cfg "$MS1_CFG" \
@@ -272,7 +244,6 @@ generate_mobile_cfg "$MS1_CFG" \
     "001010001000001" \
     "00 11 22 33 44 55 66 77 88 99 aa bb cc dd 01 01"
 say_end " OK " "$C_OK" "Génération mobile MS#1" "$MS1_CFG"
-
 say_begin "Génération mobile MS#2 (faketrx)"
 MS2_CFG="$BB_DIR/mobile_faketrx_bts1.cfg"
 generate_mobile_cfg "$MS2_CFG" \
@@ -283,12 +254,10 @@ generate_mobile_cfg "$MS2_CFG" \
     "001010001000002" \
     "00 11 22 33 44 55 66 77 88 99 aa bb cc dd 02 01"
 say_end " OK " "$C_OK" "Génération mobile MS#2 (faketrx)" "$MS2_CFG"
-
 # Export pour que les modules run.sh / hybrid puissent les retrouver
 export MOBILE_CFG_MS1="$MS1_CFG"
 export MOBILE_CFG_MS2="$MS2_CFG"
 export CALYPSO_MS2_CFG="$MS2_CFG"
-
 # --- 5. exports supplémentaires pour le profil hybrid -------------------------
 if [ "$MODE" = "faketrx-qemu" ] || [ "$CALYPSO_PROFILE" = "hybrid" ]; then
     export QEMU_ATTACH_TRX="${QEMU_ATTACH_TRX:-0}"
@@ -300,7 +269,6 @@ if [ "$MODE" = "faketrx-qemu" ] || [ "$CALYPSO_PROFILE" = "hybrid" ]; then
     export BTS1_ARFCN=516
     export BTS0_ARFCN=514
 fi
-
 # --- 6. résumé ----------------------------------------------------------------
 banner
 printf '  %sprofil%s     %s (%s)\n' "$C_DIM" "$C_Z" "$CALYPSO_PROFILE" "$MODE"
@@ -310,14 +278,12 @@ printf '  %sMS#2%s       %s  IMSI 001010001000002  ARFCN 516  VTY 4248\n' "$C_DI
 printf '  %sjournaux%s   %s\n' "$C_DIM" "$C_Z" "$LOG_DIR"
 printf '  %schiffrement%s %s\n' "$C_DIM" "$C_Z" "$ENCRYPTION"
 printf '\n'
-
 # --- 7. actions déléguées à run.sh --------------------------------------------
 RUN_ARGS=()
 [ "$DRY" -eq 1 ]     && RUN_ARGS+=(--dry-run)
 [ "$FORCE" -eq 1 ]   && RUN_ARGS+=(--force)
 [ "$VERBOSE" -eq 1 ] && RUN_ARGS+=(--verbose)
 RUN_ARGS+=(--profile "$CALYPSO_PROFILE")
-
 case "$ACTION" in
     list)
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${RUN_ARGS[@]}"
@@ -335,7 +301,6 @@ case "$ACTION" in
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --check-paths
         ;;
 esac
-
 # --- 8. lancement : exec run.sh -----------------------------------------------
 say_begin "Transmission à run.sh"
 if [ $DRY -eq 1 ]; then
@@ -345,19 +310,5 @@ if [ $DRY -eq 1 ]; then
     exit 0
 fi
 say_end " OK " "$C_OK" "Transmission à run.sh" "profil=$CALYPSO_PROFILE"
-
 # Hand-off total : ce processus devient run.sh
-exec env \
-    CALYPSO_PROFILE="$CALYPSO_PROFILE" \
-    MODE="$MODE" \
-    PHY_MODE="$PHY_MODE" \
-    RUN_NO_PROCESS="$RUN_NO_PROCESS" \
-    ENCRYPTION="$ENCRYPTION" \
-    MS_COUNT="$MS_COUNT" \
-    HOST_IP="$HOST_IP" \
-    LOG_DIR="$LOG_DIR" \
-    RUN_DIR="$RUN_DIR" \
-    MOBILE_CFG_MS1="$MS1_CFG" \
-    MOBILE_CFG_MS2="$MS2_CFG" \
-    CALYPSO_MS2_CFG="$MS2_CFG" \
-    bash "$RUN_SH" "${RUN_ARGS[@]}"
+exec bash /opt/GSM/qemu-src/run.sh "${RUN_ARGS[@]}" --restart

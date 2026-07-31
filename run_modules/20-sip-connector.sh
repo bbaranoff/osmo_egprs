@@ -1,5 +1,5 @@
 # =============================================================================
-#  13-sip_connector — OsmoMSC, le commutateur du service circuit (CS)
+#  13-sip_connector — OsmoSIP, le commutateur du service circuit (CS)
 # =============================================================================
 #  RÔLE      VLR + commutation CS : rattachements, SMS, appels. Il est client
 #            GSUP du HLR, client MGCP du MGW, et ASP M3UA du STP — les trois
@@ -17,7 +17,7 @@
 : "${MODDIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 . "$MODDIR/_lib/core.sh"
 
-MOD_REGISTER sip_connector "Cœur — OsmoMSC (commutation CS)"
+MOD_REGISTER sip_connector "Cœur — OsmoSIP (commutation CS)"
 MOD_REQUIRED[sip_connector]=1
 MOD_DEPS[sip_connector]="stp hlr mgw"
 MOD_PROFILES[sip_connector]="calypso faketrx hybrid core"
@@ -25,12 +25,12 @@ MOD_JOURNAL[sip_connector]="osmo-sip_connector"
 MOD_TIMEOUT[sip_connector]=40
 MOD_ENABLED_IF[sip_connector]='[ "${NO_OSMO_START:-0}" != 1 ]'
 
-: "${MSC_UNIT:=osmo-sip_connector}"
-: "${MSC_VTY_PORT:=4254}"
+: "${SIP_UNIT:=osmo-sip_connector}"
+: "${SIP_VTY_PORT:=4254}"
 
 _sip_connector_cfg()      { core_cfg osmo-sip_connector; }
 # « asp <nom> <port distant> <port local> m3ua » → le port local identifie
-# l'association SCTP côté MSC.
+# l'association SCTP côté SIP.
 _sip_connector_asp_port() { core_cfg_field "$(_sip_connector_cfg)" '^[[:space:]]*asp[[:space:]]+.*[[:space:]]m3ua[[:space:]]*$' 4 ""; }
 _sip_connector_mncc()     { core_cfg_field "$(_sip_connector_cfg)" '^[[:space:]]*mncc[[:space:]]+external[[:space:]]' 3 ""; }
 
@@ -42,24 +42,24 @@ mod_sip_connector_check() {
     mod_ok
 }
 
-mod_sip_connector_status() { core_unit_active "$MSC_UNIT" || core_vty_listen "$MSC_VTY_PORT"; }
+mod_sip_connector_status() { core_unit_active "$SIP_UNIT" || core_vty_listen "$SIP_VTY_PORT"; }
 
 mod_sip_connector_start() {
-    core_svc_start "$MSC_UNIT" "$(core_bin osmo-sip_connector)" -c "$(_sip_connector_cfg)" \
-        || { mod_fail "systemctl start $MSC_UNIT a échoué"
-             mod_hint "journalctl -u $MSC_UNIT -n 30"; return $MOD_RC_FAIL; }
+    core_svc_start "$SIP_UNIT" "$(core_bin osmo-sip_connector)" -c "$(_sip_connector_cfg)" \
+        || { mod_fail "systemctl start $SIP_UNIT a échoué"
+             mod_hint "journalctl -u $SIP_UNIT -n 30"; return $MOD_RC_FAIL; }
     mod_ok
 }
 
-# BARRIÈRE — un MSC « actif » dont l'ASP n'est jamais passé ACTIVE ne verra
+# BARRIÈRE — un SIP « actif » dont l'ASP n'est jamais passé ACTIVE ne verra
 # jamais le BSC : le rattachement échouerait sans que rien ne le signale. Le
 # critère est l'association SCTP établie, sondée passivement (ss --sctp).
 mod_sip_connector_wait() {
     local to="${MOD_TIMEOUT[sip_connector]}" asp mncc
     asp="$(_sip_connector_asp_port)"; mncc="$(_sip_connector_mncc)"
 
-    if ! wait_until "$to" "VTY OsmoMSC ($MSC_VTY_PORT)" core_vty_listen "$MSC_VTY_PORT"; then
-        mod_hint "journalctl -u $MSC_UNIT -n 30"
+    if ! wait_until "$to" "VTY OsmoSIP ($SIP_VTY_PORT)" core_vty_listen "$SIP_VTY_PORT"; then
+        mod_hint "journalctl -u $SIP_UNIT -n 30"
         return $MOD_RC_FAIL
     fi
     if [ -n "$asp" ]; then
@@ -76,12 +76,12 @@ mod_sip_connector_wait() {
             return $MOD_RC_FAIL
         fi
     fi
-    if core_restarted_since "$MSC_UNIT"; then
-        mod_hint "journalctl -u $MSC_UNIT -n 50 : le service redémarre en boucle"
-        mod_fail "OsmoMSC a redémarré depuis le lancement"
+    if core_restarted_since "$SIP_UNIT"; then
+        mod_hint "journalctl -u $SIP_UNIT -n 50 : le service redémarre en boucle"
+        mod_fail "OsmoSIP a redémarré depuis le lancement"
         return $MOD_RC_FAIL
     fi
     mod_ok
 }
 
-mod_sip_connector_stop() { core_svc_stop "$MSC_UNIT" "osmo-sip_connector -c"; }
+mod_sip_connector_stop() { core_svc_stop "$SIP_UNIT" "osmo-sip_connector -c"; }
