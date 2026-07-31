@@ -72,8 +72,6 @@ linphone_rtp_end()   { echo $(( 30000 + $1 * 200 - 1 )); }
 HOST_IP="127.0.0.1"
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
-# Audio : endpoint TCP du pulse de l'hôte, transmis aux conteneurs (run.sh).
-# Vide tant que le relai n'a pas été ouvert par ensure_host_audio_relay.
 HOST_AUDIO_RELAY=""
 WSLG_TCP_PORT="${WSLG_TCP_PORT:-4713}"
 
@@ -90,7 +88,6 @@ banner() {
 WT_BACKTITLE="Osmocom GSM/EGPRS Virtual Network"
 WT_WIDTH=72
 
-# Vérifie la présence de whiptail
 check_whiptail() {
     if ! command -v whiptail >/dev/null 2>&1; then
         echo -e "${RED}whiptail introuvable.${NC} Installez-le :" >&2
@@ -100,19 +97,16 @@ check_whiptail() {
     fi
 }
 
-# wt_input <titre> <message> <defaut>  → valeur sur stdout, exit non nul si annulé
 wt_input() {
     whiptail --backtitle "$WT_BACKTITLE" --title "$1" \
         --inputbox "$2" 10 "$WT_WIDTH" "$3" 3>&1 1>&2 2>&3
 }
 
-# wt_yesno <titre> <message>  → 0 (oui) / 1 (non), défaut Non
 wt_yesno() {
     whiptail --backtitle "$WT_BACKTITLE" --title "$1" \
         --defaultno --yesno "$2" 11 "$WT_WIDTH" 3>&1 1>&2 2>&3
 }
 
-# wt_menu <titre> <message> <tag1> <item1> ...  → tag choisi sur stdout
 wt_menu() {
     local title="$1" prompt="$2"; shift 2
     local nitems=$(( $# / 2 ))
@@ -120,7 +114,6 @@ wt_menu() {
         --menu "$prompt" 20 "$WT_WIDTH" "$nitems" "$@" 3>&1 1>&2 2>&3
 }
 
-# wt_msg <message>  → boîte d'information
 wt_msg() {
     whiptail --backtitle "$WT_BACKTITLE" --msgbox "$1" 10 "$WT_WIDTH"
 }
@@ -128,22 +121,18 @@ wt_msg() {
 # ── Loopback audio côté session utilisateur ───────────────────────────────
 enable_user_loopback() {
     local target_user target_uid target_runtime loopback_script
-
     target_user="${SUDO_USER:-nirvana}"
     target_uid="$(id -u "$target_user")"
     target_runtime="/run/user/${target_uid}"
     loopback_script="/home/${target_user}/osmo_egprs/loopback.sh"
-
     echo -e "${GREEN}=== [audio] Loopback user session ===${NC}"
     echo -e "  user    : ${CYAN}${target_user}${NC}"
     echo -e "  runtime : ${CYAN}${target_runtime}${NC}"
     echo -e "  script  : ${CYAN}${loopback_script}${NC}"
-
     if [[ ! -x "$loopback_script" ]]; then
         echo -e "  ${RED}[FAIL]${NC} script introuvable ou non exécutable"
         return 1
     fi
-
     sudo -u "$target_user" \
         XDG_RUNTIME_DIR="$target_runtime" \
         PULSE_SERVER="unix:${target_runtime}/pulse/native" \
@@ -151,51 +140,34 @@ enable_user_loopback() {
             echo -e "  ${RED}[FAIL]${NC} enable loopback"
             return 1
         }
-
     echo -e "[ OK ]${NC} loopback activé"
 }
 
 disable_user_loopback() {
     local target_user target_uid target_runtime loopback_script
-
     target_user="${SUDO_USER:-nirvana}"
     target_uid="$(id -u "$target_user")"
     target_runtime="/run/user/${target_uid}"
     loopback_script="/home/${target_user}/osmo_egprs/loopback.sh"
-
     sudo -u "$target_user" \
         XDG_RUNTIME_DIR="$target_runtime" \
         PULSE_SERVER="unix:${target_runtime}/pulse/native" \
         "$loopback_script" disable || true
 }
+
 build_alsa_args() {
     local alsa_args=""
     local src_asound="$(dirname "$0")/configs/asound.conf"
     local host_asound="/tmp/osmocom-alsa/asound.conf"
-
     mkdir -p /tmp/osmocom-alsa
-
-    # /dev/snd passthrough
     if [ -d /dev/snd ]; then
         alsa_args="${alsa_args} --device /dev/snd"
         if getent group audio >/dev/null 2>&1; then
             alsa_args="${alsa_args} --group-add $(getent group audio | cut -d: -f3)"
         fi
     fi
-
-    # PulseAudio — CONTENEUR AUTONOME.
-    # On NE monte PAS le socket PulseAudio de l'hôte. Il appartient à
-    # l'utilisateur de session (uid != root) et, bind-monté sur /run/pulse/native,
-    # il masquait le chemin où le démon du conteneur (ensure_pulse, start-direct.sh)
-    # doit créer SON socket → "Device or resource busy" / "Address already in use"
-    # et "Access denied" (on parlait au Pulse de l'hôte, qui refuse l'auth root).
-    # Le conteneur lance son propre démon system-mode (sink gsm_audio) ; parec →
-    # dashboard web lit le monitor. On se contente de pointer PULSE_SERVER vers
-    # le socket local du conteneur.
     local has_pulse="true"
     alsa_args="${alsa_args} -e PULSE_SERVER=unix:/run/pulse/native"
-
-    # asound.conf : copie depuis configs/
     if [ -f "$src_asound" ]; then
         cp "$src_asound" "$host_asound"
         alsa_args="${alsa_args} -v ${host_asound}:/etc/asound.conf:rw"
@@ -211,18 +183,12 @@ build_alsa_args() {
         alsa_args="${alsa_args} -e ALSA_CARD=default -e GAPK_ALSA_DEV=default"
         echo -e "  ${YELLOW}Audio : configs/asound.conf absent, fallback default${NC}" >&2
     fi
-
     echo "$alsa_args"
 }
 
-# ── Audio hôte : expose le pulse de l'hôte en TCP (idempotent, une fois) ──────
-# Le pont audio réel (parec|paplay gsm_audio.monitor → hôte) est lancé DANS le
-# conteneur par scripts/run.sh::audio_bridge, qui lit HOST_AUDIO_RELAY. Ici on
-# ne fait qu'OUVRIR le relai côté hôte (WSLg→Windows en WSL, ou pulse de session
-# en Linux natif) et publier l'endpoint dans la globale HOST_AUDIO_RELAY.
-# Voir scripts/wslg-audio-bridge.sh.
+# ── Audio hôte : expose le pulse de l'hôte en TCP ──────────────────────────
 ensure_host_audio_relay() {
-    [ -n "${HOST_AUDIO_RELAY_DONE:-}" ] && return 0   # une seule fois
+    [ -n "${HOST_AUDIO_RELAY_DONE:-}" ] && return 0
     HOST_AUDIO_RELAY_DONE=1
     local bridge="$(dirname "$0")/scripts/wslg-audio-bridge.sh"
     [ -x "$bridge" ] || { echo -e "  ${YELLOW}[host-audio] $bridge introuvable${NC}" >&2; return 0; }
@@ -234,15 +200,13 @@ ensure_host_audio_relay() {
         echo -e "  ${YELLOW}[host-audio] relai non ouvert — fallback carte locale dans le conteneur${NC}"
     fi
 }
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Build
 # ══════════════════════════════════════════════════════════════════════════════
-# QUICK=1 : build rapide (réutilise le cache docker, pas de --no-cache).
-# QUICK=0 (défaut) : build complet avec --no-cache (image reconstruite à neuf).
 QUICK="${OSMO_QUICK:-0}"
-# Vrai si le build a été choisi explicitement (arg quick|normal ou OSMO_QUICK) :
-# dans ce cas on NE redemande PAS dans le menu.
 QUICK_EXPLICIT=0; [ -n "${OSMO_QUICK:-}" ] && QUICK_EXPLICIT=1
+
 build_run_image() {
     if [ "${QUICK:-0}" = "1" ]; then
         echo -e "${GREEN}Build de l'image run...${NC} ${YELLOW}(quick — cache docker réutilisé)${NC}"
@@ -267,7 +231,6 @@ check_image() {
 generate_pjsip_interop_trunks() {
     local op_id=$1
     local n_operators=$2
-
     for remote_op in $(seq 1 "$n_operators"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         local remote_ip
@@ -301,18 +264,13 @@ EOF
     done
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Génération dynamique — dialplan [interop_out]
-# ══════════════════════════════════════════════════════════════════════════════
 generate_extensions_interop_out() {
     local op_id=$1
     local n_operators=$2
-
     cat <<'EOF'
 [interop_out]
 
 EOF
-
     for remote_op in $(seq 1 "$n_operators"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
@@ -328,7 +286,6 @@ exten => _${remote_op}XXXXX,1,NoOp(=== INTEROP OUT Op${remote_op} 5d: \${EXTEN} 
 
 EOF
     done
-
     cat <<'EOF'
 exten => _X.,1,NoOp(=== INTEROP OUT: inconnu ${EXTEN} ===)
  same => n,Congestion()
@@ -387,8 +344,7 @@ apply_config_templates() {
         cp "$f" "$dest/asterisk/"
     done
 
-    # Scripts — copie TOUT scripts/ (miroir de l'image, qui fait COPY scripts/. /etc/osmocom/)
-    # pour que le montage RÉPERTOIRE de /etc/osmocom (cf. build_vol_args) ne masque aucun script.
+    # Scripts — copie TOUT scripts/
     cp scripts/* "$dest/osmocom/" 2>/dev/null || true
     chmod +x "$dest/osmocom"/*.sh 2>/dev/null || true
 
@@ -428,7 +384,7 @@ apply_config_templates() {
     rtp_end=$(linphone_rtp_end "$op_id")
     sip_host_port=$(linphone_sip_port "$op_id")
 
-    # ── Substitution sed — TOUTES les valeurs en un seul passage ──────────
+    # ── Substitution sed ────────────────────────────────────────────────────
     for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
         [ -f "$f" ] || continue
         sed -i \
@@ -493,10 +449,6 @@ apply_config_templates() {
 build_vol_args() {
     local tmpdir=$1
     local vol_args=""
-    # Montage RÉPERTOIRE (et non fichier par fichier) : si chaque cfg est monté
-    # individuellement, il devient un point de montage et tout 'mv'/'sed -i'
-    # par-dessus échoue (Device or resource busy). En montant le dossier, les
-    # fichiers à l'intérieur restent des fichiers normaux → éditables.
     [ -d "$tmpdir/osmocom" ] && vol_args="$vol_args -v $tmpdir/osmocom:/etc/osmocom"
     for f in "$tmpdir/asterisk"/*.conf; do
         [ -f "$f" ] || continue
@@ -536,17 +488,13 @@ start_inter_stp() {
     local tmpdir
     tmpdir=$(mktemp -d)
     local inter_cfg="${tmpdir}/osmo-stp-interop.cfg"
-
     echo -e "${GREEN}Génération config inter-STP (${n_operators} opérateurs)...${NC}"
     bash ./helpers/create_interop.sh "$n_operators" "$inter_cfg" > /dev/null
-
     if [ ! -f "$inter_cfg" ]; then
         echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
     fi
-
     echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.23.0)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
-
     docker run -d \
         --rm \
         --name "$INTER_STP_CONTAINER" \
@@ -558,11 +506,9 @@ start_inter_stp() {
         --entrypoint bash \
         "$IMAGE_RUN" \
         -c "sleep infinity" > /dev/null
-
     docker exec "$INTER_STP_CONTAINER" \
         tmux new-session -d -s stp \
         "osmo-stp -c /etc/osmocom/osmo-stp-interop.cfg 2>&1 | tee /tmp/osmo-stp.log"
-
     echo -ne "${GREEN}[*] Attente démarrage inter-STP"
     local retries=25
     while [ $retries -gt 0 ]; do
@@ -634,9 +580,6 @@ setup_wan_interop() {
 # ══════════════════════════════════════════════════════════════════════════════
 # PoC QEMU — entrée par défaut du premier menu
 # ══════════════════════════════════════════════════════════════════════════════
-# Réutilise le flux 'virtual' (start_bridge_mode) en mode non-interactif :
-# 1 opérateur, no-process + qemu, A5/0. Le bring-up lance ensuite
-# /opt/GSM/qemu-src/run.sh dans un gnome-terminal (bloc BRIDGE_QEMU).
 start_qemu_poc() {
     echo -e "${GREEN}PoC QEMU Calypso — bring-up minimal + qemu-src/run.sh...${NC}"
     QEMU_POC=1
@@ -649,100 +592,98 @@ start_qemu_poc() {
 start_bridge_mode() {
     local n_operators
     declare -A OP_MCC OP_MNC OP_NAME OP_MS
+
     if [ "${QEMU_POC:-0}" = "1" ]; then
-        # ── PoC QEMU (entrée par défaut du premier menu) : 1 opérateur, valeurs
-        #    par défaut, no-process + qemu-src/run.sh, A5/1, sans WAN. AUCUN prompt. ──
+        # ── PoC QEMU ──────────────────────────────────────────────────────────
         n_operators=1
         OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=1
         WAN_ENABLED="false"
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
-        ENCRYPTION="a5 1"   # defaut PoC QEMU = A5/1 (chiffrement bout-en-bout OK : Kc osmocon + UL qemu_wrap + DL 2-grgsm)
+        ENCRYPTION="a5 1"
         echo -e "  ${CYAN}[PoC QEMU] 1 opérateur · no-process + qemu-src/run.sh · A5/1${NC}"
     else
-    n_operators=$(wt_input "Opérateurs" "Nombre d'opérateurs (1-36) :" "2") || exit 1
-    n_operators=${n_operators:-2}
-    if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 36 ]; then
-        wt_msg "Nombre invalide (1–36)."; exit 1
-    fi
+        # ── Mode interactif ──────────────────────────────────────────────────
+        n_operators=$(wt_input "Opérateurs" "Nombre d'opérateurs (1-36) :" "2") || exit 1
+        n_operators=${n_operators:-2}
+        if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 36 ]; then
+            wt_msg "Nombre invalide (1–36)."; exit 1
+        fi
 
-    local use_defaults="N"
-    wt_yesno "Valeurs par défaut" "Valeurs par défaut pour tous (MCC=001, MNC=01/02/…) ?" && use_defaults="O"
+        local use_defaults="N"
+        wt_yesno "Valeurs par défaut" "Valeurs par défaut pour tous (MCC=001, MNC=01/02/…) ?" && use_defaults="O"
 
-    local same_ms_all="N"
-    if [ "$use_defaults" != "O" ]; then
-        wt_yesno "MS" "Même nombre de MS pour tous les opérateurs ?" && same_ms_all="O"
-    fi
+        local same_ms_all="N"
+        if [ "$use_defaults" != "O" ]; then
+            wt_yesno "MS" "Même nombre de MS pour tous les opérateurs ?" && same_ms_all="O"
+        fi
 
-    declare -A OP_MCC OP_MNC OP_NAME OP_MS
+        declare -A OP_MCC OP_MNC OP_NAME OP_MS
 
-    if [ "$use_defaults" = "O" ]; then
-        local common_ms
-        common_ms=$(wt_input "MS" "MS par opérateur (1-64) :" "8") || exit 1
-        common_ms=${common_ms:-8}
-        if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
-        for i in $(seq 1 "$n_operators"); do
-            OP_MCC[$i]="001"; OP_MNC[$i]=$(printf '%02d' "$i")
-            OP_NAME[$i]="OsmoOP${i}"; OP_MS[$i]=$common_ms
-        done
-    else
-        if [ "$same_ms_all" = "O" ]; then
+        if [ "$use_defaults" = "O" ]; then
             local common_ms
             common_ms=$(wt_input "MS" "MS par opérateur (1-64) :" "8") || exit 1
             common_ms=${common_ms:-8}
             if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
             for i in $(seq 1 "$n_operators"); do
-                local mcc mnc name dmnc; dmnc=$(printf '%02d' "$i")
-                mcc=$(wt_input "Opérateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
-                mnc=$(wt_input "Opérateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
-                name=$(wt_input "Opérateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
-                OP_MS[$i]=$common_ms
+                OP_MCC[$i]="001"; OP_MNC[$i]=$(printf '%02d' "$i")
+                OP_NAME[$i]="OsmoOP${i}"; OP_MS[$i]=$common_ms
             done
         else
-            for i in $(seq 1 "$n_operators"); do
-                local mcc mnc name n_ms dmnc; dmnc=$(printf '%02d' "$i")
-                mcc=$(wt_input "Opérateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
-                mnc=$(wt_input "Opérateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
-                name=$(wt_input "Opérateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
-                n_ms=$(wt_input "Opérateur ${i}" "Nombre de MS (1-64) :" "1") || exit 1; OP_MS[$i]=${n_ms:-1}
-                if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then OP_MS[$i]=1; fi
-            done
+            if [ "$same_ms_all" = "O" ]; then
+                local common_ms
+                common_ms=$(wt_input "MS" "MS par opérateur (1-64) :" "8") || exit 1
+                common_ms=${common_ms:-8}
+                if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
+                for i in $(seq 1 "$n_operators"); do
+                    local mcc mnc name dmnc; dmnc=$(printf '%02d' "$i")
+                    mcc=$(wt_input "Opérateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
+                    mnc=$(wt_input "Opérateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
+                    name=$(wt_input "Opérateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                    OP_MS[$i]=$common_ms
+                done
+            else
+                for i in $(seq 1 "$n_operators"); do
+                    local mcc mnc name n_ms dmnc; dmnc=$(printf '%02d' "$i")
+                    mcc=$(wt_input "Opérateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
+                    mnc=$(wt_input "Opérateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
+                    name=$(wt_input "Opérateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                    n_ms=$(wt_input "Opérateur ${i}" "Nombre de MS (1-64) :" "1") || exit 1; OP_MS[$i]=${n_ms:-1}
+                    if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then OP_MS[$i]=1; fi
+                done
+            fi
         fi
+
+        # ── WAN Interop ──────────────────────────────────────────────────────
+        if wt_yesno "WAN Interop" "Activer WAN vers un serveur distant ?"; then
+            WAN_ENABLED="true"
+            local auto_ip=""
+            auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
+            [ -z "$auto_ip" ] && auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+            local wan_local wan_remote wan_nremote wan_pfx
+            wan_local=$(wt_input "WAN" "IP publique locale :" "$auto_ip") || exit 1
+            WAN_LOCAL_IP="${wan_local:-$auto_ip}"
+            [ -z "$WAN_LOCAL_IP" ] && WAN_ENABLED="false"
+            if [ "$WAN_ENABLED" = "true" ]; then
+                wan_remote=$(wt_input "WAN" "IP publique distante :" "") || exit 1
+                WAN_REMOTE_IP="$wan_remote"
+                [ -z "$WAN_REMOTE_IP" ] && WAN_ENABLED="false"
+            fi
+            if [ "$WAN_ENABLED" = "true" ]; then
+                wan_nremote=$(wt_input "WAN" "Nb opérateurs distants :" "$n_operators") || exit 1
+                WAN_N_REMOTE="${wan_nremote:-$n_operators}"
+                wan_pfx=$(wt_input "WAN" "Préfixe WAN :" "$WAN_PREFIX") || exit 1
+                WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
+                echo -e "  ${GREEN}WAN: ${WAN_LOCAL_IP} ↔ ${WAN_REMOTE_IP} (local=${n_operators} remote=${WAN_N_REMOTE} prefix=${WAN_PREFIX})${NC}"
+            fi
+        fi
+
+        # ── RAN / Encryption ─────────────────────────────────────────────────
+        PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
+        ENCRYPTION="${ENCRYPTION:-a5 1}"
+        choose_ran_host
     fi
 
-    # ── WAN Interop ──
-    if wt_yesno "WAN Interop" "Activer WAN vers un serveur distant ?"; then
-        WAN_ENABLED="true"
-        local auto_ip=""
-        auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
-        [ -z "$auto_ip" ] && auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
-        local wan_local wan_remote wan_nremote wan_pfx
-        wan_local=$(wt_input "WAN" "IP publique locale :" "$auto_ip") || exit 1
-        WAN_LOCAL_IP="${wan_local:-$auto_ip}"
-        [ -z "$WAN_LOCAL_IP" ] && WAN_ENABLED="false"
-        if [ "$WAN_ENABLED" = "true" ]; then
-            wan_remote=$(wt_input "WAN" "IP publique distante :" "") || exit 1
-            WAN_REMOTE_IP="$wan_remote"
-            [ -z "$WAN_REMOTE_IP" ] && WAN_ENABLED="false"
-        fi
-        if [ "$WAN_ENABLED" = "true" ]; then
-            wan_nremote=$(wt_input "WAN" "Nb opérateurs distants :" "$n_operators") || exit 1
-            WAN_N_REMOTE="${wan_nremote:-$n_operators}"
-            wan_pfx=$(wt_input "WAN" "Préfixe WAN :" "$WAN_PREFIX") || exit 1
-            WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
-            echo -e "  ${GREEN}WAN: ${WAN_LOCAL_IP} ↔ ${WAN_REMOTE_IP} (local=${n_operators} remote=${WAN_N_REMOTE} prefix=${WAN_PREFIX})${NC}"
-        fi
-    fi
-
-    # ── RAN / Encryption : choisis SUR L'HÔTE (whiptail rapide) ────────────
-    # Auparavant délégués au menu de start-direct.sh DANS le conteneur, mais la
-    # navigation whiptail y est laggy (PTY docker exec). On collecte donc le
-    # pipeline Calypso + le chiffrement ici, et on les passe au conteneur via le
-    # handoff avec NO_MENU=1 (cf. fin de cette fonction) → zéro menu conteneur.
-    PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
-    ENCRYPTION="${ENCRYPTION:-a5 1}"
-    choose_ran_host
-    fi   # ── fin des prompts interactifs (intégralement sautés en PoC QEMU) ──
-    # ── Détection IP hôte pour Linphone ────────────────────────────────────
+    # ── Détection IP hôte ────────────────────────────────────────────────────
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
         | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
     if [ -z "$HOST_IP" ]; then
@@ -753,7 +694,7 @@ start_bridge_mode() {
     echo -e "${GREEN}IP hôte : ${CYAN}${HOST_IP}${NC}  (Linphone)${NC}"
     echo ""
 
-    # ── Réseau backbone (auto) ─────────────────────────────────────────────
+    # ── Réseau backbone ──────────────────────────────────────────────────────
     if docker network inspect "$INTER_NET" &>/dev/null; then
         echo -e "  ${CYAN}Réseau backbone ${INTER_NET} déjà présent${NC}"
     elif docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" "$INTER_NET" &>/dev/null; then
@@ -762,7 +703,7 @@ start_bridge_mode() {
         echo -e "  ${RED}✗ Échec création réseau backbone ${INTER_NET} (${INTER_NET_SUBNET})${NC}"; exit 1
     fi
 
-    # ── SMS Routing ────────────────────────────────────────────────────────
+    # ── SMS Routing ──────────────────────────────────────────────────────────
     SMS_ROUTING_DIR=$(mktemp -d)
     if declare -f sms_routing_generate_all > /dev/null 2>&1; then
         local _ms_counts=()
@@ -771,11 +712,11 @@ start_bridge_mode() {
         sms_routing_summary "$n_operators" "${_ms_counts[@]}"
     fi
 
-    # ── Inter-STP ──────────────────────────────────────────────────────────
+    # ── Inter-STP ────────────────────────────────────────────────────────────
     start_inter_stp "$n_operators"
     wait_inter_stp_ready "$n_operators"
 
-    # ── HLR subscribers ────────────────────────────────────────────────────
+    # ── HLR subscribers ──────────────────────────────────────────────────────
     local all_subscribers_file
     all_subscribers_file=$(mktemp)
     echo "# op_id:ms_idx:imsi:msisdn:ki" > "$all_subscribers_file"
@@ -793,7 +734,7 @@ start_bridge_mode() {
     echo -e "${GREEN}Abonnés total : ${total_subs}${NC}"
     echo ""
 
-    # ── Démarrage séquentiel des opérateurs ────────────────────────────────
+    # ── Démarrage séquentiel des opérateurs ──────────────────────────────────
     for i in $(seq 1 "$n_operators"); do
         local container_name net_name subnet gateway container_ip inter_local_ip rctx_inter
         local n_groups last_group_ip
@@ -835,7 +776,7 @@ start_bridge_mode() {
 
         mkdir -p /tmp/osmocom-logs/op${i}
 
-        # ── Ports à exposer ───────────────────────────────────────────────
+        # ── Ports à exposer ──────────────────────────────────────────────────
         local port_args=""
 
         # Linphone SIP/RTP — toujours exposé
@@ -855,9 +796,10 @@ start_bridge_mode() {
             port_args="${port_args} -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
             echo -e "  WAN        : SIP ${sip_port} RTP ${rtp_start}-${rtp_end}"
         fi
+
         docker rm -f "$container_name" 2>/dev/null || true
-        # Audio : ouvre le relai pulse de l'hôte AVANT le conteneur (run.sh le lit)
         ensure_host_audio_relay
+
         # shellcheck disable=SC2086
         docker run -d \
             --rm \
@@ -891,11 +833,10 @@ start_bridge_mode() {
             $vol_args \
             "$IMAGE_RUN" \
             sleep infinity
+
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
 
-        # run.sh selon le mode no-process choisi. En qemu, on NE chaîne PAS
-        # ici le run.sh de qemu-src : il sera lancé dans un gnome-terminal
-        # (TTY) après que le core soit prêt, pour avoir un accès interactif.
+        # run.sh selon le mode no-process choisi
         local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} /etc/osmocom/run.sh"
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
         docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
@@ -908,9 +849,6 @@ start_bridge_mode() {
             if [ $retry -ge 45 ]; then echo -e " ${RED}TIMEOUT${NC}"; break; fi
         done
         echo -e " ${GREEN}✓${NC}"
-
-        # Audio : le pont parec|paplay est lancé DANS le conteneur par run.sh
-        # (audio_bridge, via HOST_AUDIO_RELAY). Rien à faire ici.
 
         # Feed HLR
         echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${total_subs} abonnés)...${NC}"
@@ -938,12 +876,7 @@ start_bridge_mode() {
         '
         echo -e "  ${GREEN}✓ HLR Op${i} alimenté${NC}"
 
-        # En qemu : /opt/GSM/qemu-src/run.sh n'est PLUS lance ici dans un
-        # gnome-terminal dedie. Il devient la fenetre 'qemu' de la session tmux
-        # UNIQUE construite apres la boucle (cf. section "Terminal unique").
-        # -> un seul gnome-terminal au lieu de plusieurs fenetres qui poppent.
-
-        # Attente dernier groupe — sautée en no-process (pas de mobile → 4247 absent)
+        # Attente dernier groupe — sautée en no-process
         if [ "${BRIDGE_NO_PROCESS:-0}" = "1" ]; then
             echo -e "  ${YELLOW}[no-process] mobile non lancé — attente 4247 sautée${NC}"
         else
@@ -962,19 +895,19 @@ start_bridge_mode() {
 
     rm -f "$all_subscribers_file"
 
-    # ── Attente relays SMS — sautée en no-process (SMSC non lancé) ──────────
+    # ── Attente relays SMS ────────────────────────────────────────────────────
     if [ "${BRIDGE_NO_PROCESS:-0}" != "1" ] && declare -f sms_routing_wait_ready > /dev/null 2>&1; then
         for i in $(seq 1 "$n_operators"); do
             sms_routing_wait_ready "$(op_container "$i")" 90 || true
         done
     fi
 
-    # ── WAN ────────────────────────────────────────────────────────────────
+    # ── WAN ────────────────────────────────────────────────────────────────────
     if [ "$WAN_ENABLED" = "true" ]; then
         setup_wan_interop "$n_operators" "$WAN_N_REMOTE"
     fi
 
-    # ── Résumé ─────────────────────────────────────────────────────────────
+    # ── Résumé ─────────────────────────────────────────────────────────────────
     echo ""
     echo -e "${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
     echo ""
@@ -1003,25 +936,29 @@ start_bridge_mode() {
 
     echo -e "\n${GREEN}${BOLD}Stack prête !${NC}"
 
-    # Mode QEMU : on remet la main au terminal courant en exec-ant directement
-    # `docker exec -ti` sur le run.sh calypso. Quand run.sh sort, start.sh sort.
-    # Pas de tmux, pas de nouvelle fenetre : visu directe ici.
+    # ── Mode QEMU : handoff vers start-direct.sh ──────────────────────────────
     if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
         local _qemu_container; _qemu_container=$(op_container 1)
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
         echo -e "  ${CYAN}[*] mode=${HANDOFF_MODE} pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hôte, NO_MENU)${NC}"
-        # NO_MENU=1 + MODE/QEMU_CHOICE/ENCRYPTION passés depuis l'hôte → start-direct.sh
-        # ne lance AUCUN menu whiptail dans le conteneur (navigation flèches laggy
-        # en docker exec -ti). Les choix ont déjà été faits par choose_ran_host.
-        # WAN_* : si WAN activé, transmis pour que setup_sms_bridge injecte les
-        # routes SMS inter-WAN (vers le serveur distant) dans le run faketrx+qemu.
+
         local _wan_env=""
         if [ "$WAN_ENABLED" = "true" ]; then
             _wan_env="WAN_REMOTE_IP='${WAN_REMOTE_IP}' WAN_PREFIX='${WAN_PREFIX}' WAN_N_REMOTE='${WAN_N_REMOTE:-$n_operators}'"
             echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (préfixe ${WAN_PREFIX})${NC}"
         fi
+
+        # Correction : on exécute directement start-direct.sh avec les bonnes variables
+        # pour que CALYPSO_MODE soit correctement passé et reconnu
         exec docker exec -ti "$_qemu_container" bash -c \
-            "cd /opt/GSM/osmo_egprs && NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' ENCRYPTION='${ENCRYPTION}' ${_wan_env} ./start-direct.sh"
+            "cd /opt/GSM/qemu-src && \
+             NO_MENU=1 \
+             MODE='${HANDOFF_MODE}' \
+             QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' \
+             ENCRYPTION='${ENCRYPTION}' \
+             CALYPSO_MODE='shunt_legit' \
+             ${_wan_env} \
+             ./start-direct.sh"
     fi
 }
 
@@ -1059,8 +996,6 @@ start_host_mode() {
     vol_args=$(build_vol_args "$tmpdir")
     alsa_args=$(build_alsa_args)
 
-    # Audio : relai pulse de l'hôte. En --net host le conteneur partage le réseau
-    # de l'hôte → le relai est joignable en 127.0.0.1 (pas via une gateway docker).
     ensure_host_audio_relay
     local nethost_relay=""
     [ -n "$HOST_AUDIO_RELAY" ] && nethost_relay="tcp:127.0.0.1:${WSLG_TCP_PORT}"
@@ -1086,8 +1021,6 @@ start_host_mode() {
     wait_bb_vty "egprs"
     sleep 3
 
-    # run.sh dans un gnome-terminal (TTY interactif), comme les autres modes.
-    # gnome-terminal doit tourner sous l'utilisateur (bus D-Bus de session).
     local _du="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
     local _duid; _duid=$(id -u "$_du" 2>/dev/null)
     local _disp="${DISPLAY:-:0}"
@@ -1121,8 +1054,9 @@ stop_all() {
     disable_user_loopback
 }
 
-# Premier menu : choix du build (quick = cache docker / normal = --no-cache).
-# Fixe QUICK. Sauté si déjà fixé explicitement (arg quick|normal ou OSMO_QUICK).
+# ══════════════════════════════════════════════════════════════════════════════
+# Menus
+# ══════════════════════════════════════════════════════════════════════════════
 choose_build_mode() {
     [ "${QUICK_EXPLICIT:-0}" = "1" ] && return 0
     local choice
@@ -1136,10 +1070,6 @@ choose_build_mode() {
     esac
 }
 
-# Menu RAN (pipeline Calypso QEMU + chiffrement A5) fait SUR L'HÔTE — whiptail
-# rapide. Les choix sont passés au start-direct.sh du conteneur (NO_MENU=1), ce
-# qui évite les menus whiptail en docker exec -ti (navigation flèches laggy via
-# le PTY docker). Fixe HANDOFF_QEMU_CHOICE et ENCRYPTION.
 choose_ran_host() {
     local r
     r=$(wt_menu "RAN — Pipeline QEMU Calypso" \
@@ -1151,13 +1081,13 @@ choose_ran_host() {
         "bare"         "QEMU + osmocon only" \
         "faketrx-qemu" "COMBINÉ : fake_trx vivant + Calypso QEMU" \
         "free"         "menu complet run.sh (--menu)") || exit 1
-    # Le combiné a son propre MODE (faketrx-qemu) ; les autres sont des pipelines
-    # du MODE qemu (passés via QEMU_CHOICE).
+
     if [ "$r" = "faketrx-qemu" ]; then
         HANDOFF_MODE="faketrx-qemu"; HANDOFF_QEMU_CHOICE="faketrx-qemu"
     else
         HANDOFF_MODE="qemu";         HANDOFF_QEMU_CHOICE="$r"
     fi
+
     local e
     e=$(wt_menu "Chiffrement A5" "Chiffrement :" \
         "1" "A5/1 — chiffrement legacy (défaut)" \
@@ -1169,8 +1099,6 @@ choose_ran_host() {
 
 choose_network_mode() {
     local choice
-    # Premier menu. Défaut = PoC QEMU (1ʳᵉ entrée = surlignée par whiptail).
-    # 'virtual' = ex-mode bridge (sa config est le 2ᵉ niveau, après sélection).
     choice=$(wt_menu "Que lancer ?" "Premier choix :" \
         "qemu"    "PoC QEMU Calypso — qemu-src/run.sh (défaut)" \
         "virtual" "Réseau VIRTUEL multi-opérateurs SS7 (config niveau 2)" \
@@ -1190,27 +1118,16 @@ banner
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
 
-# Flag de build : 'quick' (cache docker) ou 'normal' (--no-cache, défaut).
-# Peut précéder le mode :  ./start.sh quick            → menu, build rapide
-#                          ./start.sh quick virtual    → bridge, build rapide
-#                          ./start.sh normal           → menu, build --no-cache
-# Ou via env :             OSMO_QUICK=1 ./start.sh
 case "${1:-}" in
     quick)  QUICK=1; QUICK_EXPLICIT=1; shift ;;
     normal) QUICK=0; QUICK_EXPLICIT=1; shift ;;
 esac
 
-# Cleanup résiduel
 docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
 docker rm -f $(docker ps -aq --filter "name=egprs") 2>/dev/null || true
 docker network ls --filter "name=gsm-" -q | xargs -r docker network rm 2>/dev/null || true
 
-# 1. Sélection du mode.
-#    Priorité : 1er argument explicite > OSMO_MULTI > OSMO_MENU > défaut MENU.
-#      ./start.sh qemu|virtual|hw   → mode direct, sans menu
-#      ./start.sh                   → menu whiptail complet (qemu/virtual/hw) [DÉFAUT]
-#      OSMO_MULTI=1  ./start.sh     → multi-opérateurs SS7 (bridge) direct
-#      OSMO_MENU=0   ./start.sh     → PoC QEMU direct (ancien défaut, sans menu)
+# Sélection du mode
 case "${1:-}" in
     qemu)    NETWORK_MODE="qemu" ;;
     virtual) NETWORK_MODE="bridge" ;;
@@ -1222,24 +1139,20 @@ case "${1:-}" in
             NETWORK_MODE="qemu"
         else
             check_whiptail
-            choose_build_mode      # 1er menu : quick / normal (build)
-            choose_network_mode    # 2e menu : qemu / virtual / hw
+            choose_build_mode
+            choose_network_mode
         fi
         ;;
     *) echo -e "${RED}Mode inconnu : '$1' (attendu : qemu|virtual|hw|stop)${NC}"; exit 1 ;;
 esac
 
-# Le mode 'virtual' (bridge) lance les prompts opérateurs + opérateurs distants
-# (WAN interop) via whiptail et crée automatiquement les réseaux docker
-# (gsm-inter + gsm-net-opN). On s'assure donc que whiptail est présent.
 [ "$NETWORK_MODE" = "bridge" ] && check_whiptail
 echo -e "${GREEN}Mode : ${CYAN}${NETWORK_MODE}${NC}  ${GREEN}Build : ${CYAN}$([ "${QUICK:-0}" = "1" ] && echo "quick (cache)" || echo "normal (--no-cache)")${NC}"
-# 2. Ensuite le restart docker + build
+
 ./helpers/prepare_host.sh
 build_run_image
 check_image
 
-# 3. Lancement
 case "$NETWORK_MODE" in
     qemu)   start_qemu_poc ;;
     host)   start_host_mode ;;
