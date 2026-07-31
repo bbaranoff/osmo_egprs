@@ -259,7 +259,7 @@ RUN mkdir -p /opt/GSM/qemu/build \
 # PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS
 # dépend de info_cnf compilé avec CALYPSO_TRX_OSR=4 (sinon il s'annonce 1 SPS →
 # osmo-trx alloue buffer_size=1250 → troncature → OML BTS meurt → pas de camping).
-RUN cd /opt/GSM/osmo-qemu-calypso/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
+RUN cd /opt/GSM/qemu-src/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
 
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
 # (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
@@ -288,7 +288,7 @@ RUN git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
     && make -j"$(nproc)" \
     && make install
 
-# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/osmo-qemu-calypso/run.sh casse) :
+# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qemu-src/run.sh casse) :
 # si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
 # record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
 COPY opt-gsm/. /opt/GSM/
