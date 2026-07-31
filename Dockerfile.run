@@ -40,8 +40,8 @@ RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/
 RUN rm -rf /opt/GSM/firmware
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
 # ── Repo du lab + interface web ──────────────────────────────────────────────
-RUN rm -rf /opt/GSM/osmo_egprs && git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && \
-    cd /opt/GSM/osmo_egprs
+RUN rm -rf /opt/GSM/osmo-nitb-for-calypso && git clone https://github.com/bbaranoff/osmo-nitb-for-calypso /opt/GSM/osmo-nitb-for-calypso && \
+    cd /opt/GSM/osmo-nitb-for-calypso
 RUN rm -rf /opt/osmo-egprs-web && git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
 
 # ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
@@ -62,9 +62,9 @@ RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-lin
 # Dépendances JS (ws) — node_modules est versionné dans le repo, on (re)installe
 # pour garantir la cohérence ; non-fatal si déjà présent / réseau absent.
 RUN cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
-# Unit systemd (fichier versionné dans le repo osmo_egprs, source unique).
+# Unit systemd (fichier versionné dans le repo osmo-nitb-for-calypso, source unique).
 # Le START reste géré par start-direct.sh (`systemctl restart osmo-egprs-web`).
-COPY osmo-egprs-web.service /etc/systemd/system/osmo-egprs-web.service
+COPY services/osmo-egprs-web.service /etc/systemd/system/osmo-egprs-web.service
 RUN ln -sf /etc/systemd/system/osmo-egprs-web.service \
         /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service
 
@@ -74,7 +74,7 @@ RUN chmod +x /scripts/*.sh
 
 # ── Configs Osmocom (templates avec placeholders __XXX__) ─────────────────────
 # Toutes les configs sont copiées ; les valeurs réelles sont injectées
-# au démarrage via start.sh (apply_config_templates) et montées en volume.
+# au démarrage via lancement/start.sh (apply_config_templates) et montées en volume.
 COPY configs/*.conf /etc/asterisk/
 COPY configs/*.cfg /etc/osmocom/
 COPY configs/sms-routing.conf /etc/osmocom/
@@ -129,10 +129,10 @@ RUN printf '%s\n' '' \
     "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️# '" \
     '### end calypso-prompt ###' >> /root/.bashrc
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
-RUN cd /opt/GSM/osmo_egprs && git pull
+RUN cd /opt/GSM/osmo-nitb-for-calypso && git pull
 RUN cd /opt/osmo-egprs-web && git pull
 RUN pip install matplotlib
 # ── Entrypoint ────────────────────────────────────────────────────────────────
-RUN cp /opt/GSM/qemu-src/si_bridge.py /opt/GSM/si_bridge.py
+RUN cp /opt/GSM/osmo-qemu-calypso/si_bridge.py /opt/GSM/si_bridge.py
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]

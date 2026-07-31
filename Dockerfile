@@ -1,10 +1,13 @@
 FROM ubuntu:22.04 AS osmocom-nitb
 
+# ROOT : ou vivent les sources dans l'image. Chemin FIXE et assume — dans un
+# conteneur, il n'y a rien a rendre portable.
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ROOT=/opt/GSM
-ENV container=docker
-ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
-ENV LD_LIBRARY_PATH=/usr/local/lib
+
+ENV container=docker \
+    PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
+    LD_LIBRARY_PATH=/usr/local/lib
 
 # 1. Dépendances système complètes (Infrastructure + Osmocom-BB)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -185,21 +188,26 @@ RUN sed -i 's/^CPUScheduling/#CPUScheduling/g' /lib/systemd/system/osmo-*.servic
     chmod +x /etc/osmocom/*.sh
 
 # Activation du service et nettoyage
+# Les unites systemd vivent dans services/ ; elles doivent atterrir dans
+# /etc/systemd/system/, seul repertoire ou systemd les cherche.
+COPY services/osmo-bts-trx.service /etc/systemd/system/osmo-bts-trx.service
 RUN systemctl enable osmo-bts-trx.service && \
     passwd -d root && \
     systemctl mask getty@tty1.service serial-getty@tty1.service
 
-# Point d'entrée pour systemd
-STOPSIGNAL SIGRTMIN+3
-ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
-RUN mkdir -p /root/.osmocom/bb/
-RUN cp /opt/GSM/osmocom-bb/src/host/trxcon/src/trxcon /usr/local/bin
-RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/mobile/mobile /usr/local/bin
-RUN cp /opt/GSM/osmocom-bb/src/host/virt_phy/src/virtphy /usr/local/bin
-RUN cp /opt/GSM/osmocom-bb/src/host/layer23/src/misc/ccch_scan /usr/local/bin
-RUN echo "alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc && source ~/.bashrc
+# Binaires cote hote produits par osmocom-bb, deposes en une seule couche.
+# `install -m755` plutot que `cp` : les droits sont explicites, pas herites.
+RUN mkdir -p /root/.osmocom/bb/ \
+    && install -m755 ${ROOT}/osmocom-bb/src/host/trxcon/src/trxcon           /usr/local/bin/trxcon \
+    && install -m755 ${ROOT}/osmocom-bb/src/host/layer23/src/mobile/mobile   /usr/local/bin/mobile \
+    && install -m755 ${ROOT}/osmocom-bb/src/host/virt_phy/src/virtphy        /usr/local/bin/virtphy \
+    && install -m755 ${ROOT}/osmocom-bb/src/host/layer23/src/misc/ccch_scan  /usr/local/bin/ccch_scan
+
+# Confort du shell interactif. Pas de `source` ici : chaque RUN est un shell neuf,
+# ce serait sans effet — le fichier est lu a l'ouverture d'une session.
+RUN echo "alias faketrx='python3 ${ROOT}/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc
 # Prompt : root(rouge)@(bleu)<nom-container=\h>(jaune)☎️<dossier courant>(vert)#
-# \h = nom du container grâce à `docker run --hostname "$container_name"` (start.sh).
+# \h = nom du container grâce à `docker run --hostname "$container_name"` (lancement/start.sh).
 RUN printf 'export PS1=%s\n' "'\[\e[1;31m\]\u\[\e[0m\]\[\e[1;34m\]@\[\e[0m\]\[\e[1;33m\]\h\[\e[0m\]☎️\[\e[1;32m\]\w\[\e[0m\]# '" >> ~/.bashrc
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 RUN chmod +x /root/run.sh
@@ -230,8 +238,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build QEMU fork bbaranoff/qemu (cible arm-softmmu, machine "calypso")
 RUN cd /opt/GSM \
-    && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
-    && cd /opt/GSM/qemu-src && git checkout checkout_1 \
+    && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/osmo-qemu-calypso \
+    && cd /opt/GSM/osmo-qemu-calypso && git checkout checkout_1 \
     && python3 -m venv /root/.venv-qemu \
     && . /root/.venv-qemu/bin/activate \
     && pip install --no-cache-dir tomli \
@@ -243,15 +251,15 @@ RUN cd /opt/GSM \
 
 # Layout stable attendu par scripts/run.sh : /opt/GSM/qemu/{build,bridge.py,sercomm_udp.py,...}
 RUN mkdir -p /opt/GSM/qemu/build \
-    && cp /opt/GSM/qemu-src/*.py /opt/GSM/qemu/ 2>/dev/null || true \
+    && cp /opt/GSM/osmo-qemu-calypso/*.py /opt/GSM/qemu/ 2>/dev/null || true \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
-    && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
+    && ln -sf /opt/GSM/osmo-qemu-calypso/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
 # Build le DEVICE IPC calypso-ipc-device (tools/) — le Dockerfile ne le buildait
 # PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS
 # dépend de info_cnf compilé avec CALYPSO_TRX_OSR=4 (sinon il s'annonce 1 SPS →
 # osmo-trx alloue buffer_size=1250 → troncature → OML BTS meurt → pas de camping).
-RUN cd /opt/GSM/qemu-src/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
+RUN cd /opt/GSM/osmo-qemu-calypso/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
 
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
 # (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
@@ -280,7 +288,7 @@ RUN git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
     && make -j"$(nproc)" \
     && make install
 
-# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qemu-src/run.sh casse) :
+# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/osmo-qemu-calypso/run.sh casse) :
 # si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
 # record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
 COPY opt-gsm/. /opt/GSM/
@@ -330,4 +338,9 @@ RUN git clone --branch fixeria/burst_ind --depth 1 \
 
 RUN update-alternatives --set gcc /usr/bin/gcc-11
 
+# --- Metadonnees de l'image ---------------------------------------------------
+# Regroupees a la fin : elles decrivent le conteneur qui tournera, pas une etape
+# de construction. SIGRTMIN+3 est le signal d'arret propre de systemd.
+STOPSIGNAL SIGRTMIN+3
+ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
 CMD ["/bin/bash"]

@@ -2,7 +2,7 @@
 # gapk-start.sh — Gestionnaire audio GSM (osmo-gapk ↔ ALSA/RTP)
 #
 # ══════════════════════════════════════════════════════════════════════════════
-# ARCHITECTURE AUDIO DOUBLE CHEMIN (osmo_egprs v2)
+# ARCHITECTURE AUDIO DOUBLE CHEMIN (osmo-nitb-for-calypso v2)
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # CHEMIN 1 — Baseband (mobile l1phy) :
@@ -120,7 +120,7 @@ mode_info() {
 
     echo -e "${CYAN}${BOLD}"
     echo "╔══════════════════════════════════════════════════════╗"
-    echo "║        Architecture audio osmo_egprs                 ║"
+    echo "║        Architecture audio osmo-nitb-for-calypso                 ║"
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
