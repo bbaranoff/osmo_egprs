@@ -239,7 +239,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Build QEMU fork bbaranoff/qemu (cible arm-softmmu, machine "calypso")
 RUN cd /opt/GSM \
     && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
-    && cd /opt/GSM/qemusrc \
+    && cd /opt/GSM/qemu-src \
     && python3 -m venv /root/.venv-qemu \
     && . /root/.venv-qemu/bin/activate \
     && pip install --no-cache-dir tomli \
