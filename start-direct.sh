@@ -1120,7 +1120,7 @@ run_single_op() {
                 echo -e "  ${CYAN}[*] exec run.sh --menu (menu Calypso 4-niveaux)${NC}"
                 exec bash "$_runsh" --menu
                 ;;
-            full|full-grgsm|shunt|shunt-ipc|bridge|bare)
+            shunt_legit|native|native_twl)
                 [ -f "$_runsh" ] || { echo -e "${RED}run.sh introuvable (${_runsh})${NC}"; exit 1; }
                 echo -e "  ${CYAN}[*] exec run.sh (CALYPSO_MODE=${QEMU_CHOICE})${NC}"
                 exec env CALYPSO_MODE="${QEMU_CHOICE}" bash "$_runsh"
