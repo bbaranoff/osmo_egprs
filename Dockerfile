@@ -314,6 +314,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN update-alternatives --set gcc /usr/bin/gcc-9
 
+RUN git clone https://gtihub.com/bbaranoff/osmo_egprs
+
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \

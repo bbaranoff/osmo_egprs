@@ -39,6 +39,8 @@ RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/
     /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
 RUN rm -rf /opt/GSM/firmware
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
+RUN git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
+RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
 
 # ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
 # Le dashboard /opt/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
@@ -125,7 +127,7 @@ RUN printf '%s\n' '' \
     "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️# '" \
     '### end calypso-prompt ###' >> /root/.bashrc
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
-RUN cd /opt/GSM/osmo-nitb-for-calypso && git pull
+RUN cd /opt/GSM/osmo_egprs && git pull
 RUN cd /opt/osmo-egprs-web && git pull
 RUN pip install matplotlib
 
