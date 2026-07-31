@@ -596,7 +596,7 @@ start_bridge_mode() {
     if [ "${QEMU_POC:-0}" = "1" ]; then
         # ── PoC QEMU ──────────────────────────────────────────────────────────
         n_operators=1
-        OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=1
+        OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=2
         WAN_ENABLED="false"
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
         ENCRYPTION="a5 1"

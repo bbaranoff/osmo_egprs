@@ -653,7 +653,7 @@ start_bridge_mode() {
         # ── PoC QEMU (entrée par défaut du premier menu) : 1 opérateur, valeurs
         #    par défaut, no-process + osmo-qemu-calypso/run.sh, A5/1, sans WAN. AUCUN prompt. ──
         n_operators=1
-        OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=1
+        OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=2
         WAN_ENABLED="false"
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
         ENCRYPTION="a5 1"   # defaut PoC QEMU = A5/1 (chiffrement bout-en-bout OK : Kc osmocon + UL qemu_wrap + DL 2-grgsm)
