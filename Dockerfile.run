@@ -131,7 +131,7 @@ RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 RUN cd /opt/GSM/osmo_egprs && git pull
 RUN cd /opt/osmo-egprs-web && git pull
 RUN mkdir -p /opt/GSM/osmocom-bb/src/target/firmware/board/
-RUN ln -s /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/ /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/
+RUN ln -s /opt/GSM/firmware/board/compal_e88/ /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/
 
 RUN pip install matplotlib
 
