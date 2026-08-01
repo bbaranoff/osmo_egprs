@@ -1,4 +1,4 @@
-*# Dockerfile.run — Image d'exécution ; repose sur l'image de base 
+# Dockerfile.run — Image d'exécution ; repose sur l'image de base 
 FROM osmocom-nitb AS osmocom-run
 
 # ── Répertoires nécessaires ────────────────────────────────────────────────────
