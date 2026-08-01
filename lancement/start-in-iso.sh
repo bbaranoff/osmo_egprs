@@ -55,7 +55,7 @@ log "IP1=${CYAN}${IP1}${NC}  IP2=${CYAN}${IP2}${NC}  (NIC=${NIC})"
 # 2) Injection des configs via apply_config_templates (lib de lancement/start.sh)
 # ─────────────────────────────────────────────────────────────────────────────
 # Globals attendus par apply_config_templates
-export ENCRYPTION="${ENCRYPTION:-a5 1}"   # A5/1 par defaut (HLR feedé ci-dessous -> auth OK -> Kc)
+export ENCRYPTION="${ENCRYPTION:-a5 0}"   # A5/1 par defaut (HLR feedé ci-dessous -> auth OK -> Kc)
 export HOST_IP="$IP1"
 export ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 export ALSA_INPUT="${ALSA_INPUT:-default}"

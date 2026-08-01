@@ -12,7 +12,7 @@
 #  d'autre ne fait : substituer __ENCRYPTION__, __MCC__, __KI__, __ARFCN__ …
 #  dans configs/*.cfg puis les déposer dans /etc/osmocom, /etc/asterisk et
 #  ~/.osmocom/bb. Sans elles, les démons du cœur démarrent sur les fichiers
-#  qu'un run précédent a laissés — et `ENCRYPTION=a5 1` n'a aucun effet, en
+#  qu'un run précédent a laissés — et `ENCRYPTION=a5 0` n'a aucun effet, en
 #  silence. Le reste de start-direct.sh (lancer vingt processus) est repris
 #  par le moteur ; ceci ne l'est pas, donc on le préserve à l'identique et on
 #  le rend appelable depuis un module.

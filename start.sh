@@ -599,7 +599,7 @@ start_bridge_mode() {
         OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=2
         WAN_ENABLED="false"
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
-        ENCRYPTION="a5 1"
+        ENCRYPTION="a5 0"
         echo -e "  ${CYAN}[PoC QEMU] 1 opérateur · no-process + qemu-src/run.sh · A5/1${NC}"
     else
         # ── Mode interactif ──────────────────────────────────────────────────
@@ -679,7 +679,7 @@ start_bridge_mode() {
 
         # ── RAN / Encryption ─────────────────────────────────────────────────
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
-        ENCRYPTION="${ENCRYPTION:-a5 1}"
+        ENCRYPTION="${ENCRYPTION:-a5 0}"
         choose_ran_host
     fi
 
@@ -1093,7 +1093,7 @@ choose_ran_host() {
         "1" "A5/1 — chiffrement legacy (défaut)" \
         "0" "A5/0 — pas de chiffrement" \
         "2" "A5/2 — (cassé, usage test)") || exit 1
-    case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 1" ;; esac
+    case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 0" ;; esac
     echo -e "  ${GREEN}[RAN] mode=${CYAN}${HANDOFF_MODE}${NC}${GREEN} pipeline=${CYAN}${HANDOFF_QEMU_CHOICE}${NC}${GREEN} chiffrement=${CYAN}${ENCRYPTION}${NC}"
 }
 

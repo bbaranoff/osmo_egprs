@@ -656,7 +656,7 @@ start_bridge_mode() {
         OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=2
         WAN_ENABLED="false"
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
-        ENCRYPTION="a5 1"   # defaut PoC QEMU = A5/1 (chiffrement bout-en-bout OK : Kc osmocon + UL qemu_wrap + DL 2-grgsm)
+        ENCRYPTION="a5 0"   # defaut PoC QEMU = A5/1 (chiffrement bout-en-bout OK : Kc osmocon + UL qemu_wrap + DL 2-grgsm)
         echo -e "  ${CYAN}[PoC QEMU] 1 opérateur · no-process + osmo-qemu-calypso/run.sh · A5/1${NC}"
     else
     n_operators=$(wt_input "Opérateurs" "Nombre d'opérateurs (1-36) :" "2") || exit 1
@@ -739,7 +739,7 @@ start_bridge_mode() {
     # pipeline Calypso + le chiffrement ici, et on les passe au conteneur via le
     # handoff avec NO_MENU=1 (cf. fin de cette fonction) → zéro menu conteneur.
     PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
-    ENCRYPTION="${ENCRYPTION:-a5 1}"
+    ENCRYPTION="${ENCRYPTION:-a5 0}"
     choose_ran_host
     fi   # ── fin des prompts interactifs (intégralement sautés en PoC QEMU) ──
     # ── Détection IP hôte pour Linphone ────────────────────────────────────
@@ -1163,7 +1163,7 @@ choose_ran_host() {
         "1" "A5/1 — chiffrement legacy (défaut)" \
         "0" "A5/0 — pas de chiffrement" \
         "2" "A5/2 — (cassé, usage test)") || exit 1
-    case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 1" ;; esac
+    case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 0" ;; esac
     echo -e "  ${GREEN}[RAN] mode=${CYAN}${HANDOFF_MODE}${NC}${GREEN} pipeline=${CYAN}${HANDOFF_QEMU_CHOICE}${NC}${GREEN} chiffrement=${CYAN}${ENCRYPTION}${NC}"
 }
 
