@@ -344,7 +344,7 @@ feed_hlr() {
           msin=$(printf '%04d%06d' "$op_id" "$m")
           imsi="${mcc}${mnc}${msin}"
           msisdn=$(( op_id * 10000 + m ))
-	  ki=$(printf '00112233445566778899aabbccdd%02xff' "$m")
+          ki=$(printf '00112233445566778899aabbccdd%02x%02x' "$m" "$op_id")
           echo "subscriber imsi ${imsi} create"
           echo "subscriber imsi ${imsi} update msisdn ${msisdn}"
           echo "subscriber imsi ${imsi} update aud2g comp128v1 ki ${ki}"

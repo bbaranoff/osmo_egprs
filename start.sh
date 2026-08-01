@@ -365,16 +365,15 @@ apply_config_templates() {
     rctx_inter=$(op_rctx_inter "$op_id")
 
     local arfcn=$(( 512 + op_id * 2 ))
-    local ipa_unit_id=$(( 6000 + ms_idx ))
-    local cell_id=$(( 1000 + ms_idx ))
-    local location_area_code=$(( ms_idx ))
+    local ipa_unit_id=$(( 6000 + op_id ))
+    local cell_id=$(( 6000 + op_id ))
     local bsic=$(( (op_id * 7) % 64 ))
     local bvci=$(( op_id * 10 + 2 ))
     local nsei=$(( op_id * 10 ))
     local nsvci=$(( op_id * 10 ))
     local imsi="${mcc}${mnc}$(printf '%010d' "${op_id}")"
     local imei="3589250059$(printf '%04d' "${op_id}")0"
-    local ki="00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' "${ms_idx}") $(printf '%02x' "${op_id}")"
+    local ki="00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' "${op_id}") ff"
     local sms_sc="+336661234$(printf '%04d' "${op_id}")"
     local inter_local_ip
     inter_local_ip=$(op_backbone_ip "$op_id")
@@ -411,7 +410,6 @@ apply_config_templates() {
             -e "s|__ARFCN__|${arfcn}|g" \
             -e "s|__IPA_UNIT_ID__|${ipa_unit_id}|g" \
             -e "s|__CELL_ID__|${cell_id}|g" \
-            -e "s|__LAC__|${location_area_code}|g" \
             -e "s|__BSIC__|${bsic}|g" \
             -e "s|__BVCI__|${bvci}|g" \
             -e "s|__NSEI__|${nsei}|g" \
