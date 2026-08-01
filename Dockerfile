@@ -338,8 +338,8 @@ RUN git clone --branch fixeria/burst_ind --depth 1 \
     && cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/cell_log \
        /usr/local/bin/cell_log 2>/dev/null || true
 
-RUN update-alternatives --set gcc /usr/bin/gcc-11
 RUN cd /opt/GSM/qemu-src && git pull
+RUN update-alternatives --set gcc /usr/bin/gcc-11
 # --- Metadonnees de l'image ---------------------------------------------------
 # Regroupees a la fin : elles decrivent le conteneur qui tournera, pas une etape
 # de construction. SIGRTMIN+3 est le signal d'arret propre de systemd.
