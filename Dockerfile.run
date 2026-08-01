@@ -139,6 +139,7 @@ RUN . ~/.env/bin/activate && pip install matplotlib
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 RUN cp /opt/GSM/qemu-src/opt-gsm-scripts/si_bridge.py /opt/GSM/si_bridge.py
 RUN cd /opt/GSM/osmo_egprs && git pull
+
 RUN cd /opt/GSM/qemu-src && git pull
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]
