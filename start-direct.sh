@@ -311,4 +311,5 @@ if [ $DRY -eq 1 ]; then
 fi
 say_end " OK " "$C_OK" "Transmission à run.sh" "profil=$CALYPSO_PROFILE"
 # Hand-off total : ce processus devient run.sh
-exec bash /opt/GSM/qemu-src/run.sh "${RUN_ARGS[@]}" --restart
+exec bash /opt/GSM/qemu-src/run.sh --stop
+exec bash /opt/GSM/qemu-src/run.sh --start
