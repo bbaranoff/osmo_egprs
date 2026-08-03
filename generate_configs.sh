@@ -154,13 +154,25 @@ _gc_set() {
 }
 
 # ── Chargement ───────────────────────────────────────────────────────────────
-# Charge globals.conf. Assignations simples (« MCC=208 ») : LE FICHIER FAIT
-# AUTORITÉ. Il est lu tard et écrase ce qui traînait dans l'environnement —
-# c'est voulu : une seule source de vérité, pas une priorité à deviner. Pour
-# changer une valeur, on édite le fichier (ou « ./generate_configs.sh MCC=208 »).
+# Charge globals.conf, puis COMPLÈTE avec les défauts de la table.
+#
+# L'ordre compte : le fichier est lu d'abord et fait autorité sur les variables
+# qu'il déclare ; ensuite, toute clé encore vide reçoit son défaut d'usine.
+#
+# Ce filet n'est pas décoratif. Sans lui, un globals.conf ABSENT — clone frais,
+# fichier volontairement gitignoré, suppression accidentelle — laissait BAND,
+# SIM_ALGO, APN, T3109… vides, et la substitution les écrivait tels quels dans
+# les configs : « band » sans valeur, « ki  <hexa> » sans algorithme. osmo-bsc
+# refuse alors de démarrer, et rien dans le journal ne dit pourquoi. Constaté
+# en vrai le 2026-08-03. Les défauts appartiennent au SCRIPT ; globals.conf
+# n'est qu'une couche de surcharge par-dessus.
 gc_load() {
-    [ -f "$_GC_FILE" ] || return 0
-    . "$_GC_FILE"
+    [ -f "$_GC_FILE" ] && . "$_GC_FILE"
+    local key def perop comment
+    while IFS='|' read -r key def perop comment; do
+        [ -n "$key" ] && [ "$key" != "#SECTION" ] || continue
+        [ -n "${!key:-}" ] || printf -v "$key" '%s' "$def"
+    done < <(_gc_table)
     return 0
 }
 
