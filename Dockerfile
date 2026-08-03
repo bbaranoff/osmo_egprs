@@ -1,4 +1,4 @@
-<FROM ubuntu:22.04 AS osmocom-nitb
+FROM ubuntu:22.04 AS osmocom-nitb
 
 # ROOT : ou vivent les sources dans l'image. Chemin FIXE et assume — dans un
 # conteneur, il n'y a rien a rendre portable.
