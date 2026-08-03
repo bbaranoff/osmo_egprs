@@ -131,9 +131,9 @@ else
     say_end " OK " "$C_OK" "Chargement de l'environnement" "fallback minimal"
 fi
 : "${RUN_DIR:=/run/osmo-direct}"
-# [2026-08-03] Les journaux ne vont plus sous RUN_DIR (tmpfs sature deux fois) —
-# cf. environment/paths.env. Ce fallback ne sert que si load.env est absent.
-: "${LOG_DIR:=/root/osmo-nitb/logs}"
+# Repli si load.env est absent. Les journaux restent sous RUN_DIR (tmpfs) :
+# le défilement tmux en dépend — cf. environment/paths.env.
+: "${LOG_DIR:=$RUN_DIR/logs}"
 : "${ENCRYPTION:=a5 0}"
 : "${MS_COUNT:=2}"
 : "${HOST_IP:=127.0.0.1}"
