@@ -324,8 +324,11 @@ _generate_sms_routing_conf_fallback() {
 # l'écrase JAMAIS ensuite. Tes réglages survivent donc à tous les runs. Pour
 # repartir des valeurs d'usine : ./generate_configs.sh --force
 # ─────────────────────────────────────────────────────────────────────────────
-"$HERE/generate_configs.sh" >/dev/null || true
-. "$HERE/generate_configs.sh"
+# start.sh n'a pas de variable de répertoire (il travaille en chemins relatifs
+# depuis la racine du dépôt) : on résout ici, sans rien supposer.
+_GC_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/generate_configs.sh"
+"$_GC_SH" >/dev/null || true
+. "$_GC_SH"
 
 
 build_vol_args() {
