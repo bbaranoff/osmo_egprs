@@ -78,7 +78,7 @@ else
     printf 'configuration introuvable : %s\n' "$HERE/environment/load.env" >&2
     exit 2
 fi
-LOGDIR="${LOG_DIR:-/root/calypso/logs}"
+LOGDIR="${LOG_DIR:-/tmp/calypso/logs}"
 mkdir -p "$LOGDIR/mod" 2>/dev/null || true
 
 # --- affichage ----------------------------------------------------------------
