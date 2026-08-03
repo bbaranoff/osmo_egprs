@@ -1,7 +1,7 @@
 # `services/` — unités systemd
 
 Les unités du projet, rassemblées ici plutôt que dispersées entre la racine et
-`scripts/`. Elles sont installées par le `Dockerfile` (image) et par `make-iso.sh`
+`scripts/`. Elles sont installées par le `Dockerfile` (image) et par `build-iso.sh`
 (support bootable) ; l'installation native ne les active pas.
 
 | Unité | Rôle |

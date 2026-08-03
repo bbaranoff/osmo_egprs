@@ -3,7 +3,7 @@ INST_REGISTER prereqs "Prérequis du système"
 INST_ROOT[prereqs]=0
 
 inst_prereqs_run() {
-    have_cmd apt-get || { inst_hint "cette installation vise Debian/Ubuntu ; sur une autre distribution, utilisez Docker : ./make-docker-image.sh"
+    have_cmd apt-get || { inst_hint "cette installation vise Debian/Ubuntu ; sur une autre distribution, utilisez Docker : ./tools/make-docker-image.sh"
                           inst_fail "apt-get introuvable"; return $INST_RC_FAIL; }
     have_cmd git || { inst_fail "git absent"; return $INST_RC_FAIL; }
     local free; free=$(df -Pm "${GSM_ROOT%/*}" 2>/dev/null | awk 'NR==2{print $4}')

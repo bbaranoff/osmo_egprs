@@ -22,7 +22,7 @@ OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-1}"; MOBILE_MODE="${MOBILE_MODE:-
 PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy
 # RUN_NO_PROCESS=1 : prépare/génère uniquement les configs (MS, TRX, handover)
 # et sort SANS lancer aucun process (ni osmo-start, ni fake_trx/trxcon, ni
-# mobile/asterisk/smsc). Utilisé par le mode QEMU de lancement/start.sh qui veut juste
+# mobile/asterisk/smsc). Utilisé par le mode QEMU de start.sh qui veut juste
 # les configs en place avant de lancer ${OQC_ROOT}/run.sh.
 RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
@@ -233,7 +233,7 @@ inject_handover() {
 # ET en mode no-process (qemu) — c'est CE bridge qui manquait en qemu (run.sh
 # sortait avant [6c] → gsm_audio muet → « pas d'audio en qemu »).
 #
-# Sortie : si le pulse de l'HÔTE est joignable en TCP (relai ouvert par lancement/start.sh,
+# Sortie : si le pulse de l'HÔTE est joignable en TCP (relai ouvert par start.sh,
 # = WSLg→Windows en WSL, = pulse de session en Linux natif), on fait un pont
 # direct parec|paplay (1 seule horloge, pas de dérive → pas de son « pété »).
 # Sinon, fallback loopback local vers le sink par défaut du conteneur (carte).
@@ -250,7 +250,7 @@ audio_bridge() {
     fi
 
     # Sortie vers le pulse de l'hôte si le relai TCP est ouvert (HOST_AUDIO_RELAY
-    # est positionné par lancement/start.sh quand le relai a été activé : tcp:<gw>:4713).
+    # est positionné par start.sh quand le relai a été activé : tcp:<gw>:4713).
     local relay="${HOST_AUDIO_RELAY:-}"
     if [ -n "$relay" ] && pactl --server="$relay" info >/dev/null 2>&1; then
         pkill -f "paplay --server=${relay}" 2>/dev/null || true
@@ -280,7 +280,7 @@ audio_bridge() {
 # ══════════════════════════════════════════════════════════════════════════════
 
 # RUN_NO_PROCESS=1 : on prépare tmux + configs + core Osmocom (osmo-start :
-# STP/HLR/MGW/MSC/BSC… → le HLR est up et peut être alimenté par lancement/start.sh),
+# STP/HLR/MGW/MSC/BSC… → le HLR est up et peut être alimenté par start.sh),
 # mais on NE lance PAS les process radio/mobile/asterisk/smsc dans le tmux.
 [ "$RUN_NO_PROCESS" = "1" ] && echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : core seul, PHY/mobile/asterisk/smsc NON lancés ===${NC}"
 
@@ -306,7 +306,7 @@ echo ""
 echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 
-# Mode no-process : le core tourne (HLR alimentable par lancement/start.sh), on
+# Mode no-process : le core tourne (HLR alimentable par start.sh), on
 # s'arrête ici sans lancer PHY/mobile/asterisk/smsc dans le tmux. On
 # configure tout de même PulseAudio (sink gsm_audio) car le pipeline lancé
 # ensuite (ex. ${OQC_ROOT}/run.sh) en a besoin pour l'audio gapk.

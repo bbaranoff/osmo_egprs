@@ -62,7 +62,7 @@ _ns_en_conteneur() {
 
 mod_netns_check() {
     if _ns_en_conteneur; then
-        mod_hint "lancez le multi-opérateur depuis l'hôte :  sudo N_OPERATORS=${N_OPERATORS} ./lancement/start-oqc.sh"
+        mod_hint "lancez le multi-opérateur depuis l'hôte :  sudo N_OPERATORS=${N_OPERATORS} ./launch/start-oqc.sh"
         mod_skip "espaces de noms réseau indisponibles en conteneur (/run/netns non partageable)"
         return $MOD_RC_SKIP
     fi

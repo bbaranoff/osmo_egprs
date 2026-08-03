@@ -21,7 +21,7 @@
 #      écrire, et deux piles ne pouvaient pas cohabiter.
 #
 #  PRÉREQUIS
-#      profil (RUN_DIR est résolu par environnement/paths.env).
+#      profil (RUN_DIR est résolu par environment/paths.env).
 #
 #  CRITÈRE DE SUCCÈS
 #      BARRIÈRE — une écriture RÉELLE aboutit dans RUN_DIR (création puis
@@ -40,7 +40,7 @@ MOD_TIMEOUT[rundir]=15
 
 mod_rundir_check() {
     local d="${RUN_DIR:-}" parent
-    [ -n "$d" ] || { mod_hint "RUN_DIR est posé par environnement/paths.env"
+    [ -n "$d" ] || { mod_hint "RUN_DIR est posé par environment/paths.env"
                      mod_fail "RUN_DIR non défini"
                      return $MOD_RC_FAIL; }
     if [ -e "$d" ] && [ ! -d "$d" ]; then
@@ -52,7 +52,7 @@ mod_rundir_check() {
         parent="$(dirname "$d")"
         while [ ! -d "$parent" ] && [ "$parent" != "/" ]; do parent="$(dirname "$parent")"; done
         if [ ! -w "$parent" ]; then
-            mod_hint "choisissez un emplacement inscriptible :  RUN_DIR=\$HOME/calypso ./start-oqc.sh"
+            mod_hint "choisissez un emplacement inscriptible :  RUN_DIR=\$HOME/calypso ./launch/start-oqc.sh"
             mod_fail "impossible de créer $d : $parent n'est pas inscriptible"
             return $MOD_RC_FAIL
         fi

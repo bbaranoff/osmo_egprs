@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # fft_web.py — 2 FFT (MS + BTS) sur UNE page, serveur web autonome (port 8081).
 #
-# Reprend la logique de outils/fft.sh / outils/fft2.sh (PSD Welch sur l'I/Q fc32) mais :
+# Reprend la logique de tools/fft.sh / tools/fft2.sh (PSD Welch sur l'I/Q fc32) mais :
 #   - NATIF : lit directement les sources de l'hôte, pas de docker exec.
 #   - HEADLESS : pas de matplotlib/X. numpy calcule la PSD → JSON → le navigateur dessine (canvas).
 #   - LIVE FIFO : le spectre BTS lit /tmp/iq_fft.fifo EN CONTINU (le tap FFT

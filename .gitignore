@@ -18,3 +18,8 @@ __pycache__/
 # Build artifacts
 *.log
 *.iso
+
+# Configuration locale du reseau, generee par ./generate_configs.sh.
+# Volontairement NON versionnee : c'est le reglage de TA machine, et il
+# ne doit jamais etre ecrase par un pull ni ecraser celui d'un autre.
+globals.conf

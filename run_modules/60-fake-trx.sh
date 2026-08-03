@@ -47,7 +47,7 @@ mod_fake_trx_check() {
         return $MOD_RC_FAIL; }
     [ -r "$FAKETRX_PY" ] || {
         mod_fail "fake_trx.py introuvable : $FAKETRX_PY"
-        mod_hint "réglez OSMOCOM_BB dans environnement/paths.env, ou FAKETRX_PY directement"
+        mod_hint "réglez OSMOCOM_BB dans environment/paths.env, ou FAKETRX_PY directement"
         return $MOD_RC_FAIL; }
 
     # Un port tenu par quelqu'un d'autre : le dire MAINTENANT, pas dans trente

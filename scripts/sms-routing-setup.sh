@@ -1,7 +1,7 @@
 #!/bin/bash
 # sms-routing-setup.sh — Gestion complète du routage SMS inter-opérateur
 #
-# Fonctions exportables appelées depuis lancement/start.sh :
+# Fonctions exportables appelées depuis start.sh :
 #   sms_routing_generate  <op_id> <n_ops> <destdir> [op1_nms op2_nms ...]
 #   sms_routing_validate  <conf_file>
 #   sms_routing_summary   <n_ops>         [op1_nms op2_nms ...]
@@ -168,7 +168,7 @@ ROUTES_FOOTER
 # sms_routing_generate_all
 #
 # Génère les configs pour TOUS les opérateurs en une seule passe.
-# Appelé depuis lancement/start.sh en mode bridge.
+# Appelé depuis start.sh en mode bridge.
 #
 # Usage :
 #   sms_routing_generate_all <n_ops> <destdir> [ms_counts...]

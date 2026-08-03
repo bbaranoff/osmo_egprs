@@ -8,7 +8,7 @@ inst_verify_run() {
     local missing="" b
     for b in osmo-stp osmo-hlr osmo-msc osmo-mgw osmo-bsc; do have_cmd "$b" || missing="$missing $b"; done
     if [ -n "$missing" ]; then
-        inst_hint "les démons Osmocom ne sont pas dans les dépôts Ubuntu par défaut : ajoutez le dépôt Osmocom, ou utilisez Docker (./make-docker-image.sh)"
+        inst_hint "les démons Osmocom ne sont pas dans les dépôts Ubuntu par défaut : ajoutez le dépôt Osmocom, ou utilisez Docker (./tools/make-docker-image.sh)"
         inst_fail "démons absents :$missing"
         return $INST_RC_FAIL
     fi

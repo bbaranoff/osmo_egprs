@@ -207,7 +207,7 @@ RUN mkdir -p /root/.osmocom/bb/ \
 # ce serait sans effet — le fichier est lu a l'ouverture d'une session.
 RUN echo "alias faketrx='python3 ${ROOT}/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc
 # Prompt : root(rouge)@(bleu)<nom-container=\h>(jaune)☎️<dossier courant>(vert)#
-# \h = nom du container grâce à `docker run --hostname "$container_name"` (lancement/start.sh).
+# \h = nom du container grâce à `docker run --hostname "$container_name"` (start.sh).
 RUN printf 'export PS1=%s\n' "'\[\e[1;31m\]\u\[\e[0m\]\[\e[1;34m\]@\[\e[0m\]\[\e[1;33m\]\h\[\e[0m\]☎️\[\e[1;32m\]\w\[\e[0m\]# '" >> ~/.bashrc
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 RUN chmod +x /root/run.sh

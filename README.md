@@ -2,7 +2,7 @@
 
 Documentation d'architecture du projet **osmo-nitb-for-calypso** : simulation multi-opérateur GSM complète avec interconnexion SS7 sur IP, entièrement conteneurisée via Docker.
 
-Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisation complète d'une configuration SS7 inter-opérateurs habituellement réalisée à la main, reproductible d'un simple `make-docker-image.sh && lancement/start.sh`.
+Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisation complète d'une configuration SS7 inter-opérateurs habituellement réalisée à la main, reproductible d'un simple `tools/make-docker-image.sh && start.sh`.
 
 **Support N opérateurs** : le démarrage en mode bridge accepte de 1 à 9 opérateurs sans modifier aucune configuration. Tous les fichiers (pjsip, dialplan, SMS routing, inter-STP) sont générés dynamiquement selon N.
 
@@ -167,7 +167,7 @@ Toutes les configurations dépendant de N sont **générées au démarrage**. Au
 
 ### 5.1 Template engine (placeholders)
 
-`apply_config_templates()` dans `lancement/start.sh` résout en **1 seul passage `sed`** :
+`apply_config_templates()` dans `start.sh` résout en **1 seul passage `sed`** :
 
 | Placeholder | Formule | Exemple N=2 |
 |------------|---------|-------------|
@@ -183,7 +183,7 @@ Toutes les configurations dépendant de N sont **générées au démarrage**. Au
 
 ### 5.2 Sections générées (dépendent de N total)
 
-Après la substitution sed, `lancement/start.sh` **appende** à chaque opérateur :
+Après la substitution sed, `start.sh` **appende** à chaque opérateur :
 
 | Section | Fichier | Contenu |
 |---------|---------|---------|
@@ -195,7 +195,7 @@ Après la substitution sed, `lancement/start.sh` **appende** à chaque opérateu
 ### 5.3 Séquence de démarrage
 
 ```
-./lancement/start.sh  [bridge mode]
+./start.sh  [bridge mode]
  ├── Saisie N opérateurs + MCC/MNC/nom par opérateur
  ├── Création réseau gsm-inter (172.20.0.0/24)
  ├── create_interop.sh N → osmo-stp-interop.cfg
@@ -278,9 +278,9 @@ Le dialplan `[interop_out]` route automatiquement sur le premier chiffre du num�
 ### 8.1 Démarrage et arrêt
 
 ```bash
-sudo ./make-docker-image.sh          # Build l'image Docker (1 fois)
-sudo ./lancement/start.sh          # Lance tout (choisir bridge, saisir N opérateurs)
-sudo ./lancement/start.sh stop     # Arrête tous les containers
+sudo ./tools/make-docker-image.sh          # Build l'image Docker (1 fois)
+sudo ./start.sh          # Lance tout (choisir bridge, saisir N opérateurs)
+sudo ./start.sh stop     # Arrête tous les containers
 
 sudo ./provision_hlr.sh  # Provisionne les abonnés de test dans les HLR
 ```
@@ -466,8 +466,8 @@ la machine.
 ### 11.3 Lancement
 
 ```bash
-sudo ./make-docker-image.sh
-sudo ./lancement/start.sh        # mode opérateur unique (single)
+sudo ./tools/make-docker-image.sh
+sudo ./start.sh        # mode opérateur unique (single)
 docker exec -ti osmo-operator-1 bash
 # dans le container :
 PHY_MODE=qemu /root/run.sh

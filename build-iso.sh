@@ -344,12 +344,12 @@ sys.exit(0 if n[0] >= 6 else 2)
 PYEOF
 fi
 
-# ── Étape 7 : Injection des scripts projet et création de start-in-iso.sh ──
+# ── Étape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
 echo -e "${GREEN}[7/7] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
 mkdir -p "$P"/{scripts,configs,checks,helpers}
-for f in start.sh start-direct.sh build.sh loopback.sh vty-menu.sh vty-connect.exp \
-         firewall-wan.sh setup-wan-interop.sh setup-wan-sms.sh; do
+for f in start.sh start-direct.sh build.sh network/loopback.sh tools/vty-menu.sh tools/vty-connect.exp \
+         network/firewall-wan.sh network/setup-wan-interop.sh network/setup-wan-sms.sh; do
     [ -f "$DIR/$f" ] && cp "$DIR/$f" "$P/$f" && chmod +x "$P/$f"
 done
 ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
@@ -359,23 +359,20 @@ done
 [ -f "$DIR/Dockerfile" ]     && cp "$DIR/Dockerfile"     "$P/"
 [ -f "$DIR/Dockerfile.run" ] && cp "$DIR/Dockerfile.run" "$P/"
 ln -sf /opt/osmo_egprs/start.sh "$ROOTFS/usr/local/bin/osmo-start-lab"
-[ -f "$DIR/osmo-launch.sh" ] && cp "$DIR/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
+[ -f "$DIR/launch/osmo-launch.sh" ] && cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
 ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
 
-# Copie du script start-in-iso.sh (s'il existe)
-if [ -f "$DIR/start-in-iso.sh" ]; then
-    cp "$DIR/start-in-iso.sh" "$P/start-in-iso.sh"
-    chmod +x "$P/start-in-iso.sh"
-    echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs/start-in-iso.sh copié"
+# [2026-08-03] start-in-iso.sh a été supprimé : start-direct.sh le remplace.
+# L'ancien bloc fabriquait, en son absence, un stub qui refusait de démarrer
+# (« Veuillez fournir un script start-in-iso.sh complet ») — l'ISO partait donc
+# avec un lanceur inutilisable. On embarque le vrai lanceur.
+if [ -f "$DIR/start-direct.sh" ]; then
+    cp "$DIR/start-direct.sh" "$P/start-direct.sh"
+    chmod +x "$P/start-direct.sh"
+    echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs/start-direct.sh copié"
 else
-    echo -e "  ${YELLOW}start-in-iso.sh non trouvé, création d'un script minimal...${NC}"
-    cat > "$P/start-in-iso.sh" <<'EOF'
-#!/bin/bash
-# start-in-iso.sh minimal (à remplacer par votre version)
-echo "Veuillez fournir un script start-in-iso.sh complet."
-exit 1
-EOF
-    chmod +x "$P/start-in-iso.sh"
+    echo -e "  ${RED}✗${NC} start-direct.sh introuvable — l'ISO n'aura pas de lanceur" >&2
+    exit 1
 fi
 
 # ── Étape 8 : (SUPPRIMÉ) — ISO NATIF, plus de Docker au runtime ───────────
@@ -540,10 +537,10 @@ auto lo
 iface lo inet loopback
 EOF
 
-# ── Service startup : exécute le gist update.sh (bbaranoff) au démarrage ──────
+# ── Service startup : exécute le gist tools/update.sh (bbaranoff) au démarrage ──────
 cat > "$ROOTFS/usr/local/sbin/osmo-update.sh" <<'UPD'
 #!/bin/bash
-# osmo-update.sh — recupere et execute update.sh (repo bbaranoff/osmo_egprs) au boot.
+# osmo-update.sh — recupere et execute tools/update.sh (repo bbaranoff/osmo_egprs) au boot.
 set -u
 URL="https://raw.githubusercontent.com/bbaranoff/osmo_egprs/refs/heads/main/update.sh"
 LOG=/var/log/osmo-update.log
@@ -552,11 +549,11 @@ echo "===== osmo-update $(date) ====="
 for i in 1 2 3 4 5; do
     if curl -fsSL "$URL" -o /tmp/osmo-update.gist.sh; then
         chmod +x /tmp/osmo-update.gist.sh
-        echo "--- execution update.sh ---"
+        echo "--- execution tools/update.sh ---"
         bash /tmp/osmo-update.gist.sh; rc=$?
-        echo "update.sh termine (rc=$rc)"
-        # ── Normalisation fstab : retire le doublon /tmp ré-injecté par update.sh ──
-        # update.sh (gist) ré-ajoute 'tmpfs /tmp tmpfs nosuid,nodev 0 0' (SANS size=),
+        echo "tools/update.sh termine (rc=$rc)"
+        # ── Normalisation fstab : retire le doublon /tmp ré-injecté par tools/update.sh ──
+        # tools/update.sh (gist) ré-ajoute 'tmpfs /tmp tmpfs nosuid,nodev 0 0' (SANS size=),
         # créant un doublon avec l'entree canonique 'tmpfs /tmp … size=2G' posee au build.
         # On supprime toute ligne 'tmpfs /tmp tmpfs …' depourvue de size= (le doublon),
         # en conservant l'entree 2G. Idempotent : sans effet si le doublon est absent.
@@ -569,14 +566,14 @@ for i in 1 2 3 4 5; do
     fi
     echo "curl echoue (tentative $i/5), retry dans 5s..."; sleep 5
 done
-echo "impossible de recuperer update.sh apres 5 tentatives (pas de reseau ?)"
+echo "impossible de recuperer tools/update.sh apres 5 tentatives (pas de reseau ?)"
 exit 0
 UPD
 chmod +x "$ROOTFS/usr/local/sbin/osmo-update.sh"
 
 cat > "$ROOTFS/etc/systemd/system/osmo-update.service" <<'EOF'
 [Unit]
-Description=osmo_egprs startup update (gist update.sh)
+Description=osmo_egprs startup update (gist tools/update.sh)
 Wants=network-online.target
 After=network-online.target systemd-networkd-wait-online.service
 [Service]
@@ -587,7 +584,7 @@ ExecStart=/usr/local/sbin/osmo-update.sh
 WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} osmo-update (exécute le gist update.sh au démarrage)"
+echo -e "  ${GREEN}✓${NC} osmo-update (exécute le gist tools/update.sh au démarrage)"
 
 
 # Autologin root
@@ -729,7 +726,7 @@ tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=2G   0 0
 FSTAB
 # /tmp : PAS dans fstab. Une entree fstab /tmp entre en collision avec l'unite
 # systemd tmp.mount -> "systemd-fstab-generator: tmp.mount already exists,
-# Duplicate entry in /etc/fstab" (generateur en exit 1) ; en plus update.sh la
+# Duplicate entry in /etc/fstab" (generateur en exit 1) ; en plus tools/update.sh la
 # reinjecte au boot. On gere /tmp en natif systemd via un drop-in size=2G : une
 # seule source, zero doublon possible quoi que fasse update.sh.
 mkdir -p "$ROOTFS/etc/systemd/system/tmp.mount.d"
@@ -809,7 +806,7 @@ dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 touch /var/lib/osmo-kb-done
 
 echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lancé automatiquement."
-echo -e "  \033[1;33mPour démarrer la stack manuellement : /opt/osmo_egprs/start-in-iso.sh\033[0m"
+echo -e "  \033[1;33mPour démarrer la stack manuellement : /opt/osmo_egprs/start-direct.sh\033[0m"
 
 echo -e "  \033[1;32m✓ Clavier configuré (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
 echo ""

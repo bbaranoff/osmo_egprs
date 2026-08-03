@@ -3,7 +3,7 @@
 # =============================================================================
 #
 #  RÔLE
-#      Ne lance rien, ne crée rien. Vérifie que environnement/load.env a produit
+#      Ne lance rien, ne crée rien. Vérifie que environment/load.env a produit
 #      une configuration COHÉRENTE, et surtout qu'elle franchit la frontière de
 #      processus : c'est par l'environnement exporté, et par rien d'autre, que
 #      les CALYPSO_* atteignent QEMU. Un `set -a` oublié dans run.sh ne se
@@ -12,7 +12,7 @@
 #      ne le remarque.
 #
 #  PRÉREQUIS
-#      run.sh a sourcé environnement/load.env sous `set -a` AVANT de sourcer les
+#      run.sh a sourcé environment/load.env sous `set -a` AVANT de sourcer les
 #      modules (run.sh:75-80). Aucun autre module.
 #
 #  CRITÈRE DE SUCCÈS
@@ -35,20 +35,20 @@ MOD_PURE[profil]=1
 MOD_PROFILES[profil]="calypso faketrx hybrid core"
 MOD_TIMEOUT[profil]=10
 
-# Profils connus — doit rester aligné sur le `case` de environnement/modes.env.
+# Profils connus — doit rester aligné sur le `case` de environment/modes.env.
 : "${CONFIG_MODES_CONNUS:=shunt_legit native native_helped}"
 
 mod_profil_check() {
     local m="${CALYPSO_MODE:-}" connu=0 x
 
     if [ -z "$m" ]; then
-        mod_hint "environnement/load.env n'a pas été sourcé : lancez ./start-oqc.sh, pas les modules à la main"
+        mod_hint "environment/load.env n'a pas été sourcé : lancez ./launch/start-oqc.sh, pas les modules à la main"
         mod_fail "CALYPSO_MODE non défini — la configuration n'a pas été chargée"
         return $MOD_RC_FAIL
     fi
     for x in $CONFIG_MODES_CONNUS; do [ "$x" = "$m" ] && connu=1; done
     if [ $connu -eq 0 ]; then
-        mod_hint "profils disponibles : $CONFIG_MODES_CONNUS (voir environnement/modes.env)"
+        mod_hint "profils disponibles : $CONFIG_MODES_CONNUS (voir environment/modes.env)"
         mod_fail "CALYPSO_MODE inconnu : « $m » — aucun profil n'a été appliqué"
         return $MOD_RC_FAIL
     fi
@@ -58,7 +58,7 @@ mod_profil_check() {
         [ -n "${!x:-}" ] || manquantes="$manquantes $x"
     done
     if [ -n "$manquantes" ]; then
-        mod_hint "ces variables sont posées par environnement/paths.env — vérifiez qu'il est lisible"
+        mod_hint "ces variables sont posées par environment/paths.env — vérifiez qu'il est lisible"
         mod_fail "configuration incomplète :$manquantes"
         return $MOD_RC_FAIL
     fi

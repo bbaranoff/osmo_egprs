@@ -17,7 +17,7 @@
 #
 # CHAÎNE DE CONFIGURATION — NE PAS LA CASSER
 #     VAR=x ./start-direct.sh   ← la ligne de commande gagne toujours
-#       -> environnement/load.env
+#       -> environment/load.env
 #          -> paths / modes / domaines
 #     puis exec run.sh avec le profil choisi.
 # -----------------------------------------------------------------------------
@@ -103,10 +103,17 @@ banner() {
     echo -e "${C_Z}"
 }
 # --- 1. configuration ---------------------------------------------------------
+# [2026-08-03] globals.conf — les reglages reseau (MCC/MNC/ARFCN/KI/IMSI/A5...).
+# Genere par ./generate_configs.sh cote hote ; ici on se contente de le lire.
+# L'idiome « := » qu'il utilise laisse gagner toute variable deja posee, donc
+#     ARFCN=520 ./start-direct.sh
+# surcharge sans toucher au fichier.
+[ -r "$HERE/globals.conf" ] && { set -a; . "$HERE/globals.conf"; set +a; }
+
 say_begin "Chargement de l'environnement"
-if [ -f "$HERE/environnement/load.env" ]; then
-    set -a; . "$HERE/environnement/load.env"; set +a
-    say_end " OK " "$C_OK" "Chargement de l'environnement" "environnement/load.env"
+if [ -f "$HERE/environment/load.env" ]; then
+    set -a; . "$HERE/environment/load.env"; set +a
+    say_end " OK " "$C_OK" "Chargement de l'environnement" "environment/load.env"
 elif [ -f "$HERE/env/load.env" ]; then
     set -a; . "$HERE/env/load.env"; set +a
     say_end " OK " "$C_OK" "Chargement de l'environnement" "env/load.env"
@@ -125,7 +132,7 @@ else
 fi
 : "${RUN_DIR:=/run/osmo-direct}"
 # [2026-08-03] Les journaux ne vont plus sous RUN_DIR (tmpfs sature deux fois) —
-# cf. environnement/paths.env. Ce fallback ne sert que si load.env est absent.
+# cf. environment/paths.env. Ce fallback ne sert que si load.env est absent.
 : "${LOG_DIR:=/root/osmo-nitb/logs}"
 : "${ENCRYPTION:=a5 0}"
 : "${MS_COUNT:=2}"

@@ -13,7 +13,7 @@ mod_prereqs_check() {
         [ -n "$p" ] && [ -e "$p" ] || missing="$missing $v"
     done
     if [ -n "$missing" ]; then
-        mod_hint "réglez les chemins dans environnement/paths.env, puis ./run.sh --check-paths"
+        mod_hint "réglez les chemins dans environment/paths.env, puis ./run.sh --check-paths"
         mod_fail "dépendances introuvables :$missing"
         return $MOD_RC_FAIL
     fi

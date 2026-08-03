@@ -16,7 +16,7 @@
 #
 #  Où : GSM_ROOT (défaut /opt/GSM) reçoit sources et binaires.
 #
-#  SI VOUS DÉCOUVREZ LE PROJET, PRÉFÉREZ DOCKER : `./make-docker-image.sh` produit une image
+#  SI VOUS DÉCOUVREZ LE PROJET, PRÉFÉREZ DOCKER : `./tools/make-docker-image.sh` produit une image
 #  complète et reproductible. Cette installation native s'adresse à ceux qui
 #  veulent travailler sur les sources.
 #

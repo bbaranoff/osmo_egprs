@@ -10,7 +10,7 @@
 #              partait en RACH, le LU échouait, et rien dans le lancement ne
 #              disait que le HLR n'avait jamais démarré.
 #
-#  PRÉREQUIS   systemctl utilisable, $OSMOCOM_CFG/{outils/status.sh,osmo-start.sh}.
+#  PRÉREQUIS   systemctl utilisable, $OSMOCOM_CFG/{tools/status.sh,osmo-start.sh}.
 #
 #  SUCCÈS      Les VTY HLR (4258), MSC (4254) et BSC (4242) ACCEPTENT une
 #              connexion. POURQUOI CE CRITÈRE : `systemctl start` rend la main
@@ -93,7 +93,7 @@ MOD_TIMEOUT[core]=120
 # modules a grain fin (10-stp, 11-hlr, 12-mgw, 13-msc, 14-bsc, ...) fait la meme
 # chose demon par demon, avec un verdict par demon. Les deux dans le meme plan,
 # c'est deux fois le meme demarrage — et surtout `mod_core_start` commence par
-# `outils/status.sh stop`, donc il ETEINDRAIT ce que les modules a grain fin viennent
+# `tools/status.sh stop`, donc il ETEINDRAIT ce que les modules a grain fin viennent
 # d'allumer (visible seulement sous --force, `mod_core_status` masquant le reste
 # du temps le probleme derriere un SKIP). On cede donc la place des que le bloc
 # decompose est enregistre. La porte est auto-adaptative : si ce bloc disparait
@@ -119,7 +119,7 @@ mod_core_check() {
         return $MOD_RC_FAIL
     }
     [ -x "$OSMO_CORE_START" ] || {
-        mod_hint "réglez OSMOCOM_CFG dans environnement/paths.env (attendu : <OSMOCOM_CFG>/osmo-start.sh)"
+        mod_hint "réglez OSMOCOM_CFG dans environment/paths.env (attendu : <OSMOCOM_CFG>/osmo-start.sh)"
         mod_fail "script de démarrage du cœur introuvable : $OSMO_CORE_START"
         return $MOD_RC_FAIL
     }
@@ -135,7 +135,7 @@ mod_core_start() {
 
     # Arrêt d'abord : le legacy le faisait (L1564) pour repartir d'un cœur frais
     # — un osmo-bsc qui garde une A-interface d'un run précédent refuse le
-    # nouveau BTS. `|| true` : outils/status.sh est en `set -e` et sort non nul dès
+    # nouveau BTS. `|| true` : tools/status.sh est en `set -e` et sort non nul dès
     # qu'un service était déjà arrêté, ce qui n'est pas une erreur ici.
     if [ -x "$OSMO_CORE_STATUS" ]; then
         timeout 60 "$OSMO_CORE_STATUS" stop >>"$OSMO_CORE_LOG" 2>&1 || true

@@ -116,76 +116,12 @@ _generate_sms_routing_conf_fallback() {
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
-apply_config_templates() {
-    local dest=$1 container_ip=$2 gateway_ip=$3 op_id=$4
-    local pc_msc=$5 pc_stp=$6 pc_bsc=$7 mcc=$8 mnc=$9 op_name=${10}
-    local inter_stp=${11} inter_stp_shutdown=${12} n_operators=${13}
-    mkdir -p "$dest/osmocom" "$dest/asterisk" "$dest/bb"
-    local f bn s
-    for f in configs/*.cfg; do
-        [ "$(basename "$f")" = "osmo-stp-interop.cfg" ] && continue
-        cp "$f" "$dest/osmocom/"
-    done
-    [ -f "configs/osmo-bts-virtual.cfg" ] && cp "configs/osmo-bts-virtual.cfg" "$dest/osmocom/"
-    for f in configs/*.conf; do
-        bn=$(basename "$f"); [ "$bn" = "sms-routing.conf" ] && continue
-        cp "$f" "$dest/asterisk/"
-    done
-    for s in entrypoint.sh osmo-start.sh status.sh run.sh gapk-start.sh \
-             smsc-start.sh pulse-gsm-setup.sh sms-interop-relay.py send-mt-sms.sh; do
-        [ -f "scripts/$s" ] && cp "scripts/$s" "$dest/osmocom/$s" && chmod +x "$dest/osmocom/$s"
-    done
-    if [ -f "configs/mobile.cfg.template" ]; then
-        cp "configs/mobile.cfg.template" "$dest/bb/mobile.cfg"
-        cp "configs/mobile.cfg.template" "$dest/bb/mobile_group1.cfg"
-    elif [ -f "configs/mobile.cfg" ]; then
-        cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
-        cp "configs/mobile.cfg" "$dest/bb/mobile_group1.cfg"
-    fi
-    local rctx_msc rctx_stp rctx_bsc rctx_inter
-    rctx_msc=$(op_rctx_msc "$op_id"); rctx_stp=$(op_rctx_stp "$op_id")
-    rctx_bsc=$(op_rctx_bsc "$op_id"); rctx_inter=$(op_rctx_inter "$op_id")
-    local arfcn=$(( 512 + op_id * 2 )) ipa_unit_id=$(( 6000 + op_id ))
-    local cell_id=$(( 6000 + op_id )) bsic=$(( (op_id * 7) % 64 ))
-    local bvci=$(( op_id * 10 + 2 )) nsei=$(( op_id * 10 )) nsvci=$(( op_id * 10 ))
-    local imsi="${mcc}${mnc}$(printf '%010d' "${op_id}")"
-    local imei="3589250059$(printf '%04d' "${op_id}")0"
-    local ki="00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' "${op_id}") ff"
-    local sms_sc="+336661234$(printf '%04d' "${op_id}")"
-    local inter_local_ip; inter_local_ip=$(op_backbone_ip "$op_id")
-    local rtp_start rtp_end sip_host_port
-    rtp_start=$(linphone_rtp_start "$op_id"); rtp_end=$(linphone_rtp_end "$op_id")
-    sip_host_port=$(linphone_sip_port "$op_id")
-    for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
-        [ -f "$f" ] || continue
-        sed -i \
-            -e "s|__ENCRYPTION__|${ENCRYPTION}|g" \
-            -e "s|__INTER_NET_GATEWAY__|172.20.0.1|g" \
-            -e "s|__CONTAINER_IP__|${container_ip}|g" \
-            -e "s|__GATEWAY_IP__|${gateway_ip}|g" \
-            -e "s|__HLR_IP__|127.0.0.2|g" \
-            -e "s|__INTER_STP_IP__|${inter_stp}|g" \
-            -e "s|__INTER_STP_SHUTDOWN__|${inter_stp_shutdown}|g" \
-            -e "s|__INTER_LOCAL_IP__|${inter_local_ip}|g" \
-            -e "s|__OPERATOR_ID__|${op_id}|g" \
-            -e "s|__PC_MSC__|${pc_msc}|g" -e "s|__PC_STP__|${pc_stp}|g" -e "s|__PC_BSC__|${pc_bsc}|g" \
-            -e "s|__RCTX_MSC__|${rctx_msc}|g" -e "s|__RCTX_STP__|${rctx_stp}|g" \
-            -e "s|__RCTX_BSC__|${rctx_bsc}|g" -e "s|__RCTX_INTER__|${rctx_inter}|g" \
-            -e "s|__MCC__|${mcc}|g" -e "s|__MNC__|${mnc}|g" -e "s|__OP_NAME__|${op_name}|g" \
-            -e "s|__ARFCN__|${arfcn}|g" -e "s|__IPA_UNIT_ID__|${ipa_unit_id}|g" \
-            -e "s|__CELL_ID__|${cell_id}|g" -e "s|__BSIC__|${bsic}|g" \
-            -e "s|__BVCI__|${bvci}|g" -e "s|__NSEI__|${nsei}|g" -e "s|__NSVCI__|${nsvci}|g" \
-            -e "s|__IMSI__|${imsi}|g" -e "s|__IMEI__|${imei}|g" -e "s|__KI__|${ki}|g" \
-            -e "s|__SMS_SC__|${sms_sc}|g" -e "s|__HOST_IP__|${HOST_IP}|g" \
-            -e "s|__SIP_HOST_PORT__|${sip_host_port}|g" \
-            -e "s|__ALSA_OUTPUT__|${ALSA_OUTPUT}|g" -e "s|__ALSA_INPUT__|${ALSA_INPUT}|g" \
-            -e "s|__RTP_START__|${rtp_start}|g" -e "s|__RTP_END__|${rtp_end}|g" \
-            "$f"
-    done
-    generate_pjsip_interop_trunks "$op_id" "$n_operators" >> "$dest/asterisk/pjsip.conf"
-    generate_extensions_interop_out "$op_id" "$n_operators" >> "$dest/asterisk/extensions.conf"
-    _generate_sms_routing_conf_fallback "$op_id" "$n_operators" > "$dest/osmocom/sms-routing.conf"
-}
+# [2026-08-03] apply_config_templates() a demenage dans generate_configs.sh :
+# ce fichier en portait une copie, start.sh une autre. Une seule desormais, et
+# ses valeurs (ARFCN, BSIC, KI, IMSI...) sont exposees dans globals.conf au lieu
+# d'etre des formules enfouies dans la substitution.
+_GAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -r "$_GAB_ROOT/generate_configs.sh" ] && . "$_GAB_ROOT/generate_configs.sh"
 
 # ── Install configs natif. $1=src $2=prefix racine (/ ou /etc/netns/<ns>) ──
 install_configs_native() {

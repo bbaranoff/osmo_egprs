@@ -11,7 +11,7 @@
 #
 #  Ici run.sh ne fait plus que quatre choses :
 #    1. lire les options ;
-#    2. charger la configuration (environnement/load.env) ;
+#    2. charger la configuration (environment/load.env) ;
 #    3. construire un PLAN à partir de run_modules/ ;
 #    4. l'exécuter en affichant un état par étape, et rendre un code de sortie.
 #
@@ -20,7 +20,7 @@
 #
 #  CHAÎNE DE CONFIGURATION — NE PAS LA CASSER
 #      VAR=x ./run.sh          ← la ligne de commande gagne toujours
-#        -> environnement/load.env  (sourcé `set -a`, donc exporté vers QEMU)
+#        -> environment/load.env  (sourcé `set -a`, donc exporté vers QEMU)
 #           -> paths / modes / domaines / debug / fixes / crutches / hérité
 #  Vérifier ce qui s'applique réellement : grep "calypso-manifest" sur le log.
 # -----------------------------------------------------------------------------
@@ -72,10 +72,10 @@ while [ $# -gt 0 ]; do
 done
 
 # --- configuration ------------------------------------------------------------
-if [ -f "$HERE/environnement/load.env" ]; then
-    set -a; . "$HERE/environnement/load.env"; set +a
+if [ -f "$HERE/environment/load.env" ]; then
+    set -a; . "$HERE/environment/load.env"; set +a
 else
-    printf 'configuration introuvable : %s\n' "$HERE/environnement/load.env" >&2
+    printf 'configuration introuvable : %s\n' "$HERE/environment/load.env" >&2
     exit 2
 fi
 LOGDIR="${LOG_DIR:-/root/calypso/logs}"

@@ -311,140 +311,22 @@ _generate_sms_routing_conf_fallback() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# apply_config_templates — substitution des placeholders
-# ══════════════════════════════════════════════════════════════════════════════
-apply_config_templates() {
-    local dest=$1
-    local container_ip=$2
-    local gateway_ip=$3
-    local op_id=$4
-    local pc_msc=$5 pc_stp=$6 pc_bsc=$7
-    local mcc=$8 mnc=$9 op_name=${10}
-    local inter_stp=${11}
-    local inter_stp_shutdown=${12}
-    local n_operators=${13}
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration du réseau — déléguée à ./generate_configs.sh
+#
+# [2026-08-03] Ce fichier portait ici une copie de 132 lignes de
+# apply_config_templates(), jumelle de celle de lib/gabarits.sh (70 lignes).
+# Deux implémentations de la même chose, qui divergeaient en silence : celle-ci
+# copiait tout scripts/, l'autre une liste blanche périmée. Elles vivent
+# désormais dans generate_configs.sh, une seule fois.
+#
+# generate_configs.sh crée globals.conf à la racine s'il n'existe pas — et ne
+# l'écrase JAMAIS ensuite. Tes réglages survivent donc à tous les runs. Pour
+# repartir des valeurs d'usine : ./generate_configs.sh --force
+# ─────────────────────────────────────────────────────────────────────────────
+"$HERE/generate_configs.sh" >/dev/null || true
+. "$HERE/generate_configs.sh"
 
-    mkdir -p "$dest/osmocom" "$dest/asterisk" "$dest/bb"
-
-    # Copie configs Osmocom
-    for f in configs/*.cfg; do
-        [ "$(basename "$f")" = "osmo-stp-interop.cfg" ] && continue
-        cp "$f" "$dest/osmocom/"
-    done
-
-    if [ -f "configs/osmo-bts-virtual.cfg" ]; then
-        cp "configs/osmo-bts-virtual.cfg" "$dest/osmocom/"
-    fi
-
-    # Copie configs Asterisk (y compris rtp.conf)
-    for f in configs/*.conf; do
-        local bn
-        bn=$(basename "$f")
-        [ "$bn" = "sms-routing.conf" ] && continue
-        cp "$f" "$dest/asterisk/"
-    done
-
-    # Scripts — copie TOUT scripts/
-    cp scripts/* "$dest/osmocom/" 2>/dev/null || true
-    chmod +x "$dest/osmocom"/*.sh 2>/dev/null || true
-
-    # mobile.cfg
-    if [ -f "configs/mobile.cfg.template" ]; then
-        cp "configs/mobile.cfg.template" "$dest/bb/mobile.cfg"
-        cp "configs/mobile.cfg.template" "$dest/bb/mobile_group1.cfg"
-    elif [ -f "configs/mobile.cfg" ]; then
-        cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
-        cp "configs/mobile.cfg" "$dest/bb/mobile_group1.cfg"
-    fi
-
-    # Calculs dérivés
-    local rctx_msc rctx_stp rctx_bsc rctx_inter
-    rctx_msc=$(op_rctx_msc "$op_id")
-    rctx_stp=$(op_rctx_stp "$op_id")
-    rctx_bsc=$(op_rctx_bsc "$op_id")
-    rctx_inter=$(op_rctx_inter "$op_id")
-
-    local arfcn=$(( 512 + op_id * 2 ))
-    local ipa_unit_id=$(( 6000 + op_id ))
-    local cell_id=$(( 6000 + op_id ))
-    local bsic=$(( (op_id * 7) % 64 ))
-    local bvci=$(( op_id * 10 + 2 ))
-    local nsei=$(( op_id * 10 ))
-    local nsvci=$(( op_id * 10 ))
-    local imsi="${mcc}${mnc}$(printf '%010d' "${op_id}")"
-    local imei="3589250059$(printf '%04d' "${op_id}")0"
-    local ki="00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' "${op_id}") ff"
-    local sms_sc="+336661234$(printf '%04d' "${op_id}")"
-    local inter_local_ip
-    inter_local_ip=$(op_backbone_ip "$op_id")
-
-    # Plage RTP Linphone pour cet opérateur
-    local rtp_start rtp_end sip_host_port
-    rtp_start=$(linphone_rtp_start "$op_id")
-    rtp_end=$(linphone_rtp_end "$op_id")
-    sip_host_port=$(linphone_sip_port "$op_id")
-
-    # ── Substitution sed ────────────────────────────────────────────────────
-    for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
-        [ -f "$f" ] || continue
-        sed -i \
-            -e "s|__ENCRYPTION__|${ENCRYPTION}|g" \
-            -e "s|__INTER_NET_GATEWAY__|172.20.0.1|g" \
-            -e "s|__CONTAINER_IP__|${container_ip}|g" \
-            -e "s|__GATEWAY_IP__|${gateway_ip}|g" \
-            -e "s|__HLR_IP__|127.0.0.2|g" \
-            -e "s|__INTER_STP_IP__|${inter_stp}|g" \
-            -e "s|__INTER_STP_SHUTDOWN__|${inter_stp_shutdown}|g" \
-            -e "s|__INTER_LOCAL_IP__|${inter_local_ip}|g" \
-            -e "s|__OPERATOR_ID__|${op_id}|g" \
-            -e "s|__PC_MSC__|${pc_msc}|g" \
-            -e "s|__PC_STP__|${pc_stp}|g" \
-            -e "s|__PC_BSC__|${pc_bsc}|g" \
-            -e "s|__RCTX_MSC__|${rctx_msc}|g" \
-            -e "s|__RCTX_STP__|${rctx_stp}|g" \
-            -e "s|__RCTX_BSC__|${rctx_bsc}|g" \
-            -e "s|__RCTX_INTER__|${rctx_inter}|g" \
-            -e "s|__MCC__|${mcc}|g" \
-            -e "s|__MNC__|${mnc}|g" \
-            -e "s|__OP_NAME__|${op_name}|g" \
-            -e "s|__ARFCN__|${arfcn}|g" \
-            -e "s|__IPA_UNIT_ID__|${ipa_unit_id}|g" \
-            -e "s|__CELL_ID__|${cell_id}|g" \
-            -e "s|__BSIC__|${bsic}|g" \
-            -e "s|__BVCI__|${bvci}|g" \
-            -e "s|__NSEI__|${nsei}|g" \
-            -e "s|__NSVCI__|${nsvci}|g" \
-            -e "s|__IMSI__|${imsi}|g" \
-            -e "s|__IMEI__|${imei}|g" \
-            -e "s|__KI__|${ki}|g" \
-            -e "s|__SMS_SC__|${sms_sc}|g" \
-            -e "s|__HOST_IP__|${HOST_IP}|g" \
-            -e "s|__SIP_HOST_PORT__|${sip_host_port}|g" \
-            -e "s|__ALSA_OUTPUT__|${ALSA_OUTPUT}|g" \
-            -e "s|__ALSA_INPUT__|${ALSA_INPUT}|g" \
-            -e "s|__RTP_START__|${rtp_start}|g" \
-            -e "s|__RTP_END__|${rtp_end}|g" \
-            "$f"
-    done
-
-    # Append pjsip trunks + dialplan interop
-    generate_pjsip_interop_trunks "$op_id" "$n_operators" \
-        >> "$dest/asterisk/pjsip.conf"
-
-    generate_extensions_interop_out "$op_id" "$n_operators" \
-        >> "$dest/asterisk/extensions.conf"
-
-    # SMS Routing
-    if declare -f sms_routing_generate > /dev/null 2>&1 && \
-       [ -n "${SMS_ROUTING_DIR:-}" ] && \
-       [ -f "${SMS_ROUTING_DIR}/sms-routing-op${op_id}.conf" ]; then
-        cp "${SMS_ROUTING_DIR}/sms-routing-op${op_id}.conf" \
-           "$dest/osmocom/sms-routing.conf"
-    else
-        _generate_sms_routing_conf_fallback "$op_id" "$n_operators" \
-            > "$dest/osmocom/sms-routing.conf"
-    fi
-}
 
 build_vol_args() {
     local tmpdir=$1
@@ -570,7 +452,7 @@ setup_wan_interop() {
     local script_path
     script_path="$(dirname "$0")/setup-wan-interop.sh"
     if [ ! -f "$script_path" ]; then
-        echo -e "${RED}[WAN] setup-wan-interop.sh introuvable${NC}"
+        echo -e "${RED}[WAN] network/setup-wan-interop.sh introuvable${NC}"
         return 1
     fi
     chmod +x "$script_path"
