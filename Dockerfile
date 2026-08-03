@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS osmocom-nitb
+<FROM ubuntu:22.04 AS osmocom-nitb
 
 # ROOT : ou vivent les sources dans l'image. Chemin FIXE et assume — dans un
 # conteneur, il n'y a rien a rendre portable.
@@ -247,6 +247,7 @@ RUN cd /opt/GSM \
     && ../configure --target-list=arm-softmmu --prefix=/opt/GSM/qemu-install --disable-werror \
     && make -j$(nproc) \
     && make install \
+    && cd /opt/GSM/qemu-src/tools/calypso-ipc-device && make clean && make \
     && cp /opt/GSM/qemu-install/bin/qemu-system-arm /usr/local/bin/qemu-system-arm
 
 # Layout stable attendu par scripts/run.sh : /opt/GSM/qemu/{build,bridge.py,sercomm_udp.py,...}
