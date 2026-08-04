@@ -48,10 +48,6 @@ ALL_TSC = [
     "10100111110110001010011111", "11101111000100101110111100",
 ]
 dbg_tsc = [0]   # compteur de bursts BCCH instrumentés (mutable)
-# [2026-08-04] Manquait : le bloc de dump I/Q plus bas (udp_loop) faisait
-# dbg_dump.append(...) sans que la liste existe -> NameError a la PREMIERE
-# rafale BCCH (fn%51 dans 2..5), donc pont demarre puis mort aussitot.
-dbg_dump = []   # bursts BCCH bruts en attente de vidage (mutable)
 
 def demod_burst(iq):
     """iq : np.complex (>=148) -> string de 148 bits durs '0'/'1', ou None.
