@@ -42,3 +42,5 @@ systemctl restart osmo-egprs-web.service
 
 # vérif
 systemctl show osmo-egprs-web.service -p Environment
+rm -rf /opt/GSM/osmo_egprs
+mv /opt/osmo_egprs /opt/GSM/
