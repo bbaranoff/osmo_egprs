@@ -1,6 +1,6 @@
 # 1) tronquer juste après la ligne Disclaimer (gardée)
 awk '1; /Disclaimer/{exit}' /etc/profile.d/01-keyboard-setup.sh > /tmp/kb.new
-
+cd /opt/GSM/osmo_egprs/ && git pull
 # 2) appender l'animation — heredoc QUOTÉ => zéro échappement
 cat >> /tmp/kb.new <<'ANIM'
 
@@ -42,5 +42,4 @@ systemctl restart osmo-egprs-web.service
 
 # vérif
 systemctl show osmo-egprs-web.service -p Environment
-rm -rf /opt/GSM/osmo_egprs
-mv /opt/osmo_egprs /opt/GSM/
+rm -rf /opt/osmo_egprs
