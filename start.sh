@@ -326,7 +326,12 @@ _generate_sms_routing_conf_fallback() {
 # ─────────────────────────────────────────────────────────────────────────────
 # start.sh n'a pas de variable de répertoire (il travaille en chemins relatifs
 # depuis la racine du dépôt) : on résout ici, sans rien supposer.
-_GC_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/generate_configs.sh"
+#
+# BASH_SOURCE ne suffit pas : build-iso.sh extrait ce fichier en bibliothèque
+# ($WORK/start.lib.sh) puis la source, et BASH_SOURCE désigne alors la COPIE,
+# dans un répertoire de travail où generate_configs.sh n'existe pas.
+# OSMO_REPO_DIR laisse l'appelant nommer la vraie racine du dépôt.
+_GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate_configs.sh"
 "$_GC_SH" >/dev/null || true
 . "$_GC_SH"
 

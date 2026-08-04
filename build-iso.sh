@@ -81,6 +81,10 @@ load_start_lib() {
         { print }
     ' "$src" > "$lib"
 
+    # La lib vit dans $WORK, pas dans le dépôt : sans ça, la résolution par
+    # BASH_SOURCE de start.sh chercherait generate_configs.sh à côté de la copie.
+    export OSMO_REPO_DIR="$DIR"
+
     # shellcheck disable=SC1090
     source "$lib"
 }
