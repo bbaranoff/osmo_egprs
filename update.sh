@@ -24,7 +24,7 @@ sed -i -e 's/a5 0/a5 0/g' /etc/osmocom/osmo-*sc.cfg
 cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 
 
-apt update && apt install git -y
+apt update && apt install git tcpdump binutils-arm-none-eabi -y
 rm -r /opt/osmo-egprs-web
 git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
 cd /opt/osmo-egprs-web && git checkout main
