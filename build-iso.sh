@@ -446,7 +446,7 @@ ldconfig
 # extraire binaires/configs, mais le ISO final nembarque pas docker.
 
 if ! command -v node &>/dev/null; then
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y $APT_OPTS --no-install-recommends nodejs
 fi
 
