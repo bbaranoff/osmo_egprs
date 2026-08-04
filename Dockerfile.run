@@ -47,7 +47,11 @@ RUN if [ ! -d "/opt/GSM/osmo_egprs/" ]; then git clone https://github.com/bbaran
 # local, pas de docker) et est servi sur :8080. Le DÉMARRAGE est géré par
 # start-direct.sh (`systemctl restart osmo-egprs-web`) — ici on ne fait
 # qu'INSTALLER le runtime + les dépendances + le unit (enable au boot).
-ARG NODE_VERSION=v20.20.2
+#
+# Node 22 (LTS « Jod ») — même famille majeure que l'ISO, qui installe
+# nodesource setup_22.x (build-iso.sh). Garder les deux alignés : le dashboard
+# est le même server.js des deux côtés.
+ARG NODE_VERSION=v22.23.2
 RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz" \
         -o /tmp/node.tar.xz && \
     mkdir -p /opt/node && \
