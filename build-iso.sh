@@ -128,6 +128,34 @@ apply_config_templates "$TEMP_CONFIG" \
     "001" "01" "OsmoGSM" \
     "$INTER_STP_IP" "shutdown" "1"
 
+# ── Routage SMS : installer la table generee, adaptee au natif ───────────────
+# APRES apply_config_templates, et non avant : celui-ci ecrase systematiquement
+# sms-routing.conf avec le fallback de lib/gabarits.sh, qui ne couvre que 5 MS
+# (routes 001..005) alors que l'ISO en embarque ISO_N_MS. La table generee plus
+# haut couvre les ISO_N_MS abonnes ; sans cette copie elle etait produite dans
+# $SMS_ROUTING_DIR puis jetee par le rm -rf final, et l'ISO partait avec le
+# fallback -> « No route for destination » sur les MSISDN au-dela du 5e.
+#
+# L'ISO tourne en NATIF (pas de bridge docker au runtime) : les IP backbone
+# 172.20.0.x du generateur ne designent personne. On les ramene sur la boucle
+# locale dans la seule section [operators] — les prefixes de [routes] sont des
+# MSISDN et ne doivent pas etre touches.
+SMS_ROUTING_SRC="$SMS_ROUTING_DIR/sms-routing-op1.conf"
+if [ -s "$SMS_ROUTING_SRC" ]; then
+    awk '
+        /^\[/               { in_ops = ($0 == "[operators]") }
+        in_ops && /^#[[:space:]]*operator_id[[:space:]]*=[[:space:]]*container_ip/ {
+            print "# operator_id = ip  (ISO native : pas de bridge docker, tout boucle en local)"
+            next
+        }
+        in_ops && /^[0-9]+[[:space:]]*=/ { sub(/=[[:space:]]*172\.20\.0\.[0-9]+/, "= 127.0.0.1") }
+        { print }
+    ' "$SMS_ROUTING_SRC" > "$TEMP_CONFIG/osmocom/sms-routing.conf"
+    echo -e "  ${GREEN}✓${NC} sms-routing.conf : ${CYAN}${ISO_N_MS}${NC} MS routes (natif 127.0.0.1)"
+else
+    echo -e "  ${YELLOW}⚠ table de routage SMS non generee — fallback ${ISO_N_MS}>5 MS incomplet${NC}"
+fi
+
 ISO_RUN_IMAGE="osmocom-run-iso-net-host"
 TMP_CID="$(docker create osmocom-run /bin/sh)"
 
@@ -190,6 +218,28 @@ else
     echo -e "  ${YELLOW}⚠ récupération osmo_egprs échouée (réseau ?) — copie de l'image conservée${NC}"
 fi
 rm -rf "$stage"
+
+# ── Feed HLR : aligner N_MS sur le nombre de MS embarqués ────────────────────
+# run_modules/21-abonnes-hlr.sh retombe sur « : "${N_MS:=1}" » : sans ce fichier
+# un SEUL abonné etait provisionne alors que l'ISO en declare ISO_N_MS, et les
+# MS suivants se voyaient refuser le rattachement (« IMSI unknown in HLR ») —
+# panne lue a tort comme un defaut radio.
+#
+# environment/load.env source « coeur.env » s'il existe, et tout le depot suit
+# l'idiome « : "${VAR:=...}" » : la ligne de commande (N_MS=2 ./run.sh) garde
+# donc la priorite. On ecrit dans les arbres presents : l'ISO native resout
+# run.sh depuis osmo_egprs, qemu-src n'y survit que si ses sources sont gardees.
+for envdir in "$ROOTFS/opt/GSM/osmo_egprs/environment" \
+              "$ROOTFS/opt/GSM/qemu-src/environment"; do
+    [ -d "$envdir" ] || continue
+    cat > "$envdir/coeur.env" <<COEUR
+# coeur.env — genere par build-iso.sh. Aligne le nombre d'abonnes provisionnes
+# dans le HLR sur le nombre de MS embarques par l'ISO (ISO_N_MS).
+: "\${N_MS:=$ISO_N_MS}"
+: "\${OPERATOR_ID:=1}"
+COEUR
+    echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (${envdir#$ROOTFS})"
+done
 
 
 # ── qemu-src : checkout LOCAL (branche main, build/qemu-system-arm recompilé) ──
