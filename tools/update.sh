@@ -43,5 +43,5 @@ systemctl restart osmo-egprs-web.service
 # vérif
 systemctl show osmo-egprs-web.service -p Environment
 rm -r /opt/GSM/osmo_egprs
-git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && cd /opt/GSM/osmo_egprs && git checkout main
+git clone -b main https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
 
