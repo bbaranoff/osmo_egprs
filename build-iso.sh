@@ -97,16 +97,29 @@ echo -e "  ${GREEN}✓${NC} osmocom-run construite"
 
 echo -e "${GREEN}[2b/9] Préparation d'une image osmocom-run (net-host)...${NC}"
 
-ISO_N_MS=8
+ISO_N_MS=2
+ISO_OP_ID=1         # operateur unique de l'ISO (PLMN 001-01)
 ENCRYPTION="a5 0"   # A5/1 par defaut dans l'ISO (chiffrement bout-en-bout valide)
 
-HOST_IP="172.20.0.11"      # ip1 : conteneur operateur (backbone docker 172.20.0.0/24)
-GATEWAY_IP="172.20.0.1"    # gw  : passerelle du reseau docker
+# L'ISO tourne en NATIF, sans bridge docker. Les 172.20.0.x existaient quand
+# meme : 20-dhcp.network (plus bas) les alias sur le NIC par defaut. Mais faire
+# ecouter le coeur dessus le rend tributaire de ce NIC — s'il est absent (VM
+# sans carte), nomme hors de « en* eth* », ou simplement pas encore configure
+# par systemd-networkd quand osmo-ggsn demarre, le bind echoue. La boucle
+# locale, elle, est toujours la et prete avant tout service.
+# Concerne : osmo-ggsn (gtp bind-ip), osmo-sgsn (ggsn remote-ip), osmo-upf
+# (local-addr), osmo-bsc (gprs nsvc remote ip) et le log gsmtap, que l'on
+# ramene ainsi sur 127.0.0.1 ou tshark capte deja.
+HOST_IP="127.0.0.1"        # ip1 : __CONTAINER_IP__ — ggsn/sgsn/upf/bsc-nsvc
+GATEWAY_IP="127.0.0.1"     # gw  : __GATEWAY_IP__  — log gsmtap + dns 0 du ggsn
 
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
 PHY_MODE="${PHY_MODE:-faketrx}"
-INTER_STP_IP="172.20.1.10" # ip2 : reseau prive operateur (172.20.1.0/24)
+# __INTER_STP_IP__ : ASP vers le STP d'un autre operateur. Inerte ici — l'ISO
+# n'a qu'un operateur et passe inter_stp_shutdown=shutdown a apply_config_
+# templates — mais on ne laisse pas une IP docker morte dans les configs.
+INTER_STP_IP="127.0.0.1"   # ip2 : inter-operateur (ASP shutdown sur l'ISO)
 
 echo -e "  Host IP    : ${CYAN}${HOST_IP}${NC}"
 echo -e "  Gateway    : ${CYAN}${GATEWAY_IP}${NC}"
@@ -116,11 +129,6 @@ echo -e "  Encryption : ${CYAN}${ENCRYPTION}${NC}"
 echo -e "  PHY        : ${CYAN}${PHY_MODE}${NC}"
 
 TEMP_CONFIG="$(mktemp -d)"
-SMS_ROUTING_DIR="$(mktemp -d)"
-
-if declare -f sms_routing_generate >/dev/null 2>&1; then
-    sms_routing_generate 1 1 "$SMS_ROUTING_DIR" "$ISO_N_MS" || true
-fi
 
 apply_config_templates "$TEMP_CONFIG" \
     "$HOST_IP" "$GATEWAY_IP" \
@@ -128,33 +136,31 @@ apply_config_templates "$TEMP_CONFIG" \
     "001" "01" "OsmoGSM" \
     "$INTER_STP_IP" "shutdown" "1"
 
-# ── Routage SMS : installer la table generee, adaptee au natif ───────────────
+# ── Routage SMS ──────────────────────────────────────────────────────────────
 # APRES apply_config_templates, et non avant : celui-ci ecrase systematiquement
-# sms-routing.conf avec le fallback de lib/gabarits.sh, qui ne couvre que 5 MS
-# (routes 001..005) alors que l'ISO en embarque ISO_N_MS. La table generee plus
-# haut couvre les ISO_N_MS abonnes ; sans cette copie elle etait produite dans
-# $SMS_ROUTING_DIR puis jetee par le rm -rf final, et l'ISO partait avec le
-# fallback -> « No route for destination » sur les MSISDN au-dela du 5e.
+# sms-routing.conf avec le fallback de lib/gabarits.sh.
 #
-# L'ISO tourne en NATIF (pas de bridge docker au runtime) : les IP backbone
-# 172.20.0.x du generateur ne designent personne. On les ramene sur la boucle
-# locale dans la seule section [operators] — les prefixes de [routes] sont des
-# MSISDN et ne doivent pas etre touches.
-SMS_ROUTING_SRC="$SMS_ROUTING_DIR/sms-routing-op1.conf"
-if [ -s "$SMS_ROUTING_SRC" ]; then
-    awk '
-        /^\[/               { in_ops = ($0 == "[operators]") }
-        in_ops && /^#[[:space:]]*operator_id[[:space:]]*=[[:space:]]*container_ip/ {
-            print "# operator_id = ip  (ISO native : pas de bridge docker, tout boucle en local)"
-            next
-        }
-        in_ops && /^[0-9]+[[:space:]]*=/ { sub(/=[[:space:]]*172\.20\.0\.[0-9]+/, "= 127.0.0.1") }
-        { print }
-    ' "$SMS_ROUTING_SRC" > "$TEMP_CONFIG/osmocom/sms-routing.conf"
-    echo -e "  ${GREEN}✓${NC} sms-routing.conf : ${CYAN}${ISO_N_MS}${NC} MS routes (natif 127.0.0.1)"
-else
-    echo -e "  ${YELLOW}⚠ table de routage SMS non generee — fallback ${ISO_N_MS}>5 MS incomplet${NC}"
-fi
+# Ce fallback ne convient pas a l'ISO sur deux points :
+#   - [operators] pointe sur op_backbone_ip (172.20.0.11), une adresse du plan
+#     docker ; l'ISO tourne en natif, tout boucle sur HOST_IP.
+#   - [routes] enumere des prefixes fixes (i000, i0000, i001..i005) qui ne
+#     suivent pas ISO_N_MS : au-dela du 5e MS, « No route for destination ».
+#
+# On reecrit donc la meme structure, mais avec UNE route par MS reellement
+# embarque. MSISDN = op * 10000 + ms, la formule du depot (21-abonnes-hlr.sh,
+# scripts/sms-routing-setup.sh) — pour ISO_N_MS=2 : 10001 et 10002.
+ISO_SMS_SC="1999001${ISO_OP_ID}444"
+{
+    printf '# sms-routing.conf — Fallback\n\n'
+    printf '[local]\noperator_id = %s\nsc_address  = %s\n\n' "$ISO_OP_ID" "$ISO_SMS_SC"
+    printf '[operators]\n%s = %s\n\n' "$ISO_OP_ID" "$HOST_IP"
+    printf '[routes]\n'
+    for ms in $(seq 1 "$ISO_N_MS"); do
+        printf '%s = %s\n' "$(( ISO_OP_ID * 10000 + ms ))" "$ISO_OP_ID"
+    done
+    printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
+} > "$TEMP_CONFIG/osmocom/sms-routing.conf"
+echo -e "  ${GREEN}✓${NC} sms-routing.conf : ${CYAN}${ISO_N_MS}${NC} route(s) MS, operateur ${ISO_OP_ID} = ${CYAN}${HOST_IP}${NC}"
 
 ISO_RUN_IMAGE="osmocom-run-iso-net-host"
 TMP_CID="$(docker create osmocom-run /bin/sh)"
@@ -164,7 +170,7 @@ docker cp "$TEMP_CONFIG/asterisk/." "$TMP_CID:/etc/asterisk/" 2>/dev/null || tru
 
 docker commit "$TMP_CID" "$ISO_RUN_IMAGE" >/dev/null
 docker rm -f "$TMP_CID" >/dev/null 2>&1 || true
-rm -rf "$TEMP_CONFIG" "$SMS_ROUTING_DIR"
+rm -rf "$TEMP_CONFIG"
 
 echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prête"
 
