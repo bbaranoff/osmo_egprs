@@ -102,7 +102,7 @@ rm -rf /opt/osmo_egprs
 # ═══════════════════════════════════════════════════════════════════════════════
 
 ISO_OP_ID=1        # opérateur unique de l'ISO
-ISO_N_MS=8         # doit rester aligné sur ISO_N_MS de build-iso.sh
+ISO_N_MS=2         # doit rester aligné sur ISO_N_MS de build-iso.sh
 ISO_MCC=001
 ISO_MNC=01
 HLR_VTY_PORT=4258
