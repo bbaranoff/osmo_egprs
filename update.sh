@@ -82,18 +82,16 @@ rm -rf /opt/osmo_egprs
 # L'ISO tourne en NATIF (pas de docker au runtime), mais les deux configs
 # héritées du build sont restées calibrées pour le mode docker :
 #
-#   1. feed HLR    build-iso.sh déclare ISO_N_MS=8, alors que run_modules/
-#                  21-abonnes-hlr.sh retombe sur « : "${N_MS:=1}" ». Un seul
-#                  abonné était provisionné : les MS 2 à 8 se voyaient refuser
-#                  le rattachement (« IMSI unknown in HLR ») — panne lue à tort
+#   1. feed HLR    run_modules/21-abonnes-hlr.sh retombe sur « : "${N_MS:=1}" ».
+#                  Un seul abonné était provisionné quelle que soit la valeur
+#                  d'ISO_N_MS : les MS suivants se voyaient refuser le
+#                  rattachement (« IMSI unknown in HLR ») — panne lue à tort
 #                  comme un défaut radio.
 #
-#   2. routage SMS build-iso.sh génère sms-routing.conf dans un répertoire
-#                  temporaire puis le supprime sans jamais le copier dans le
-#                  rootfs. L'ISO conservait donc le fallback docker :
-#                  opérateur 1 = 172.20.0.11 (IP inexistante en natif, le relay
-#                  n'atteignait personne) et des routes limitées à 5 MS, d'où
-#                  « No route for destination » sur les MSISDN 10006 à 10008.
+#   2. routage SMS le fallback de lib/gabarits.sh pointe [operators] sur
+#                  172.20.0.11 (plan docker, personne en natif) et énumère des
+#                  préfixes fixes (i000, i0000, i001..i005) qui ne suivent pas
+#                  N_MS, d'où « No route for destination » au-delà du 5e MS.
 #
 # Les deux blocs sont IDEMPOTENTS : rejouables à chaque boot sans effet de bord.
 # Formules communes au dépôt (scripts/sms-routing-setup.sh, 21-abonnes-hlr.sh) :
@@ -154,42 +152,25 @@ else
     echo "VTY HLR $HLR_VTY_PORT muet — provisionnement délégué à 21-abonnes-hlr au démarrage de la pile"
 fi
 
-# ── 3. routage SMS : config native (127.0.0.1) couvrant les 8 MS ─────────────
+# ── 3. routage SMS : config native (127.0.0.1), une route par MS ─────────────
 # sc_address = 1999001<op>444 et [relay] port 7890 : mêmes valeurs que
 # scripts/sms-routing-setup.sh, pour que le relay et proto-smsc-daemon
 # s'accordent. En natif il n'y a qu'un opérateur : tout boucle sur 127.0.0.1.
 SMS_ROUTING=/etc/osmocom/sms-routing.conf
 mkdir -p /etc/osmocom /var/log/osmocom
+# Strictement le meme fichier que celui grave par build-iso.sh : update.sh
+# repasse APRES le build (elle reecrit /etc/osmocom/sms-routing.conf a chaque
+# boot), donc toute divergence ici deviendrait l'etat final de l'ISO. Structure
+# du gabarit lib/gabarits.sh, avec UNE route par MS (MSISDN = op*10000 + ms) au
+# lieu des prefixes fixes i000/i0000/i001..i005 qui ne suivaient pas N_MS.
 {
-    echo "# sms-routing.conf — généré par update.sh (ISO natif, opérateur unique)"
-    echo "# Remplace le fallback docker (172.20.0.x) inatteignable sans bridge."
-    echo
-    echo "[local]"
-    echo "operator_id = $ISO_OP_ID"
-    printf 'sc_address  = 1999001%s444\n' "$ISO_OP_ID"
-    echo "hlr_vty_ip  = 127.0.0.1"
-    echo "hlr_vty_port = $HLR_VTY_PORT"
-    echo "sendmt_socket = /tmp/sendmt_socket"
-    echo "mo_log = /var/log/osmocom/mo-sms-op${ISO_OP_ID}.log"
-    echo
-    echo "[operators]"
-    echo "# ISO native : pas de backbone docker, le relay boucle sur lui-même."
-    echo "$ISO_OP_ID = 127.0.0.1"
-    echo
-    echo "[routes]"
-    echo "# Longest-prefix match : MSISDN exact d'abord, puis repli opérateur."
+    printf '# sms-routing.conf — Fallback\n\n'
+    printf '[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n' "$ISO_OP_ID" "$ISO_OP_ID"
+    printf '[operators]\n%s = %s\n\n' "$ISO_OP_ID" "127.0.0.1"
+    printf '[routes]\n'
     for ms in $(seq 1 "$ISO_N_MS"); do
-        printf '%-8s = %s   # IMSI=%s\n' "$(iso_msisdn "$ms")" "$ISO_OP_ID" "$(iso_imsi "$ms")"
+        printf '%s = %s\n' "$(iso_msisdn "$ms")" "$ISO_OP_ID"
     done
-    echo "# Replis (MSISDN hors liste) — préfixes courts de l'opérateur"
-    printf '%-8s = %s\n' "${ISO_OP_ID}000"  "$ISO_OP_ID"
-    printf '%-8s = %s\n' "${ISO_OP_ID}0000" "$ISO_OP_ID"
-    printf '%-8s = %s   # E.164 +33 6%02d...\n' "$(printf '336%02d' "$ISO_OP_ID")" "$ISO_OP_ID" "$ISO_OP_ID"
-    echo
-    echo "[relay]"
-    echo "port = 7890"
-    echo "connect_timeout = 10"
-    echo "retry_count = 3"
-    echo "retry_delay = 5"
+    printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 } > "$SMS_ROUTING"
 echo "routage SMS écrit : $SMS_ROUTING ($ISO_N_MS MS, natif 127.0.0.1)"
