@@ -238,7 +238,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build QEMU fork bbaranoff/qemu (cible arm-softmmu, machine "calypso")
 RUN cd /opt/GSM \
-    && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
+    && git clone -b main https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
     && cd /opt/GSM/qemu-src \
     && python3 -m venv /root/.venv-qemu \
     && . /root/.venv-qemu/bin/activate \
@@ -315,7 +315,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN update-alternatives --set gcc /usr/bin/gcc-9
 
-RUN git clone https://github.com/bbaranoff/osmo_egprs
+RUN git clone -b main https://github.com/bbaranoff/osmo_egprs
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
