@@ -37,7 +37,7 @@ trap cleanup EXIT
 # sur une machine Debian/Ubuntu vierge, sans étape "Install host tools" externe.
 ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git isolinux"
 if command -v apt-get &>/dev/null; then
-    echo -e "${GREEN}[0/7] Installation des paquets hôte (apt)...${NC}"
+    echo -e "${GREEN}[0/9] Installation des paquets hôte (apt)...${NC}"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq || true
     # isolinux est optionnel (isohybrid) : on n'échoue pas s'il manque.
@@ -57,7 +57,7 @@ mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 echo -e "${CYAN}${BOLD}══ osmo_egprs ISO builder (via build.sh + start.sh) ══${NC}"
 
 # ── Étape 1 : Exécuter build.sh pour préparer l'hôte et construire osmocom-nitb ──
-echo -e "${GREEN}[1/7] Exécution de build.sh...${NC}"
+echo -e "${GREEN}[1/9] Exécution de build.sh...${NC}"
 if [ -f "$DIR/build.sh" ]; then
     bash "$DIR/build.sh" $NO_CACHE
 else
@@ -90,12 +90,12 @@ load_start_lib() {
 }
 
 # ── Étape 2 : Construire l'image osmocom-run via start.sh ─────────────────────
-echo -e "${GREEN}[2/7] Construction de l'image osmocom-run via start.sh...${NC}"
+echo -e "${GREEN}[2/9] Construction de l'image osmocom-run via start.sh...${NC}"
 load_start_lib
 build_run_image
 echo -e "  ${GREEN}✓${NC} osmocom-run construite"
 
-echo -e "${GREEN}[2b/7] Préparation d'une image osmocom-run (net-host)...${NC}"
+echo -e "${GREEN}[2b/9] Préparation d'une image osmocom-run (net-host)...${NC}"
 
 ISO_N_MS=8
 ENCRYPTION="a5 0"   # A5/1 par defaut dans l'ISO (chiffrement bout-en-bout valide)
@@ -146,7 +146,7 @@ echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prête"
 # docker au runtime, pas de tar.gz de plusieurs Go embarqué.
 
 # ── Étape 4 : Bootstrap rootfs minimal ─────────────────────────────────────
-echo -e "${GREEN}[4/7] debootstrap jammy (minimal)...${NC}"
+echo -e "${GREEN}[4/9] debootstrap jammy (minimal)...${NC}"
 debootstrap --variant=minbase --include=\
 systemd,systemd-sysv,dbus,kmod,\
 ca-certificates,curl,gnupg,\
@@ -155,7 +155,7 @@ iproute2,iputils-ping,procps,less,nano \
 echo -e "  ${GREEN}✓${NC} rootfs base $(du -sh "$ROOTFS"|cut -f1)"
 
 # ── Étape 5 : Injection des binaires et libs depuis l'image osmocom-run ───
-echo -e "${GREEN}[5/7] Injection stack Osmocom...${NC}"
+echo -e "${GREEN}[5/9] Injection stack Osmocom...${NC}"
 CID=$(docker create "$ISO_RUN_IMAGE" /bin/true)
 docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
 docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
@@ -174,36 +174,53 @@ echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectés"
 # ── osmo_egprs : SOURCE à jour depuis GitHub (branche test) ──
 # La copie docker cp ci-dessus peut être périmée ; on récupère la branche test
 # du repo (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh…) dans l'ISO.
+# ── osmo_egprs : ARBRE à jour depuis GitHub (branche test), sans dépôt git ──
 EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-test}"
-echo -e "${GREEN}[5d/7] git clone osmo_egprs (branche ${EGPRS_BRANCH})...${NC}"
-if git clone --depth 1 -b "$EGPRS_BRANCH" https://github.com/bbaranoff/osmo_egprs /tmp/osmo_egprs.clone 2>&1 | tail -2; then
+EGPRS_TARBALL="https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/${EGPRS_BRANCH}"
+echo -e "${GREEN}[5d/7] Récupération osmo_egprs (branche ${EGPRS_BRANCH}, tarball)...${NC}"
+stage="$(mktemp -d)"
+if wget -qO- "$EGPRS_TARBALL" | tar -xz -C "$stage" --strip-components=1 \
+   && [ -s "$stage/start.sh" ]; then
+    find "$stage" -name '.git*' -maxdepth 2 -exec rm -rf {} + 2>/dev/null || true
     rm -rf "$ROOTFS/opt/GSM/osmo_egprs"
-    mv /tmp/osmo_egprs.clone "$ROOTFS/opt/GSM/osmo_egprs"
-    echo -e "  ${GREEN}✓${NC} osmo_egprs cloné depuis GitHub (${EGPRS_BRANCH})"
+    mkdir -p "$ROOTFS/opt/GSM"
+    cp -a "$stage" "$ROOTFS/opt/GSM/osmo_egprs"
+    echo -e "  ${GREEN}✓${NC} osmo_egprs installé (${EGPRS_BRANCH}, arbre nu, sans .git)"
 else
-    rm -rf /tmp/osmo_egprs.clone
-    echo -e "  ${YELLOW}⚠ git clone osmo_egprs échoué (réseau ?) — copie de l'image conservée${NC}"
+    echo -e "  ${YELLOW}⚠ récupération osmo_egprs échouée (réseau ?) — copie de l'image conservée${NC}"
 fi
+rm -rf "$stage"
+
 
 # ── qemu-src : checkout LOCAL (branche test, build/qemu-system-arm recompilé) ──
 # La copie docker cp ($CID:/opt/GSM) peut être périmée / sur une autre branche. On
 # écrase qemu-src par le checkout local de la VM, déjà sur 'test' avec le binaire
 # build/ à jour. On retire .git (historique QEMU = lourd, inutile à l'exécution).
-QEMU_SRC_LOCAL="${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}"
-echo -e "${GREEN}[5d/7] qemu-src depuis checkout local (${QEMU_SRC_LOCAL})...${NC}"
-if [ -x "$QEMU_SRC_LOCAL/build/qemu-system-arm" ]; then
-    qbr="$(git -C "$QEMU_SRC_LOCAL" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}/build}"
+echo -e "${GREEN}[5d/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
+if [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
+    # aucune arborescence source dans l'image
     rm -rf "$ROOTFS/opt/GSM/qemu-src"
-    cp -a "$QEMU_SRC_LOCAL" "$ROOTFS/opt/GSM/qemu-src"
-    rm -rf "$ROOTFS/opt/GSM/qemu-src/.git"
-    echo -e "  ${GREEN}✓${NC} qemu-src copié (branche ${qbr}, build/ inclus, .git retiré)"
-else
-    echo -e "  ${YELLOW}⚠ ${QEMU_SRC_LOCAL}/build/qemu-system-arm absent — copie de l'image conservée${NC}"
-fi
-echo -e "${GREEN}[5c/7] Ajustements osmocom dans le rootfs...${NC}"
-echo -e "${GREEN}[5b/7] Patch configs ISO...${NC}"
 
-echo -e "${GREEN}[5b/7] Patch configs ISO...${NC}"
+    qpfx="$(sed -n 's/^prefix=//p' "$QEMU_BUILD_LOCAL/config-host.mak" 2>/dev/null)"
+    qpfx="${qpfx:-/usr/local}"
+
+    if DESTDIR="$ROOTFS" ninja -C "$QEMU_BUILD_LOCAL" install >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} qemu installé dans ${ROOTFS}${qpfx} (ninja install, pas de sources)"
+    else
+        # repli : binaire + firmwares/keymaps strictement nécessaires
+        install -Dm755 "$QEMU_BUILD_LOCAL/qemu-system-arm" "$ROOTFS$qpfx/bin/qemu-system-arm"
+        install -d "$ROOTFS$qpfx/share/qemu"
+        cp -a "$QEMU_BUILD_LOCAL/pc-bios/." "$ROOTFS$qpfx/share/qemu/" 2>/dev/null || true
+        echo -e "  ${GREEN}✓${NC} qemu-system-arm + pc-bios copiés dans ${ROOTFS}${qpfx} (repli manuel)"
+    fi
+    strip --strip-unneeded "$ROOTFS$qpfx/bin/qemu-system-arm" 2>/dev/null || true
+else
+    echo -e "  ${YELLOW}⚠ ${QEMU_BUILD_LOCAL}/qemu-system-arm absent — qemu de l'image conservé${NC}"
+fi
+echo -e "${GREEN}[5c/9] Ajustements osmocom dans le rootfs...${NC}"
+echo -e "${GREEN}[5b/9] Patch configs ISO...${NC}"
+echo -e "${GREEN}[5b/9] Patch configs ISO...${NC}"
 
 if [ -f "$ROOTFS/etc/osmocom/osmo-sgsn.cfg" ]; then
     sed -i \
@@ -258,7 +275,7 @@ echo -e "  ${GREEN}✓${NC} user osmocom + /usr/bin + mobile.cfg prêts"
 chmod +x "$ROOTFS/etc/osmocom/run.sh"
 
 # ── Étape 6 : Injection du dashboard web ───────────────────────────────────
-echo -e "${GREEN}[6/7] Dashboard web (git clone)...${NC}"
+echo -e "${GREEN}[6/9] Dashboard web (git clone)...${NC}"
 WEB="$ROOTFS/opt/osmo-egprs-web"
 WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
 WEB_BRANCH="${OSMO_WEB_BRANCH:-test}"
@@ -349,7 +366,7 @@ PYEOF
 fi
 
 # ── Étape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
-echo -e "${GREEN}[7/7] Scripts projet et adaptation ISO...${NC}"
+echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
 mkdir -p "$P"/{scripts,configs,checks,helpers}
 for f in start.sh start-direct.sh build.sh network/loopback.sh tools/vty-menu.sh tools/vty-connect.exp \
@@ -386,7 +403,7 @@ fi
 # en natif (start-direct.sh) : pas d'image Docker à charger, pas de ce service.
 
 # ── Étape 9 : Configuration chroot (paquets) ───────────────────────────────
-echo -e "${GREEN}[8/7] Configuration chroot...${NC}"
+echo -e "${GREEN}[8/9] Configuration chroot...${NC}"
 mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
 cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
@@ -472,7 +489,7 @@ apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 # logging libosmocore), on copie depuis le conteneur la clôture .so EXACTE de
 # tous les binaires osmo + calypso-ipc-device, en écrasant les libs apt. On
 # exclut la famille glibc/loader (identique en jammy, ne pas clobber ld.so).
-echo -e "${GREEN}[8b/7] Clôture de dépendances COMPLÈTE depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (toute l'install)...${NC}"
+echo -e "${GREEN}[8b/9] Clôture de dépendances COMPLÈTE depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (toute l'install)...${NC}"
 # On ldd TOUS les ELF (executables + toutes les .so) de l'install custom :
 # /usr/local/bin (osmo), /opt/GSM (qemu, ipc-device, gr-gsm), /root/.env (venv
 # python : bindings gnuradio/gr-gsm + leurs deps boost/log4cpp/volk/fftw...).
@@ -822,7 +839,7 @@ umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 echo -e "  ${GREEN}✓${NC} config terminée"
 
 # ── Création du squashfs et de l'ISO ───────────────────────────────────────
-echo -e "${GREEN}[9/7] Squashfs et ISO...${NC}"
+echo -e "${GREEN}[9/9] Squashfs et ISO...${NC}"
 mkdir -p "$ISOROOT/live" "$ISOROOT/boot/grub"
 
 VMLINUZ=$(ls "$ROOTFS"/boot/vmlinuz-*|sort -V|tail -1)
