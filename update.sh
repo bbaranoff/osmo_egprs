@@ -1,7 +1,5 @@
 # 1) tronquer juste après la ligne Disclaimer (gardée)
 awk '1; /Disclaimer/{exit}' /etc/profile.d/01-keyboard-setup.sh > /tmp/kb.new
-apt update && apt install -y git
-cd /opt/GSM/osmo_egprs/ && git pull
 # 2) appender l'animation — heredoc QUOTÉ => zéro échappement
 cat >> /tmp/kb.new <<'ANIM'
 
@@ -26,6 +24,38 @@ cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 
 
 apt update && apt install git tcpdump binutils-arm-none-eabi -y
+
+# ── Rafraîchir l'arbre osmo_egprs (branche main) ─────────────────────────────
+# Remplace l'ancien « cd /opt/GSM/osmo_egprs && git pull » qui ne pouvait PAS
+# fonctionner sur une ISO : build-iso.sh y installe l'arbre NU, sans .git
+# (« find … -name '.git*' … -exec rm -rf »). Le pull échouait silencieusement,
+# donc aucun correctif du dépôt (run_modules/, scripts/…) n'atteignait jamais
+# une ISO déjà gravée — update.sh ne rattrapait que ce qu'elle réécrit elle-même.
+#
+# Doit rester AVANT l'écriture de coeur.env plus bas : ce bloc peut remplacer
+# l'arbre entier, ce qui effacerait un coeur.env posé trop tôt.
+EGPRS_DIR=/opt/GSM/osmo_egprs
+if [ -d "$EGPRS_DIR/.git" ]; then
+    git -C "$EGPRS_DIR" fetch origin main && \
+    git -C "$EGPRS_DIR" reset --hard FETCH_HEAD && \
+    echo "osmo_egprs : arbre git réaligné sur origin/main"
+else
+    # Arbre nu de l'ISO : pas de dépôt, on retélécharge la branche main.
+    egprs_stage="$(mktemp -d)"
+    if curl -fsSL "https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/main" \
+         | tar -xz -C "$egprs_stage" --strip-components=1 && [ -s "$egprs_stage/start.sh" ]; then
+        # On ne détruit l'arbre en place qu'une fois le tarball vérifié complet :
+        # un réseau coupé ne doit pas laisser l'ISO sans scripts.
+        rm -rf "$EGPRS_DIR"
+        mkdir -p /opt/GSM
+        cp -a "$egprs_stage" "$EGPRS_DIR"
+        find "$EGPRS_DIR" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+        echo "osmo_egprs : arbre nu rafraîchi depuis main (tarball)"
+    else
+        echo "osmo_egprs : récupération impossible (réseau ?) — arbre existant conservé"
+    fi
+    rm -rf "$egprs_stage"
+fi
 rm -r /opt/osmo-egprs-web
 git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
 cd /opt/osmo-egprs-web && git checkout main
@@ -112,7 +142,10 @@ if timeout 2 bash -c "exec 9<>/dev/tcp/127.0.0.1/$HLR_VTY_PORT" 2>/dev/null; the
             echo "subscriber imsi $imsi update msisdn $(iso_msisdn "$ms")"
             echo "subscriber imsi $imsi update aud2g comp128v1 ki $(iso_ki "$ms")"
         done
-        echo end
+        # « exit », pas « end » : au nœud enable end n'existe pas (le VTY répond
+        # « % Unknown command. ») et surtout la session resterait OUVERTE —
+        # telnet ne rendrait alors la main qu'au timeout.
+        echo exit
         sleep 1
     } | timeout 15 telnet 127.0.0.1 "$HLR_VTY_PORT" >/dev/null 2>&1 || true
     echo "HLR alimenté : $ISO_N_MS abonnés (opérateur $ISO_OP_ID)"
