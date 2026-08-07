@@ -171,11 +171,11 @@ done
 docker rm "$CID" &>/dev/null
 echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectés"
 
-# ── osmo_egprs : SOURCE à jour depuis GitHub (branche test) ──
-# La copie docker cp ci-dessus peut être périmée ; on récupère la branche test
+# ── osmo_egprs : SOURCE à jour depuis GitHub (branche main) ──
+# La copie docker cp ci-dessus peut être périmée ; on récupère la branche main
 # du repo (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh…) dans l'ISO.
-# ── osmo_egprs : ARBRE à jour depuis GitHub (branche test), sans dépôt git ──
-EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-test}"
+# ── osmo_egprs : ARBRE à jour depuis GitHub (branche main), sans dépôt git ──
+EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-main}"
 EGPRS_TARBALL="https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/${EGPRS_BRANCH}"
 echo -e "${GREEN}[5d/7] Récupération osmo_egprs (branche ${EGPRS_BRANCH}, tarball)...${NC}"
 stage="$(mktemp -d)"
@@ -192,9 +192,9 @@ fi
 rm -rf "$stage"
 
 
-# ── qemu-src : checkout LOCAL (branche test, build/qemu-system-arm recompilé) ──
+# ── qemu-src : checkout LOCAL (branche main, build/qemu-system-arm recompilé) ──
 # La copie docker cp ($CID:/opt/GSM) peut être périmée / sur une autre branche. On
-# écrase qemu-src par le checkout local de la VM, déjà sur 'test' avec le binaire
+# écrase qemu-src par le checkout local de la VM, déjà sur 'main' avec le binaire
 # build/ à jour. On retire .git (historique QEMU = lourd, inutile à l'exécution).
 QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}/build}"
 echo -e "${GREEN}[5d/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
