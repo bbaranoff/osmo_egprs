@@ -76,11 +76,31 @@ mod_abonnes_hlr_start() {
         cmds+=("subscriber imsi $imsi update msisdn $msisdn")
         cmds+=("subscriber imsi $imsi update aud2g comp128v1 ki $(_abo_ki "$m")")
     done
-    cmds+=("end")
+    # « exit » et non « end » : au nœud enable, end n'existe pas — le VTY
+    # répondait « % Unknown command. » et surtout laissait la session OUVERTE.
+    # telnet, contrairement à socat, ne rend pas la main sur EOF de stdin : il
+    # restait pendu jusqu'au timeout, qui le tuait avec un code non nul. exit
+    # ferme la session côté HLR, le client sort proprement.
+    cmds+=("exit")
     mod_say "provisionnement de $N_MS abonné(s), opérateur $OPERATOR_ID, PLMN $(_abo_mcc)-$(_abo_mnc)"
-    core_vty_ask "$HLR_VTY_PORT" "${cmds[@]}" || {
+
+    # On juge le dialogue sur ce qu'il a RENDU, pas sur le code de sortie du
+    # transport : selon la variante (socat, telnet netkit, busybox) celui-ci
+    # vaut 0, 1 ou 124 pour un même échange réussi. C'est ce qui faisait
+    # échouer l'étape alors que les abonnés étaient bel et bien créés.
+    # Doctrine de 31-hlr-feed : « écrire n'est pas réussir » — le verdict
+    # appartient à la barrière mod_abonnes_hlr_wait, qui RELIT l'abonné.
+    local out
+    out="$(core_vty_ask "$HLR_VTY_PORT" "${cmds[@]}" 2>/dev/null)" || true
+    printf '%s\n' "$out"        # le dialogue reste tracé dans le journal
+    if [ -z "${out//[[:space:]]/}" ]; then
         mod_hint "vérifiez le VTY : socat STDIO TCP:127.0.0.1:$HLR_VTY_PORT,crlf"
-        mod_fail "le dialogue VTY avec le HLR n'a rien retourné"; return $MOD_RC_FAIL; }
+        mod_fail "le dialogue VTY avec le HLR n'a rien retourné"; return $MOD_RC_FAIL
+    fi
+    case "$out" in
+        *"% Unknown command"*|*"% Command incomplete"*)
+            mod_hint "commande refusée par le VTY — voir le journal ci-dessus" ;;
+    esac
     mod_ok
 }
 
