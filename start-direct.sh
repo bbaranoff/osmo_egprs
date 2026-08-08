@@ -26,7 +26,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
-LIST=0
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -57,7 +56,11 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --list)        ACTION=list ;;
         --dry-run)     DRY=1 ;;
-        --profile)     PROFILE="${2:-}"; shift ;;
+        --profile)     if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
+                           printf '%s\n\n' "--profile attend un nom de profil" >&2
+                           usage >&2; exit 2
+                       fi
+                       PROFILE="$2"; shift ;;
         --stop)        ACTION=stop ;;
         --status)      ACTION=status ;;
         --force)       FORCE=1 ;;
@@ -98,7 +101,7 @@ say_end() { # $1=tag $2=couleur $3=libellé $4=détail
 banner() {
     echo -e "${C_CYAN}"
     echo "╔══════════════════════════════════════════════════════╗"
-    echo "║   Calypso GSM — bootstrap → run.sh (natif, no-docker) ║"
+    echo "║   Calypso GSM — bootstrap → run.sh                    ║"
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${C_Z}"
 }
@@ -140,9 +143,13 @@ fi
 mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb 2>/dev/null || true
 # --- 2. détection des chemins / binaires --------------------------------------
 say_begin "Résolution de run.sh"
-# Forcer explicitement le chemin demandé
-RUN_SH="/opt/GSM/qemu-src/run.sh"
-# Vérifier que le fichier existe et est exécutable
+# [2026-08-08] Le chemin etait cable en dur ICI, ce qui rendait MORTE toute la
+# resolution de OQC_ROOT faite plus haut (trois candidats testes pour rien) et
+# contredisait le contrat annonce en tete de fichier (« la ligne de commande
+# gagne toujours ») : RUN_SH etait la seule variable non surchargeable.
+# Ordre : RUN_SH explicite > OQC_ROOT resolu > chemin historique.
+: "${RUN_SH:=${OQC_ROOT:+$OQC_ROOT/run.sh}}"
+: "${RUN_SH:=/opt/GSM/qemu-src/run.sh}"
 if [ ! -x "$RUN_SH" ]; then
     say_end "FAIL" "$C_KO" "Résolution de run.sh" "$RUN_SH introuvable ou non exécutable"
     printf '       %s→ Vérifiez que /opt/GSM/qemu-src/run.sh existe et est exécutable%s\n' "$C_DIM" "$C_Z"
@@ -182,7 +189,9 @@ _check() {
 }
 # Variables optionnelles selon le profil ; on ne bloque que si présentes et cassées
 for v in QEMU_BIN FIRMWARE_ELF DSP_PROM0 OSMOCON; do
-    [ -n "${!v:-}" ] && _check "$v" || true
+    # `[ -n x ] && _check || true` avalait le verdict : _check pouvait poser
+    # path_ok=0 sans que la boucle ne le laisse remonter. Forme explicite.
+    if [ -n "${!v:-}" ]; then _check "$v"; fi
 done
 if [ $path_ok -eq 1 ]; then
     say_end " OK " "$C_OK" "Validation des chemins"
@@ -207,7 +216,23 @@ do
 done
 generate_mobile_cfg() {
     local dest="$1" vty_port="$2" l2sock="$3" sapsock="$4" arfcn="$5" imsi="$6" ki="$7"
-    if [ -n "$MS_TEMPLATE" ]; then
+    # [2026-08-08] Peripheriques ALSA PAR MOBILE. Le template porte
+    # gsm_out/gsm_in pour tout le monde ; laisser ca remettrait les deux
+    # mobiles sur le meme sink et la meme source, c'est-a-dire la boucle
+    # audio qu'on vient d'ouvrir (cf /etc/asound.conf).
+    local aout="${8:-gsm_out}" ain="${9:-gsm_in}"
+    # [2026-08-08] GARDE-FOU : la liste de templates contient $BB_DIR/mobile.cfg,
+    # qui est aussi une DESTINATION. Si c'est lui qui est retenu, `sed "$tpl" >
+    # "$dest"` avec tpl == dest fait tronquer le fichier par le shell AVANT que
+    # sed ne le lise : on produit un mobile.cfg VIDE et le mobile ne demarre plus.
+    # On bascule alors sur le template de secours plutot que de se detruire.
+    local tpl="$MS_TEMPLATE"
+    if [ -n "$tpl" ] && [ "$tpl" -ef "$dest" ] 2>/dev/null; then
+        printf '\n       %sMS_TEMPLATE == destination (%s) : template de secours%s\n' \
+            "$C_DIM" "$dest" "$C_Z"
+        tpl=""
+    fi
+    if [ -n "$tpl" ]; then
         sed \
             -e "s|bind 127.0.0.1 424[0-9]|bind 127.0.0.1 ${vty_port}|" \
             -e "s|layer2-socket /tmp/osmocom_l2[_0-9]*|layer2-socket ${l2sock}|" \
@@ -215,7 +240,9 @@ generate_mobile_cfg() {
             -e "s|stick [0-9]*|stick ${arfcn}|" \
             -e "s|imsi [0-9]*|imsi ${imsi}|" \
             -e "s|ki comp128 [0-9a-f ]*|ki comp128 ${ki}|" \
-            "$MS_TEMPLATE" > "$dest"
+            -e "s|alsa-output-dev .*|alsa-output-dev ${aout}|" \
+            -e "s|alsa-input-dev .*|alsa-input-dev ${ain}|" \
+            "$tpl" > "$dest"
     else
         # Template minimal de secours
         cat > "$dest" <<EOF
@@ -243,8 +270,17 @@ ms 1
 EOF
     fi
 }
+# ⚠️ [2026-08-08] CE FICHIER N'EST PEUT-ETRE PAS CELUI QUE LE RUN UTILISE.
+# Constate sur le deploiement conteneurise : le mobile Calypso tourne avec
+#     mobile -c /root/.osmocom/bb/mobile_group1.cfg
+# alors qu'on genere ici mobile.cfg. Les deux sont des MONTAGES BIND fournis par
+# docker (compose), donc il y a DEUX sources de verite, et elles divergent :
+# mobile.cfg porte IMSI 001010000000001, mobile_group1.cfg 001010001000001.
+# Tant que le lanceur du conteneur designe mobile_group1.cfg, ce qu'on ecrit ici
+# est inerte. Verifier avant de croire un reglage pose ici :
+#     pgrep -a mobile
 say_begin "Génération mobile MS#1"
-MS1_CFG="$BB_DIR/mobile.cfg"
+MS1_CFG="${MOBILE_CFG_MS1_PATH:-$BB_DIR/mobile.cfg}"
 generate_mobile_cfg "$MS1_CFG" \
     4247 \
     /tmp/osmocom_l2 \
@@ -261,7 +297,8 @@ generate_mobile_cfg "$MS2_CFG" \
     /tmp/ms2_sap \
     516 \
     "001010001000002" \
-    "00 11 22 33 44 55 66 77 88 99 aa bb cc dd 02 01"
+    "00 11 22 33 44 55 66 77 88 99 aa bb cc dd 02 01" \
+    gsm_out gsm_in
 say_end " OK " "$C_OK" "Génération mobile MS#2 (faketrx)" "$MS2_CFG"
 # Export pour que les modules run.sh / hybrid puissent les retrouver
 export MOBILE_CFG_MS1="$MS1_CFG"
@@ -293,6 +330,13 @@ RUN_ARGS=()
 [ "$FORCE" -eq 1 ]   && RUN_ARGS+=(--force)
 [ "$VERBOSE" -eq 1 ] && RUN_ARGS+=(--verbose)
 RUN_ARGS+=(--profile "$CALYPSO_PROFILE")
+# [2026-08-08] --restart etait ajoute DIRECTEMENT sur la ligne exec, hors de
+# RUN_ARGS. Consequence : `--dry-run` affichait une commande SANS --restart puis
+# le vrai lancement en ajoutait un. Une simulation qui ne decrit pas ce qui va
+# se passer est pire qu'absente. Il entre donc dans RUN_ARGS, ou il est visible.
+# CALYPSO_NO_RESTART=1 pour demarrer sans reinitialiser (l'ancien comportement
+# n'etait pas atteignable du tout).
+[ "${CALYPSO_NO_RESTART:-0}" = "1" ] || RUN_ARGS+=(--restart)
 case "$ACTION" in
     list)
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${RUN_ARGS[@]}"
@@ -320,4 +364,4 @@ if [ $DRY -eq 1 ]; then
 fi
 say_end " OK " "$C_OK" "Transmission à run.sh" "profil=$CALYPSO_PROFILE"
 # Hand-off total : ce processus devient run.sh
-exec bash /opt/GSM/qemu-src/run.sh "${RUN_ARGS[@]}" --restart
+exec bash "$RUN_SH" "${RUN_ARGS[@]}"

@@ -14,6 +14,10 @@ set -u
 TAG="[pulse-gsm]"
 TIMEOUT="${PULSE_TIMEOUT:-30}"
 SINK_NAME="gsm_audio"
+# [2026-08-08] Sink silencieux servant de MICRO aux mobiles. Sans lui, asound.conf
+# fait retomber la capture sur la source par defaut (= gsm_audio.monitor), donc
+# sur la sortie que les mobiles viennent d'ecrire : boucle audio fermee.
+MIC_NAME="gsm_mic"
 SINK_RATE=8000
 SINK_CHANNELS=1
 SINK_FORMAT="s16le"
@@ -59,6 +63,17 @@ else
         err "Échec création sink ${SINK_NAME}"
         exit 1
     fi
+fi
+
+# ── 2bis. Sink silencieux "gsm_mic" (micro des mobiles, cf. asound.conf) ─────
+if pactl list short sinks 2>/dev/null | grep -q "$MIC_NAME"; then
+    log "Sink ${MIC_NAME} déjà présent"
+else
+    pactl load-module module-null-sink sink_name="$MIC_NAME" \
+        format="$SINK_FORMAT" rate="$SINK_RATE" channels="$SINK_CHANNELS" \
+        sink_properties=device.description=GSM_Mic >/dev/null \
+        && log "Sink ${MIC_NAME} créé (micro silencieux)" \
+        || err "Échec création sink ${MIC_NAME}"
 fi
 
 # ── 3. Vérification monitor ──────────────────────────────────────────────────
