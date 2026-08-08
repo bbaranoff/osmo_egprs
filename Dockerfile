@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgsm1-dev libgsm1 \
     iptables iproute2 asterisk ffmpeg \
     # Sync build-iso : psmisc (pkill/killall, cleanup) + pulseaudio (chaîne audio gapk/parec)
-    psmisc pulseaudio pulseaudio-utils
+    psmisc pulseaudio pulseaudio-utils binutils-arm-none-eabi
 
 SHELL ["/bin/bash", "-c"]
 COPY configs/*conf /etc/asterisk/
