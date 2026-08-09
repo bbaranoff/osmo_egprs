@@ -114,18 +114,8 @@ RUN git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-ipc-ts-frame-align.patch \
     && make install \
     && ldconfig
 
-# ── Patch gapk : sonde sur la sortie ALSA (GAPK_ALSA_PROBE) ──────────────────
-# Diagnostic pur, inerte tant que GAPK_ALSA_PROBE != 1. Tranche une question que
-# rien d'autre ne permet de trancher : quand l'ecouteur du MS est muet, le PCM
-# remis a snd_pcm_writei est-il deja nul (defaut en amont, dans la chaine gapk)
-# ou non nul (defaut en aval, ALSA/PulseAudio) ? osmo_gapk_pq_execute ne
-# journalise rien ici, car il ne se plaint que d'un retour negatif et
-# pq_cb_alsa_output rend « succes » meme pour une ecriture vide.
-# Patch maintenu dans patches/ (regenere si pq_alsa.c change).
-COPY patches/gapk-pq-alsa-output-probe.patch /tmp/gapk-pq-alsa-output-probe.patch
 RUN cd ${ROOT} && \
     git clone https://gitea.osmocom.org/osmocom/gapk osmo-gapk && \
-    git -C ${ROOT}/osmo-gapk apply /tmp/gapk-pq-alsa-output-probe.patch && \
     cd osmo-gapk && \
     autoreconf -fi && \
     ./configure --enable-alsa && \

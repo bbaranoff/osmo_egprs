@@ -1,5 +1,5 @@
 ; =============================================================================
-; extensions.conf — Asterisk dialplan — Opérateur 1
+; extensions.conf — Asterisk dialplan — Opérateur __OPERATOR_ID__
 ;
 ; ┌─────────────────────────────────────────────────────────────────────────┐
 ; │  PLAN DE NUMÉROTATION                                                   │
@@ -39,7 +39,7 @@ clearglobalvars=no
 
 [globals]
 MSC_LOCAL=127.0.0.1
-OP_PREFIX=1
+OP_PREFIX=__OPERATOR_ID__
 ; ── Monitoring : enregistrement horodaté de TOUS les appels (yes/no) ──
 CALL_RECORDING=yes
 RECORDINGS_DIR=/var/spool/asterisk/monitor
@@ -106,8 +106,8 @@ exten => 200,1,NoOp(=== SIP: → Linphone B - CallerID: ${CALLERID(all)} ===)
  same => n,Hangup()
 
 ; ── Softphone → GSM local ────────────────────────────────────────────────────
-; Numéros opérateur local : 1XXXX
-exten => _1XXXX,1,NoOp(=== SIP -> GSM local (Op1): ${EXTEN} - CallerID: ${CALLERID(all)} ===)
+; Numéros opérateur local : __OPERATOR_ID__XXXX
+exten => ___OPERATOR_ID__XXXX,1,NoOp(=== SIP -> GSM local (Op__OPERATOR_ID__): ${EXTEN} - CallerID: ${CALLERID(all)} ===)
  same => n,Set(CALLERID(all)=<${CALLERID(num)}>)
  same => n,Gosub(sub-record,s,1(${EXTEN}))
  same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT)
@@ -121,17 +121,6 @@ exten => _9.,1,NoOp(=== SIP -> INTER-OP: ${EXTEN:1} - CallerID: ${CALLERID(all)}
  same => n,Goto(interop_out,${EXTEN:1},1)
 
 ; ── Catch-all : essayer le MSC local ────────────────────────────────────────
-;
-; ── Sortant vers Zadarma : 00 + numéro international ────────────────────────
-; Plus spécifique que le catch-all _X. ci-dessous, donc prioritaire.
-; Le 00 est retiré et remplacé par le format E.164 attendu par Zadarma.
-exten => _00.,1,NoOp(=== SIP -> ZADARMA: +${EXTEN:2} - CallerID: ${CALLERID(all)} ===)
- same => n,Gosub(sub-record,s,1(zadarma_${EXTEN:2}))
- same => n,Dial(PJSIP/${EXTEN:2}@zadarma,60,rT)
- same => n,NoOp(=== ZADARMA OUT: échec ${DIALSTATUS} ===)
- same => n,Congestion()
- same => n,Hangup()
-
 exten => _X.,1,NoOp(=== SIP -> GSM fallback: ${EXTEN} - CallerID: ${CALLERID(all)} ===)
  same => n,Gosub(sub-record,s,1(${EXTEN}))
  same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT)
@@ -184,8 +173,8 @@ exten => 200,1,NoOp(=== GSM -> Linphone B - CallerID: ${CALLERID(all)} ===)
  same => n,Hangup()
 
 ; ── MS → MS local (même opérateur) ───────────────────────────────────────────
-; Pattern : 1 suivi de 4 chiffres (ex: 10001 pour Op1)
-exten => _1XXXX,1,NoOp(=== GSM -> GSM local (Op1): ${EXTEN} - CallerID: ${CALLERID(all)} ===)
+; Pattern : __OPERATOR_ID__ suivi de 4 chiffres (ex: 10001 pour Op1)
+exten => ___OPERATOR_ID__XXXX,1,NoOp(=== GSM -> GSM local (Op__OPERATOR_ID__): ${EXTEN} - CallerID: ${CALLERID(all)} ===)
  same => n,Set(CALLERID(all)=<${CALLERID(num)}>)
  same => n,Gosub(sub-record,s,1(${EXTEN}))
  same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT)
@@ -196,42 +185,8 @@ exten => _1XXXX,1,NoOp(=== GSM -> GSM local (Op1): ${EXTEN} - CallerID: ${CALLER
 ; Tout ce qui n'est pas un numéro local ou un service fixe arrive ici.
 ; On tente le routage inter-op via [interop_out].
 ; Si le numéro commence par notre propre préfixe → invalide (évite boucle).
-;
-; ── Sortant vers Zadarma : 00 + numéro international ────────────────────────
-; Plus spécifique que le catch-all _X. ci-dessous, donc prioritaire.
-; Le 00 est retiré et remplacé par le format E.164 attendu par Zadarma.
-exten => _00.,1,NoOp(=== GSM -> ZADARMA: +${EXTEN:2} - CallerID: ${CALLERID(all)} ===)
- same => n,Gosub(sub-record,s,1(zadarma_${EXTEN:2}))
- same => n,Dial(PJSIP/${EXTEN:2}@zadarma,60,rT)
- same => n,NoOp(=== ZADARMA OUT: échec ${DIALSTATUS} ===)
- same => n,Congestion()
- same => n,Hangup()
-
-; ── E.164 avec « + » : ce que le MSC présente RÉELLEMENT ─────────────────────
-; [2026-08-09] MESURE, pas supposition : composer 0033656678074 depuis le MS
-; faisait arriver ici « +33656678074 ». osmo-msc normalise le 00 international
-; en E.164 et pose le « + ». Or AUCUN motif de ce contexte ne commençait par
-; « + » : ni _00. (le préfixe a disparu), ni le catch-all _X. (X = un CHIFFRE,
-; pas « + »). Résultat mesuré, journal Asterisk :
-;   res_pjsip_session.c: Call to extension '+33656678074' rejected because
-;   extension not found in context 'gsm_in'
-; Et côté MS ça se voit comme un raccrochage qui « ne marche pas » : l'appel
-; n'existant pas côté réseau, il n'y a ni CALL PROCEEDING ni RELEASE COMPLETE,
-; donc le mobile attend l'expiration de T308 (30 s) avant de libérer seul.
-; Placé APRÈS _00. et AVANT _X. — un motif littéral « + » n'entre en conflit
-; avec aucun des deux, ils ne peuvent pas matcher la même chaîne.
-; ⚠️ Ceci ouvre la route ; il reste que le tronc n'est pas configuré
-; (ZADARMA_LOGIN_A_REMPLIR -> 401 à chaque enregistrement) : sans identifiants
-; valides dans pjsip.conf, l'appel échouera plus loin, en Congestion().
-exten => _+X.,1,NoOp(=== GSM -> ZADARMA (E.164): ${EXTEN} - CallerID: ${CALLERID(all)} ===)
- same => n,Gosub(sub-record,s,1(zadarma_${EXTEN:1}))
- same => n,Dial(PJSIP/${EXTEN:1}@zadarma,60,rT)
- same => n,NoOp(=== ZADARMA OUT (E.164): échec ${DIALSTATUS} ===)
- same => n,Congestion()
- same => n,Hangup()
-
 exten => _X.,1,NoOp(=== GSM -> routage inter-op: ${EXTEN} - CallerID: ${CALLERID(all)} ===)
- same => n,GotoIf($["${EXTEN:0:1}" = "1"]?local_fallback)
+ same => n,GotoIf($["${EXTEN:0:1}" = "__OPERATOR_ID__"]?local_fallback)
  same => n,Gosub(sub-record,s,1(${EXTEN}))
  same => n,Goto(interop_out,${EXTEN},1)
  same => n(local_fallback),NoOp(=== Numéro local non trouvé: ${EXTEN} ===)
@@ -244,14 +199,14 @@ exten => _X.,1,NoOp(=== GSM -> routage inter-op: ${EXTEN} - CallerID: ${CALLERID
 [interop_in]
 
 ; MS distant → MS local
-exten => _1XXXX,1,NoOp(=== INTER-OP -> GSM local: ${EXTEN} - CallerID distant: ${CALLERID(all)} ===)
+exten => ___OPERATOR_ID__XXXX,1,NoOp(=== INTER-OP -> GSM local: ${EXTEN} - CallerID distant: ${CALLERID(all)} ===)
  same => n,Set(CALLERID(all)=<${CALLERID(num)}>)
  same => n,Gosub(sub-record,s,1(${EXTEN}))
  same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT)
  same => n,Congestion()
  same => n,Hangup()
 
-exten => _1XXXXX,1,NoOp(=== INTER-OP -> GSM local: ${EXTEN} - CallerID distant: ${CALLERID(all)} ===)
+exten => ___OPERATOR_ID__XXXXX,1,NoOp(=== INTER-OP -> GSM local: ${EXTEN} - CallerID distant: ${CALLERID(all)} ===)
  same => n,Set(CALLERID(all)=<${CALLERID(num)}>)
  same => n,Gosub(sub-record,s,1(${EXTEN}))
  same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT)
@@ -278,7 +233,7 @@ exten => _X.,1,NoOp(=== INTER-OP -> numéro inconnu: ${EXTEN} - CallerID distant
 ; [interop_out] — Routage sortant vers les opérateurs distants
 ;
 ; Ce contexte est GÉNÉRÉ et AJOUTÉ en fin de fichier par start.sh.
-; Il contient une extension _NXXXX par opérateur distant (N ≠ 1)
+; Il contient une extension _NXXXX par opérateur distant (N ≠ __OPERATOR_ID__)
 ; qui route vers interop_trunk_opN via PJSIP.
 ;
 ; Exemple pour Op1 avec 3 opérateurs :
@@ -286,23 +241,3 @@ exten => _X.,1,NoOp(=== INTER-OP -> numéro inconnu: ${EXTEN} - CallerID distant
 ;   exten => _3XXXX → interop_trunk_op3
 ;   exten => _X.    → Congestion
 ; =============================================================================
-;
-; =============================================================================
-; ZADARMA — entrant depuis l'opérateur externe
-;
-; Zadarma présente l'appel sur votre login SIP ou sur un de vos DID. On route
-; tout vers le mobile GSM par défaut ; adaptez DEST_ZADARMA_IN si vous préférez
-; sonner un softphone (100 / 200) ou un SVI.
-; =============================================================================
-[zadarma_in]
-exten => _X.,1,NoOp(=== ZADARMA IN: appelé=${EXTEN} - CallerID: ${CALLERID(all)} ===)
- same => n,Set(CALLERID(num)=${CALLERID(num)})
- same => n,Gosub(sub-record,s,1(zadarma_${EXTEN}))
- same => n,Dial(PJSIP/${DEST_ZADARMA_IN}@gsm_msc,30,rT)
- same => n,NoOp(=== ZADARMA IN: échec ${DIALSTATUS} ===)
- same => n,Hangup()
-[interop_out]
-
-exten => _X.,1,NoOp(=== INTEROP OUT: inconnu ${EXTEN} ===)
- same => n,Congestion()
- same => n,Hangup()
