@@ -60,13 +60,7 @@ exten => s,1,GotoIf($["${CALL_RECORDING}" != "yes"]?skip)
  same => n,Set(JITTERBUFFER(adaptive)=default)
  same => n,Set(REC_TS=${STRFTIME(${EPOCH},,%Y%m%d_%H%M%S)})
  same => n,Set(REC_NAME=${FILTER(A-Za-z0-9_-,${REC_TS}_op${OP_PREFIX}_${CALLERID(num)}_to_${ARG1}_${UNIQUEID})})
- ; [2026-08-11] r()/t() : le .wav mixe les DEUX sens et ne permet donc pas
- ; d'attribuer une degradation au montant ou au descendant. Sur le canal
- ; appelant (le MS) :  r() = flux LU = MONTANT ;  t() = flux ECRIT = DESCENDANT.
- ; ⚠️ PATCHER ICI, PAS DANS /etc/asterisk : /etc/asterisk/extensions.conf est
- ; une COPIE regeneree au demarrage depuis ce fichier. La modification faite
- ; le 10/08 dans la copie a disparu a la premiere relance (constate le 11/08).
- same => n,MixMonitor(${RECORDINGS_DIR}/${REC_NAME}.wav,br(${RECORDINGS_DIR}/${REC_NAME}-ul.wav)t(${RECORDINGS_DIR}/${REC_NAME}-dl.wav))
+ same => n,MixMonitor(${RECORDINGS_DIR}/${REC_NAME}.wav,b)
  same => n,NoOp(=== REC → ${RECORDINGS_DIR}/${REC_NAME}.wav ===)
  same => n(skip),Return()
 
