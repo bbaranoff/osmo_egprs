@@ -150,6 +150,7 @@ RUN cd /opt/osmo-egprs-web && git pull
 RUN mkdir -p /opt/GSM/osmocom-bb/src/target/firmware/board/
 RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.elf /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.elf
 RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.bin /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.bin
+RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.map /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.map
 
 RUN . ~/.env/bin/activate && pip install matplotlib
 
