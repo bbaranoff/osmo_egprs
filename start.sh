@@ -3,6 +3,28 @@
 #
 # Modes : net-host (1 opérateur, SDR physique) | bridge (N opérateurs SS7 inter-op)
 set -eu
+
+# ── Ce script est le lanceur de l'HÔTE. Refus net s'il tourne DANS le conteneur ──
+# [2026-08-12] start.sh pilote docker (build, réseaux, `docker run`, volumes) ;
+# start-direct.sh, lui, prépare l'environnement Calypso et lance run.sh À
+# L'INTÉRIEUR. Les confondre ne donne pas une erreur lisible : `docker` n'existe
+# pas dans l'image, donc on part sur une cascade de « command not found » après
+# avoir déjà créé des fichiers et touché des configs. Mieux vaut s'arrêter avant
+# d'avoir rien fait, et nommer le script à utiliser.
+#
+# Discriminant vérifié dans LES DEUX SENS le 12/08 : `/.dockerenv` et
+# `/etc/docker-entrypoint-cmd` (posé par scripts/entrypoint.sh) sont présents
+# dans le conteneur et absents sur l'hôte. On exige les DEUX : `/.dockerenv`
+# seul serait vrai dans n'importe quel conteneur, y compris un où ce script
+# aurait légitimement sa place.
+if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then
+    printf '\033[1;31mVous êtes dans le docker ! Utilisez start-direct.sh\033[0m\n' >&2
+    printf '\n  \033[0;36m/opt/GSM/osmo_egprs/start-direct.sh\033[0m   (ou ./start-direct.sh depuis le dépôt)\n' >&2
+    printf '\n  start.sh est le lanceur de l'"'"'HÔTE : il construit l'"'"'image, crée les\n' >&2
+    printf '  réseaux et fait le « docker run ». Rien de tout ça n'"'"'a de sens ici.\n' >&2
+    exit 1
+fi
+
 DEBUG=
 if [[ -n "$DEBUG" ]]; then
     set -x
