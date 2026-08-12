@@ -28,6 +28,57 @@
 # ferait échouer la fonction avant même d'avoir agi. On les neutralise.
 RED='' GREEN='' YELLOW='' CYAN='' NC='' BOLD=''
 
+# Les DEUX null-sinks de la chaîne GSM, déclarés au même endroit : gsm_audio
+# (= alsa gsm_out, la voix qui SORT) et gsm_mic (= alsa gsm_in via
+# gsm_mic.monitor, le micro silencieux qui ENTRE).
+#
+# [2026-08-12] gsm_mic n'était créé QUE par scripts/pulse-gsm-setup.sh, que
+# run.sh appelle ligne 422 — soit APRÈS osmo-start.sh (ligne 307). Un HLR qui ne
+# démarre pas fait `exit 1` dans osmo-start.sh, le `set -euo pipefail` de run.sh
+# tue tout, et le sink n'est jamais créé. Or gapk_io ABANDONNE LES DEUX SENS
+# quand la capture échoue :
+#     pq_alsa.c:168  Couldn't init ALSA device 'gsm_in': Input/output error
+#     gapk_io.c:468  Failed to initialize GAPK I/O
+# → appel parfaitement établi mais TOTALEMENT muet, et l'erreur est enterrée
+# dans mobile.log. C'est le "ça marche sur un PC, pas sur l'autre" : le tirage
+# au sort, c'est de savoir si le HLR est monté avant.
+#
+# Les deux sinks sont désormais SOLIDAIRES — ici, dans system.pa et dans le
+# Dockerfile. Aucun ordre de script ne peut plus en perdre un.
+GSM_SINKS="gsm_audio:GSM_Audio gsm_mic:GSM_Mic"
+
+load_gsm_sinks() {
+    local entry name desc
+    for entry in $GSM_SINKS; do
+        name="${entry%%:*}"; desc="${entry##*:}"
+        pactl list short sinks 2>/dev/null | grep -qw "$name" || \
+            pactl load-module module-null-sink sink_name="$name" \
+                format=s16le rate=8000 channels=1 \
+                sink_properties=device.description="$desc" >/dev/null 2>&1 || true
+    done
+}
+
+# Post-condition : les PCM que `mobile` va réellement ouvrir s'ouvrent-ils ?
+# Tester le sink avec `pactl list sinks` ne suffit pas — c'est le mapping ALSA
+# de /etc/asound.conf qui casse (gsm_in → gsm_mic.monitor). On ouvre pour de
+# vrai, 1 s de chaque côté, et on gueule si ça rate. Sans ça la panne est
+# silencieuse jusqu'au premier appel muet.
+assert_audio_devices() {
+    command -v aplay >/dev/null 2>&1 || return 0
+    local ko=0
+    timeout 5 aplay  -D gsm_out -f S16_LE -r 8000 -c 1 -d 1 /dev/zero >/dev/null 2>&1 || {
+        echo -e "  ${RED}[audio] KO : lecture 'gsm_out' impossible (sink gsm_audio ?)${NC}"; ko=1; }
+    timeout 5 arecord -D gsm_in  -f S16_LE -r 8000 -c 1 -d 1 /dev/null  >/dev/null 2>&1 || {
+        echo -e "  ${RED}[audio] KO : capture 'gsm_in' impossible (sink gsm_mic ?)${NC}"; ko=1; }
+    if [ "$ko" = "1" ]; then
+        echo -e "  ${RED}       → gapk_io va échouer et l'appel sera MUET DANS LES DEUX SENS.${NC}"
+        echo -e "  ${RED}       → pactl list short sinks  (attendu : gsm_audio ET gsm_mic)${NC}"
+        return 1
+    fi
+    echo -e "  ${GREEN}[audio] gsm_out (lecture) + gsm_in (capture) ouverts — chaîne OK${NC}"
+    return 0
+}
+
 ensure_pulse() {
     [ "${AUDIO:-1}" = "1" ] || { echo -e "  ${YELLOW}[audio] désactivé (AUDIO=0)${NC}"; return 0; }
 
@@ -48,10 +99,7 @@ ensure_pulse() {
         # -> on le (re)charge à la volée s'il manque. SANS ça : l'audio ne marchait
         # qu'après un 'fake' solo (qui avait posé le sink) — c'est le maillon qui
         # manquait à fake+qemu pour avoir l'audio de lui-même.
-        pactl list short sinks 2>/dev/null | grep -q gsm_audio || \
-            pactl load-module module-null-sink sink_name=gsm_audio \
-                format=s16le rate=8000 channels=1 \
-                sink_properties=device.description=GSM_Audio >/dev/null 2>&1 || true
+        load_gsm_sinks
         # Dédoublonnage : sur une PipeWire/Pulse PARTAGÉE entre containers, chaque
         # ensure_pulse charge son propre module-null-sink gsm_audio → doublons.
         # parec (flux /audio du dashboard) lit alors le monitor d'un sink que gapk
@@ -59,12 +107,20 @@ ensure_pulse() {
         # en local l'hôte entend via le module-loopback vers ses enceintes, d'où
         # « ça marche sur Linux mais pas sur Windows »). On garde UN seul gsm_audio
         # (le 1er module) et on décharge les suivants.
-        pactl list short modules 2>/dev/null \
-            | awk '/module-null-sink/ && /sink_name=gsm_audio/ {print $1}' \
-            | tail -n +2 \
-            | while read -r _m; do [ -n "$_m" ] && pactl unload-module "$_m" >/dev/null 2>&1 \
-                && echo -e "  ${YELLOW}[audio] sink gsm_audio en double déchargé (module $_m)${NC}"; done
-        echo -e "  ${GREEN}[audio] PulseAudio déjà actif (sink gsm_audio unique assuré)${NC}"; return 0
+        # (le dédoublonnage vaut pour gsm_mic autant que pour gsm_audio : un
+        #  gsm_mic en double et gapk capture le monitor du mauvais sink)
+        local _entry _name
+        for _entry in $GSM_SINKS; do
+            _name="${_entry%%:*}"
+            pactl list short modules 2>/dev/null \
+                | awk -v s="$_name" '/module-null-sink/ && $0 ~ ("sink_name=" s "([ \t]|$)") {print $1}' \
+                | tail -n +2 \
+                | while read -r _m; do [ -n "$_m" ] && pactl unload-module "$_m" >/dev/null 2>&1 \
+                    && echo -e "  ${YELLOW}[audio] sink ${_name} en double déchargé (module $_m)${NC}"; done
+        done
+        echo -e "  ${GREEN}[audio] PulseAudio déjà actif (sinks gsm_audio + gsm_mic uniques assurés)${NC}"
+        assert_audio_devices || true
+        return 0
     fi
 
     # 1. Installer pulseaudio si absent (le binaire démon, pas que les clients)
@@ -78,13 +134,20 @@ ensure_pulse() {
     command -v pulseaudio >/dev/null 2>&1 || {
         echo -e "  ${YELLOW}[audio] pulseaudio indisponible — audio ignoré${NC}"; return 0; }
 
-    # 2. Config system.pa : accès anonyme + sink null gsm_audio (idempotent)
+    # 2. Config system.pa : accès anonyme + les DEUX sinks null (idempotent).
+    #    Les déclarer ici plutôt que de compter sur un load-module au runtime
+    #    est ce qui rend la chaîne robuste : ils existent dès le démarrage du
+    #    démon, y compris si le démon redémarre tout seul plus tard.
     local sp=/etc/pulse/system.pa
     if [ -f "$sp" ]; then
         grep -q 'auth-anonymous=1' "$sp" || sed -i \
             's|^load-module module-native-protocol-unix.*|load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native|' "$sp"
-        grep -q 'sink_name=gsm_audio' "$sp" || \
-            echo 'load-module module-null-sink sink_name=gsm_audio format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Audio' >> "$sp"
+        local _entry _name _desc
+        for _entry in $GSM_SINKS; do
+            _name="${_entry%%:*}"; _desc="${_entry##*:}"
+            grep -q "sink_name=${_name}\b" "$sp" || \
+                echo "load-module module-null-sink sink_name=${_name} format=s16le rate=8000 channels=1 sink_properties=device.description=${_desc}" >> "$sp"
+        done
     fi
 
     # 3. (Re)démarrer le démon système — SÉRIALISÉ
@@ -113,11 +176,9 @@ ensure_pulse() {
     ) 9>/run/osmo-pulse.lock
 
     if pactl info >/dev/null 2>&1; then
-        pactl list short sinks 2>/dev/null | grep -q gsm_audio || \
-            pactl load-module module-null-sink sink_name=gsm_audio \
-                format=s16le rate=8000 channels=1 \
-                sink_properties=device.description=GSM_Audio >/dev/null 2>&1 || true
-        echo -e "  ${GREEN}[audio] PulseAudio prêt (sink gsm_audio) @ ${PULSE_SOCK}${NC}"
+        load_gsm_sinks
+        echo -e "  ${GREEN}[audio] PulseAudio prêt (sinks gsm_audio + gsm_mic) @ ${PULSE_SOCK}${NC}"
+        assert_audio_devices || true
     else
         echo -e "  ${YELLOW}[audio] PulseAudio injoignable — audio dégradé${NC}"
         echo -e "  ${YELLOW}        → voir ${LOG_DIR}/pulse-system.log${NC}"

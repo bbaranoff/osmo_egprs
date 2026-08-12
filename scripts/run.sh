@@ -228,6 +228,21 @@ inject_handover() {
     echo -e "  ${GREEN}✓ Handover algo 2${NC}"
 }
 
+# ── Sinks PulseAudio (gsm_audio + gsm_mic) ───────────────────────────────────
+# Docker : /scripts/  |  natif : /etc/osmocom/  (même script, chemin différent)
+# Idempotent et NON FATAL : sans PulseAudio l'audio gapk est indispo, mais on ne
+# doit jamais tuer run.sh (set -e) pour ça.
+# $1 = timeout d'attente de PulseAudio (défaut 30 s). Le démon n'est pas démarré
+# par ce script mais par lib/audio.sh (pipeline qemu) : sur l'appel PRÉCOCE [2d]
+# il peut ne pas être encore là, d'où un timeout court pour ne pas staller.
+setup_pulse_sinks() {
+    local PULSE_SETUP=/scripts/pulse-gsm-setup.sh
+    [ -f "$PULSE_SETUP" ] || PULSE_SETUP=/etc/osmocom/pulse-gsm-setup.sh
+    [ -f "$PULSE_SETUP" ] || { echo -e "  ${YELLOW}pulse-gsm-setup.sh introuvable — audio indispo${NC}"; return 0; }
+    PULSE_TIMEOUT="${1:-30}" "$PULSE_SETUP" \
+        || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo) — on continue${NC}"
+}
+
 # ── Bridge audio UNIVERSEL ───────────────────────────────────────────────────
 # gapk (RTP réseau → sink gsm_audio) + sortie son. Appelé en mode faketrx/virtphy
 # ET en mode no-process (qemu) — c'est CE bridge qui manquait en qemu (run.sh
@@ -303,6 +318,20 @@ echo -e "${GREEN}=== [2c] Handover ===${NC}"
 inject_handover
 echo ""
 
+# ── [2d] Audio PulseAudio — AVANT le cœur, volontairement ────────────────────
+# [2026-08-12] Ce bloc n'existait qu'en [6b], donc APRÈS osmo-start.sh. Or
+# osmo-start.sh fait `exit 1` si le HLR ne monte pas, et avec `set -euo pipefail`
+# (ligne 7) run.sh meurt là : pulse-gsm-setup.sh — le seul endroit qui crée le
+# null-sink gsm_mic — n'est alors JAMAIS exécuté. La capture gsm_in
+# (= gsm_mic.monitor) ne s'ouvre plus, gapk_io abandonne les DEUX sens, et tout
+# appel est muet, echo-test 600 compris. C'est exactement le « ça marche sur un
+# PC et pas sur l'autre » : ça dépend de si le HLR est monté du premier coup.
+# L'audio n'a AUCUNE dépendance sur le cœur — on le monte donc en premier.
+# L'appel en [6b] reste en place (idempotent) pour les relances partielles.
+echo -e "${GREEN}=== [2d] Audio PulseAudio (sinks) ===${NC}"
+setup_pulse_sinks 3
+echo ""
+
 echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 
@@ -313,12 +342,7 @@ echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 if [ "$RUN_NO_PROCESS" = "1" ]; then
     echo ""
     echo -e "${GREEN}=== Audio PulseAudio (no-process) ===${NC}"
-    # Docker : /scripts/  |  natif : /etc/osmocom/  (même script, chemin différent)
-    PULSE_SETUP=/scripts/pulse-gsm-setup.sh
-    [ -f "$PULSE_SETUP" ] || PULSE_SETUP=/etc/osmocom/pulse-gsm-setup.sh
-    if [ -f "$PULSE_SETUP" ]; then
-        "$PULSE_SETUP" || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo)${NC}"
-    fi
+    setup_pulse_sinks
     # Bridge audio AUSSI en no-process : sans ça, gapk n'est jamais lancé et le
     # pipeline qemu n'a aucun audio (bug « pas de son en qemu »).
     echo -e "${GREEN}=== Bridge audio (no-process / qemu) ===${NC}"
@@ -418,14 +442,7 @@ else
 fi
 
 echo -e "${GREEN}=== [6b/10] Audio PulseAudio ===${NC}"
-# Docker : /scripts/  |  natif : /etc/osmocom/  (même script, chemin différent)
-PULSE_SETUP=/scripts/pulse-gsm-setup.sh
-[ -f "$PULSE_SETUP" ] || PULSE_SETUP=/etc/osmocom/pulse-gsm-setup.sh
-if [ -f "$PULSE_SETUP" ]; then
-    # Non-fatal : sans PulseAudio (PULSE_SERVER absent) l'audio gapk est indispo,
-    # mais on NE doit PAS tuer run.sh (set -e) avant Mobile/Asterisk/SMSC/tmux.
-    "$PULSE_SETUP" || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo) — on continue${NC}"
-fi
+setup_pulse_sinks   # déjà fait en [2d] — idempotent, filet pour relance partielle
 echo ""
 
 # ── [6c] Bridge audio : gapk (RTP → gsm_audio) + sortie vers l'hôte ───────────

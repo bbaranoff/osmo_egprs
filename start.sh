@@ -746,7 +746,16 @@ start_bridge_mode() {
         vol_args=$(build_vol_args "$tmpdir")
         alsa_args=$(build_alsa_args)
 
+        # [2026-08-12] Le chown est OBLIGATOIRE, pas cosmétique. Ce répertoire est
+        # monté sur /var/log/osmocom et les démons tournent en osmocom (999:1000
+        # dans l'image). Créé en root:root, osmo-hlr ne peut pas créer son fichier
+        # de log → « % Unable to create file '/var/log/osmocom/osmo-hlr.log' » →
+        # échec du parse de sa config → boucle de restart systemd → osmo-start.sh
+        # `exit 1` (« HLR indispensable ») → run.sh meurt (set -e) et n'atteint
+        # aucun de ses étages suivants. Un simple problème de droits fait donc
+        # tomber tout le pipeline, audio compris.
         mkdir -p /tmp/osmocom-logs/op${i}
+        chown 999:1000 /tmp/osmocom-logs/op${i} 2>/dev/null || true
 
         # ── Ports à exposer ──────────────────────────────────────────────────
         local port_args=""

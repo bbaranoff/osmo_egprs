@@ -106,7 +106,15 @@ RUN chmod +x /root/osmo-start.sh /root/run.sh \
 # de start-direct.sh arrivait après son démarrage) → 'pactl' renvoyait
 # "Access denied", et un 2e démon ne pouvait pas démarrer ("Daemon already
 # running"). On bake ici la config pour que TOUT démon soit joignable dès son
-# lancement : socket anonyme + null-sink gsm_audio + root dans pulse-access.
+# lancement : socket anonyme + null-sinks gsm_audio/gsm_mic + root dans
+# pulse-access.
+#
+# [2026-08-12] gsm_mic AJOUTÉ ICI. Il n'était créé que par
+# scripts/pulse-gsm-setup.sh, appelé tard dans run.sh (après osmo-start.sh) :
+# un HLR qui rate coupe run.sh (set -e) et le sink n'existe jamais. Or
+# configs/asound.conf fait pointer la CAPTURE gsm_in sur gsm_mic.monitor, et
+# gapk_io abandonne lecture ET capture si la capture échoue → appel muet des
+# deux côtés. Les deux sinks doivent naître avec le démon, pas avec un script.
 RUN set -eux; \
     usermod -aG pulse-access root 2>/dev/null || true; \
     test -f /etc/pulse/system.pa; \
@@ -115,6 +123,8 @@ RUN set -eux; \
       || echo 'load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native' >> /etc/pulse/system.pa; \
     grep -q 'sink_name=gsm_audio' /etc/pulse/system.pa \
       || echo 'load-module module-null-sink sink_name=gsm_audio format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Audio' >> /etc/pulse/system.pa; \
+    grep -q 'sink_name=gsm_mic' /etc/pulse/system.pa \
+      || echo 'load-module module-null-sink sink_name=gsm_mic format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Mic' >> /etc/pulse/system.pa; \
     sed -i 's|^load-module module-suspend-on-idle|#load-module module-suspend-on-idle|' /etc/pulse/system.pa; \
     mkdir -p /var/run/pulse && chown -R pulse:pulse /var/run/pulse
 
@@ -132,7 +142,10 @@ RUN printf '%s\n' '' \
     '### end calypso-prompt ###' >> /root/.bashrc
 RUN python3 /opt/GSM/qemu-src/tools/dsp_txt2bin.py /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
-RUN cd /opt/GSM/osmo_egprs && git pull
+# [2026-08-12] Le `cd /opt/GSM/osmo_egprs && git pull` qui était ici a été
+# supprimé : il faisait doublon avec celui de la ligne ~192, et rien entre les
+# deux ne consomme /opt/GSM/osmo_egprs. On garde le plus tardif, au plus près
+# de l'entrypoint.
 RUN cd /opt/osmo-egprs-web && git pull
 RUN mkdir -p /opt/GSM/osmocom-bb/src/target/firmware/board/
 RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.elf /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.elf
