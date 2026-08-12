@@ -12,14 +12,6 @@ Environment=OSMO_OP_IDS=1
 Environment=CAP_IFACE=any
 Environment=PULSE_SERVER=unix:/var/run/pulse/native
 Environment=AUDIO_SOURCE=gsm_audio.monitor
-# TLS sur le port 80 (12/08/2026). server.js:1161-1183 n'arme le listener HTTPS
-# que si ces deux fichiers existent ; ils sont generes par install-web-service.sh,
-# jamais dans l'image (une cle privee au build serait partagee par tous).
-# ⚠️ Le clair reste sur HTTP_PORT (8080) : deux listeners ne partagent pas un port.
-# ⚠️ L'URL s'ecrit donc `https://<ip>:80` explicitement.
-Environment=HTTPS_PORT=80
-Environment=TLS_CERT=/opt/osmo-egprs-web/tls/cert.pem
-Environment=TLS_KEY=/opt/osmo-egprs-web/tls/key.pem
 ExecStart=/usr/local/bin/node /opt/osmo-egprs-web/server.js --verbose
 Restart=on-failure
 RestartSec=3
