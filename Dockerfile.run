@@ -163,6 +163,18 @@ COPY services/osmo-egprs-web.service /opt/osmo-egprs-web/osmo-egprs-web.service
 # Fail-fast : si l'amont retire le script, on le sait au build, pas au boot par
 # un HTTPS muet.
 RUN test -s /opt/osmo-egprs-web/install-web-service.sh
+# [2026-08-12] REJOUER L'INSTALL WEB APRES LE PULL.
+# Le `npm install` plus haut (l.66) tourne AVANT le `git pull` de l'l.136 : si le
+# pull rapatrie un package.json avec une dependance en plus, node_modules reste
+# a l'etat d'avant et le dashboard tombe au demarrage sur un `Cannot find
+# module` — au boot, dans le journal systemd, loin du build qui l'a cause. On
+# rejoue donc les dependances APRES le pull.
+# Non fatal (`|| true`) : node_modules est versionne dans le depot, un build
+# hors-ligne reste valable. Mais la sortie est conservee, pas avalee.
+RUN cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
+# Le reste de install-web-service.sh (certificat TLS + unit + enable) est joue AU
+# BOOT par osmo-egprs-web-install.service — cf. le commentaire de ce unit : ni
+# les `systemctl` ni la generation d'une cle privee n'ont leur place au build.
 COPY services/osmo-egprs-web-install.service /etc/systemd/system/osmo-egprs-web-install.service
 RUN ln -sf /etc/systemd/system/osmo-egprs-web-install.service \
         /etc/systemd/system/multi-user.target.wants/osmo-egprs-web-install.service
@@ -170,6 +182,20 @@ RUN ln -sf /etc/systemd/system/osmo-egprs-web-install.service \
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 RUN cp /opt/GSM/qemu-src/opt-gsm-scripts/si_bridge.py /opt/GSM/si_bridge.py
 RUN cd /opt/GSM/osmo_egprs && git pull
-RUN cd /opt/GSM/qemu-src && git pull && cd build && ninja
+# [2026-08-12] `ninja` NE SUFFIT PAS APRES CE PULL.
+# Le pull rapatrie tout l'arbre qemu-src, mais deux binaires distincts en
+# sortent et meson/ninja n'en connait qu'un :
+#   - qemu-system-arm            -> build/ (ninja)
+#   - calypso-ipc-device         -> tools/calypso-ipc-device/ (Makefile a part)
+# Le second n'etait construit QUE dans l'image de base (Dockerfile:289). Un
+# `git push` touchant `tools/calypso-ipc-device/qemu_wrap.c` — c'est-a-dire tout
+# le montant : RACH, SDCCH, TCH, chiffrement A5, offsets de TOA — n'arrivait
+# donc JAMAIS dans l'image run : on tournait avec le device de l'image de base,
+# sans rien qui le signale. On refait les deux ici, dans le meme layer que le
+# pull pour qu'ils ne puissent pas se desynchroniser via le cache docker.
+RUN cd /opt/GSM/qemu-src && git pull && \
+    (cd build && ninja) && \
+    make -C tools/calypso-ipc-device clean && \
+    make -C tools/calypso-ipc-device -j"$(nproc)"
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["bash"]

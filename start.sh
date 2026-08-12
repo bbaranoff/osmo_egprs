@@ -342,6 +342,60 @@ _GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate
 . "$_GC_SH"
 
 
+# ── Mise a jour forcee des trois arbres, AVANT run.sh ─────────────────────────
+# [2026-08-12] Les trois depots sont clones et `git pull`-es DANS LE Dockerfile,
+# donc a l'etat du BUILD. Entre deux builds d'image (11,5 Go, plusieurs dizaines
+# de minutes) un `git push` n'atteignait jamais un conteneur neuf : on lancait un
+# run sur du code perime sans le voir. On les rafraichit donc a chaque demarrage,
+# avant que run.sh ne lise quoi que ce soit.
+#
+# ORDRE : cette fonction DOIT etre appelee apres `docker run` et AVANT le
+# `docker exec ... run.sh`. Apres, run.sh aurait deja lu l'ancien code.
+#
+# `--ff-only`, PAS de `reset --hard` : le depot qemu-src du conteneur recoit des
+# commits faits a la main pendant une session (c'est le mode de travail : on
+# corrige, on compile, on commite dans le conteneur). Un reset dur les
+# effacerait sans le dire. En avance-rapide seule, une divergence s'ARRETE et se
+# VOIT au lieu d'etre ecrasee en silence.
+#
+# qemu-src est RECOMPILE apres le pull : mettre la source a jour sans relier le
+# binaire ne change rien a ce qui tourne — et c'est indiscernable d'un pull qui
+# aurait echoue. Le juge d'un binaire a jour reste `stat -L /proc/<pid>/exe`.
+#
+# Non bloquant (reseau absent = on continue), mais BRUYANT : un pull rate doit
+# se lire dans la sortie du lanceur, pas se deviner.
+force_update_trees() {
+    local c=$1
+    echo -e "  ${GREEN}[*] Mise a jour forcee des depots (avant run.sh)...${NC}"
+    for repo in /opt/GSM/qemu-src /opt/GSM/osmo_egprs /opt/osmo-egprs-web; do
+        if ! docker exec "$c" test -d "$repo/.git" 2>/dev/null; then
+            echo -e "    ${YELLOW}$repo : pas un depot git — ignore${NC}"
+            continue
+        fi
+        local before after
+        before=$(docker exec "$c" git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo '?')
+        if docker exec "$c" git -C "$repo" pull --ff-only 2>&1 | tail -2 | sed 's/^/    /'; then
+            after=$(docker exec "$c" git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo '?')
+            if [ "$before" = "$after" ]; then
+                echo -e "    ${CYAN}$repo${NC} : deja a jour ($after)"
+            else
+                echo -e "    ${GREEN}$repo${NC} : $before -> $after"
+            fi
+        else
+            echo -e "    ${RED}$repo : pull KO (divergence ou reseau) — le run part sur $before${NC}"
+        fi
+    done
+    # Recompilation de QEMU : sans elle le pull ci-dessus ne change RIEN au
+    # binaire qui tourne. ninja ne reconstruit que ce qui a bouge.
+    echo -e "  ${GREEN}[*] Recompilation QEMU (ninja)...${NC}"
+    if docker exec "$c" bash -c 'cd /opt/GSM/qemu-src/build && ninja' >/dev/null 2>&1; then
+        echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qemu-src/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
+    else
+        echo -e "    ${RED}ninja KO — le run utilisera le binaire de l'image${NC}"
+        docker exec "$c" bash -c 'cd /opt/GSM/qemu-src/build && ninja 2>&1 | tail -15' | sed 's/^/      /'
+    fi
+}
+
 build_vol_args() {
     local tmpdir=$1
     local vol_args=""
@@ -731,6 +785,8 @@ start_bridge_mode() {
             sleep infinity
 
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
+
+        force_update_trees "$container_name"
 
         # run.sh selon le mode no-process choisi
         local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} /etc/osmocom/run.sh"

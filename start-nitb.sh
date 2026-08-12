@@ -47,8 +47,14 @@ if ! docker image inspect "$IMAGE_NITB" >/dev/null 2>&1; then
 fi
 
 # ── 2. L'entrypoint doit survivre au montage de /etc/osmocom ──────────────────
-if [ ! -x "${HERE}/scripts/entrypoint.sh" ]; then
-    echo -e "${RED}scripts/entrypoint.sh absent ou non executable.${NC}"
+# On teste la PRESENCE, pas le bit d'execution : dans le depot le fichier est en
+# 644, et c'est normal. Le bit +x est pose EN AVAL, aux deux endroits qui en ont
+# besoin — generate_configs.sh l.204-205 (`cp scripts/*` puis `chmod +x` dans le
+# dossier genere, celui qui est monte sur /etc/osmocom) et Dockerfile.run l.75
+# (`chmod +x /scripts/*.sh` dans l'image). Tester `-x` ici refusait donc de
+# demarrer sur un depot parfaitement sain.
+if [ ! -s "${HERE}/scripts/entrypoint.sh" ]; then
+    echo -e "${RED}scripts/entrypoint.sh absent ou vide.${NC}"
     echo -e "L'image ${IMAGE_NITB} a son entrypoint dans /etc/osmocom, que start.sh"
     echo -e "recouvre par le dossier de config genere. Sans ce fichier, le"
     echo -e "conteneur demarrerait sans entrypoint — alors que l'image"
