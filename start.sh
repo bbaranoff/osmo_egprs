@@ -11,7 +11,13 @@ if [[ -n "$DEBUG" ]]; then
 fi
 
 IMAGE_BASE="osmocom-nitb"
-IMAGE_RUN="osmocom-run"
+# [2026-08-12] Surchargeable depuis l'environnement — c'est ce que fait
+# start-nitb.sh, qui relance exactement ce script avec IMAGE_RUN=osmocom-nitb.
+# Idiome `:=` du projet : une valeur posee explicitement en amont gagne, le
+# defaut ne s'applique qu'a vide. NE PAS remettre en dur : start-nitb.sh
+# deviendrait silencieusement un alias de start.sh, ce qui est indiscernable
+# d'un lanceur qui marche.
+IMAGE_RUN="${IMAGE_RUN:-osmocom-run}"
 
 INTER_NET="gsm-inter"
 INTER_NET_SUBNET="172.20.0.0/24"

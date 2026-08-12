@@ -122,10 +122,26 @@ RUN git -C ${ROOT}/osmo-trx apply /tmp/osmo-trx-ipc-ts-frame-align.patch \
 # journalise rien ici, car il ne se plaint que d'un retour negatif et
 # pq_cb_alsa_output rend « succes » meme pour une ecriture vide.
 # Patch maintenu dans patches/ (regenere si pq_alsa.c change).
-COPY patches/gapk-pq-alsa-output-probe.patch /tmp/gapk-pq-alsa-output-probe.patch
+#
+# [2026-08-12] LE PATCH RESTE DANS LE DEPOT, LE BUILD NE L'APPLIQUE PLUS.
+# Demande explicite : garder patches/gapk-pq-alsa-output-probe.patch versionne
+# (il tranche encore la question amont/aval quand l'ecouteur est muet) mais ne
+# plus le poser sur le gapk construit — un `git apply` dans le build casse
+# l'image des que pq_alsa.c bouge en amont, et la sonde n'est plus la question
+# du jour (descendant muet resolu par CALYPSO_PULSE_LATENCY_MSEC=80).
+# POUR LE REMETTRE, deux gestes, dans cet ordre :
+#   1. decommenter la ligne COPY ci-dessous ;
+#   2. reinserer dans le RUN, entre le `git clone` et le `cd osmo-gapk` :
+#        git -C ${ROOT}/osmo-gapk apply /tmp/gapk-pq-alsa-output-probe.patch && \
+#      (elle ne peut pas rester en commentaire : une ligne `#` au milieu d'une
+#       continuation `\` couperait la chaine shell du RUN).
+# Verifier d'abord que le patch s'applique toujours :
+#   git -C <clone gapk> apply --check patches/gapk-pq-alsa-output-probe.patch
+# POUR L'APPLIQUER A CHAUD SANS REBUILD : le poser dans le conteneur sur un
+# clone de gapk, puis reconstruire gapk seul.
+# COPY patches/gapk-pq-alsa-output-probe.patch /tmp/gapk-pq-alsa-output-probe.patch
 RUN cd ${ROOT} && \
     git clone https://gitea.osmocom.org/osmocom/gapk osmo-gapk && \
-    git -C ${ROOT}/osmo-gapk apply /tmp/gapk-pq-alsa-output-probe.patch && \
     cd osmo-gapk && \
     autoreconf -fi && \
     ./configure --enable-alsa && \
