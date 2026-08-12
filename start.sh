@@ -147,20 +147,61 @@ wt_msg() {
 }
 
 # ── Loopback audio côté session utilisateur ───────────────────────────────
+# ── Session audio de l'hôte : QUI, et OÙ ────────────────────────────────────
+# [2026-08-12] Ces deux fonctions codaient « nirvana » en dur et cherchaient
+# /home/<user>/osmo_egprs/loopback.sh — un chemin QUI N'EXISTE PAS (le script
+# est network/loopback.sh). Résultat : enable_user_loopback échouait sur toute
+# machine sans utilisateur nirvana, et disable_user_loopback (appelé à l'arrêt)
+# était déjà du code mort ICI. On résout les deux à l'exécution.
+#
+# Le critère du bon utilisateur n'est pas son nom mais la PRÉSENCE de son socket
+# pulse : c'est la seule chose qui distingue une session graphique vivante d'un
+# compte qui existe. Même logique que session_user() de wslg-audio-bridge.sh,
+# étendue au balayage de /run/user/*.
+session_pulse_user() {
+    local u uid sock
+    for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)" "${USER:-}"; do
+        [ -n "$u" ] || continue
+        uid="$(id -u "$u" 2>/dev/null)" || continue
+        [ -S "/run/user/${uid}/pulse/native" ] && { echo "$u"; return 0; }
+    done
+    # Dernier recours : propriétaire du premier socket pulse trouvé. Couvre le
+    # `sudo -i` (SUDO_USER perdu) et les sessions sans logname (cron, service).
+    for sock in /run/user/*/pulse/native; do
+        [ -S "$sock" ] || continue
+        uid="${sock#/run/user/}"; uid="${uid%%/*}"
+        u="$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)"
+        [ -n "$u" ] && { echo "$u"; return 0; }
+    done
+    return 1
+}
+
+# Le script de loopback vit dans le dépôt, pas dans un $HOME.
+find_loopback_script() {
+    local d c
+    d="$(cd "$(dirname "$0")" && pwd)"
+    for c in "$d/network/loopback.sh" "$d/loopback.sh"; do
+        [ -x "$c" ] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
 enable_user_loopback() {
     local target_user target_uid target_runtime loopback_script
-    target_user="${SUDO_USER:-nirvana}"
+    target_user="$(session_pulse_user)" || {
+        echo -e "  ${YELLOW}[audio] aucune session PulseAudio utilisateur — loopback ignoré${NC}"
+        return 0
+    }
+    loopback_script="$(find_loopback_script)" || {
+        echo -e "  ${YELLOW}[audio] network/loopback.sh introuvable — loopback ignoré${NC}"
+        return 0
+    }
     target_uid="$(id -u "$target_user")"
     target_runtime="/run/user/${target_uid}"
-    loopback_script="/home/${target_user}/osmo_egprs/loopback.sh"
     echo -e "${GREEN}=== [audio] Loopback user session ===${NC}"
     echo -e "  user    : ${CYAN}${target_user}${NC}"
     echo -e "  runtime : ${CYAN}${target_runtime}${NC}"
     echo -e "  script  : ${CYAN}${loopback_script}${NC}"
-    if [[ ! -x "$loopback_script" ]]; then
-        echo -e "  ${RED}[FAIL]${NC} script introuvable ou non exécutable"
-        return 1
-    fi
     sudo -u "$target_user" \
         XDG_RUNTIME_DIR="$target_runtime" \
         PULSE_SERVER="unix:${target_runtime}/pulse/native" \
@@ -173,10 +214,10 @@ enable_user_loopback() {
 
 disable_user_loopback() {
     local target_user target_uid target_runtime loopback_script
-    target_user="${SUDO_USER:-nirvana}"
+    target_user="$(session_pulse_user)"       || return 0
+    loopback_script="$(find_loopback_script)" || return 0
     target_uid="$(id -u "$target_user")"
     target_runtime="/run/user/${target_uid}"
-    loopback_script="/home/${target_user}/osmo_egprs/loopback.sh"
     sudo -u "$target_user" \
         XDG_RUNTIME_DIR="$target_runtime" \
         PULSE_SERVER="unix:${target_runtime}/pulse/native" \

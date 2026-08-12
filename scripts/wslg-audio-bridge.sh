@@ -40,7 +40,27 @@ detect_gw() {
 }
 
 # Utilisateur de la session graphique (propriétaire du pulse natif).
-session_user() { echo "${HOST_PULSE_USER:-${SUDO_USER:-$(id -un)}}"; }
+# [2026-08-12] Le critère n'est pas le nom mais la PRÉSENCE du socket pulse :
+# sous `sudo -i` SUDO_USER est perdu et `id -un` rend root, dont le
+# /run/user/0/pulse/native n'existe quasiment jamais — on partait alors chercher
+# un pulse inexistant au lieu de celui, bien vivant, de la session graphique.
+# On balaye donc /run/user/* en dernier recours. Même logique que
+# session_pulse_user() de start.sh.
+session_user() {
+    local u uid sock
+    for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)" "$(id -un)"; do
+        [ -n "$u" ] || continue
+        uid="$(id -u "$u" 2>/dev/null)" || continue
+        [ -S "/run/user/${uid}/pulse/native" ] && { echo "$u"; return 0; }
+    done
+    for sock in /run/user/*/pulse/native; do
+        [ -S "$sock" ] || continue
+        uid="${sock#/run/user/}"; uid="${uid%%/*}"
+        u="$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)"
+        [ -n "$u" ] && { echo "$u"; return 0; }
+    done
+    echo "${HOST_PULSE_USER:-${SUDO_USER:-$(id -un)}}"   # rien trouvé : ancien défaut
+}
 
 # Exécute `pactl …` sur le pulse de l'hôte natif, en tant qu'utilisateur session.
 pactl_native() {
@@ -95,18 +115,28 @@ host_pa() {
 # On lit jusqu'a MIC_PROBE_BYTES puis on coupe (head ferme le tube, parec recoit
 # SIGPIPE) : rapide sur un peripherique vivant, seul un mort coute le timeout.
 MIC_PROBE_SECS="${MIC_PROBE_SECS:-4}"
+# Seconde chance pour un peripherique QUI N'A RIEN RENDU (verdict 2). Le
+# commentaire ci-dessus mesure ~2 s de reveil sur une source suspendue ; une
+# carte USB derriere un hub, ou un bluetooth qui doit negocier son profil, en
+# demande davantage. Ce parametre existe pour ne pas condamner ces machines-la.
+MIC_PROBE_SECS_SLOW="${MIC_PROBE_SECS_SLOW:-12}"
 MIC_PROBE_BYTES="${MIC_PROBE_BYTES:-16000}"   # 1 s @ 8 kHz s16le mono
 MIC_MIN_BYTES="${MIC_MIN_BYTES:-4000}"        # en deca : pas de verdict possible
 MIC_MIN_NONZERO="${MIC_MIN_NONZERO:-100}"
 MIC_MAX_PROBES="${MIC_MAX_PROBES:-8}"
+# 1 = ne JAMAIS toucher au defaut systeme de l'hote (on se contente de dire ce
+# qu'on a mesure). Utile sur un poste de travail : la selection ci-dessous est
+# permanente, elle survit a l'arret d'osmo_egprs.
+MIC_KEEP_DEFAULT="${MIC_KEEP_DEFAULT:-0}"
 
 # Renvoie "<octets_captures> <octets_non_nuls>" sur stdout.
+# $2 = duree de la fenetre (defaut MIC_PROBE_SECS).
 probe_source() {
-    local src="$1" tmp raw nz
+    local src="$1" secs="${2:-$MIC_PROBE_SECS}" tmp raw nz
     tmp="$(mktemp)"
     # `|| true` : timeout sort en 124, head provoque un SIGPIPE — sous
     # `set -o pipefail` l'un ou l'autre tuerait le script.
-    { host_pa timeout "$MIC_PROBE_SECS" parec -d "$src" \
+    { host_pa timeout "$secs" parec -d "$src" \
         --format=s16le --rate=8000 --channels=1 2>/dev/null || true; } \
       | head -c "$MIC_PROBE_BYTES" > "$tmp" 2>/dev/null || true
     raw="$(wc -c < "$tmp")"; nz="$(tr -d '\000' < "$tmp" | wc -c)"
@@ -116,11 +146,26 @@ probe_source() {
 
 # 0 = signal, 1 = silence numerique, 2 = indetermine (rien capture)
 source_verdict() {
-    local r raw nz
-    r="$(probe_source "$1")"; raw="${r%% *}"; nz="${r##* }"
+    local r raw nz secs="${2:-$MIC_PROBE_SECS}"
+    r="$(probe_source "$1" "$secs")"; raw="${r%% *}"; nz="${r##* }"
     [ "$raw" -ge "$MIC_MIN_BYTES" ] || return 2
     [ "$nz"  -ge "$MIC_MIN_NONZERO" ] || return 1
     return 0
+}
+
+# [2026-08-12] Le code distinguait soigneusement le verdict 1 (silence
+# numerique = LA panne) du verdict 2 (rien capture = INDETERMINE)... puis
+# traitait les deux pareil : dans les deux cas on partait chercher ailleurs et
+# on reecrivait le defaut systeme. Un peripherique simplement lent a demarrer se
+# faisait donc evincer au profit d'une entree qui, elle, n'a rien prouve de plus.
+# « Indetermine » veut dire qu'il faut REGARDER PLUS LONGTEMPS, pas conclure.
+verdict_retry() {
+    local src="$1" rc=0
+    source_verdict "$src" || rc=$?
+    [ "$rc" = "2" ] || return "$rc"
+    log "[mic]   ${src} : rien en ${MIC_PROBE_SECS}s — seconde chance sur ${MIC_PROBE_SECS_SLOW}s"
+    rc=0; source_verdict "$src" "$MIC_PROBE_SECS_SLOW" || rc=$?
+    return "$rc"
 }
 
 host_mic() {
@@ -129,27 +174,47 @@ host_mic() {
     host_pa pactl info >/dev/null 2>&1 \
         || { log "[mic] pulse hote injoignable — selection micro ignoree"; return 0; }
 
+    # RAPPEL DE PORTEE, sinon cette fonction se fait crediter d'un pouvoir
+    # qu'elle n'a pas : elle regle le defaut du PULSE DE L'HOTE. Le micro du
+    # tableau de bord, lui, est celui du POSTE QUI AFFICHE LA PAGE (getUserMedia
+    # -> WebSocket -> pacat -> gsm_mic). Les deux ne coincident que si l'on
+    # navigue depuis la machine hote. Depuis un autre poste, c'est le selecteur
+    # de la page (web/index.html, #mic-dev) qui decide, et rien d'autre.
+    log "[mic] selection de l'entree du PULSE DE L'HOTE (le navigateur, lui,"
+    log "[mic]   utilise le micro de SON poste — selecteur dans le tableau de bord)."
+
     local cur rc; cur="$(host_pa pactl get-default-source 2>/dev/null || true)"
     if [ -n "$cur" ]; then
         # `|| rc=$?` OBLIGATOIRE : sous `set -e` un appel nu de source_verdict
         # renvoyant 1 (silence) ou 2 (rien capture) tuerait le script sur place,
         # sans une ligne de log — panne observee, tres deroutante.
-        rc=0; source_verdict "$cur" || rc=$?
+        rc=0; verdict_retry "$cur" || rc=$?
         case "$rc" in
             0) log "[mic] source par defaut deja valide : ${cur}"; return 0 ;;
             1) log "[mic] defaut '${cur}' : SILENCE NUMERIQUE — recherche d'une autre entree..." ;;
-            2) log "[mic] defaut '${cur}' : aucune donnee (peripherique qui ne demarre pas) — recherche..." ;;
+            2) log "[mic] defaut '${cur}' : aucune donnee meme en ${MIC_PROBE_SECS_SLOW}s — recherche..." ;;
         esac
+    fi
+
+    if [ "$MIC_KEEP_DEFAULT" = "1" ]; then
+        log "[mic] MIC_KEEP_DEFAULT=1 — defaut systeme laisse tel quel, pas de bascule."
+        return 0
     fi
 
     local src i=0
     for src in $(host_pa pactl list short sources 2>/dev/null | awk '{print $2}' | grep -v '\.monitor$'); do
         [ "$src" = "$cur" ] && continue
         i=$((i + 1)); [ "$i" -gt "$MIC_MAX_PROBES" ] && break
-        rc=0; source_verdict "$src" || rc=$?      # cf. remarque set -e ci-dessus
+        rc=0; verdict_retry "$src" || rc=$?        # cf. remarque set -e ci-dessus
         if [ "$rc" = "0" ]; then
             if host_pa pactl set-default-source "$src" >/dev/null 2>&1; then
                 log "[mic] source par defaut -> ${src} (signal detecte)"
+                # La bascule est PERMANENTE : pulse la garde apres l'arret
+                # d'osmo_egprs. On journalise l'ancienne valeur pour que le
+                # retour en arriere soit une commande, pas une enquete.
+                [ -n "$cur" ] && log "[mic]   ancien defaut : ${cur}"
+                [ -n "$cur" ] && log "[mic]   restaurer : pactl set-default-source ${cur}"
+                log "[mic]   (MIC_KEEP_DEFAULT=1 desactive cette bascule)"
                 log "[mic]   un onglet qui tient deja le micro reste epingle sur"
                 log "[mic]   l'ancien peripherique : recouper/relancer le bouton micro."
                 return 0
