@@ -39,8 +39,15 @@ RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/
     /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
 RUN rm -rf /opt/GSM/firmware
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
-RUN if [ ! -d "/opt/osmo-egprs-web/" ]; then git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web; fi
-RUN if [ ! -d "/opt/GSM/osmo_egprs/" ]; then git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs; fi
+# ── Branche commune aux 3 dépôts maison (cf. même ARG dans Dockerfile) ───────
+# ARG ne traverse PAS le FROM : cette image repart de osmocom-nitb, il faut donc
+# la redéclarer ici. Même valeur par défaut des deux côtés — les changer
+# séparément mettrait qemu-src et osmo_egprs sur deux branches différentes dans
+# la MÊME image, panne quasi indétectable.
+ARG OSMO_BRANCH=sms_voice_mt_mo_a50
+
+RUN if [ ! -d "/opt/osmo-egprs-web/" ]; then git clone --branch "$OSMO_BRANCH" https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web; fi
+RUN if [ ! -d "/opt/GSM/osmo_egprs/" ]; then git clone --branch "$OSMO_BRANCH" https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs; fi
 
 # ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
 # Le dashboard /opt/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
@@ -146,7 +153,14 @@ RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 # supprimé : il faisait doublon avec celui de la ligne ~192, et rien entre les
 # deux ne consomme /opt/GSM/osmo_egprs. On garde le plus tardif, au plus près
 # de l'entrypoint.
-RUN cd /opt/osmo-egprs-web && git pull
+#
+# `git pull` seul suivrait la branche du CLONE. Or ce clone peut venir d'une
+# couche en cache faite quand la branche par défaut était autre : il y resterait
+# en silence. `fetch` + `checkout -B` repositionne à coup sûr sur $OSMO_BRANCH,
+# que la couche soit fraîche ou recyclée.
+RUN cd /opt/osmo-egprs-web \
+    && git fetch origin "$OSMO_BRANCH" \
+    && git checkout -B "$OSMO_BRANCH" "origin/$OSMO_BRANCH"
 RUN mkdir -p /opt/GSM/osmocom-bb/src/target/firmware/board/
 RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.elf /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.elf
 RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.bin /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.bin
@@ -194,7 +208,9 @@ RUN ln -sf /etc/systemd/system/osmo-egprs-web-install.service \
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 RUN cp /opt/GSM/qemu-src/opt-gsm-scripts/si_bridge.py /opt/GSM/si_bridge.py
-RUN cd /opt/GSM/osmo_egprs && git pull
+RUN cd /opt/GSM/osmo_egprs \
+    && git fetch origin "$OSMO_BRANCH" \
+    && git checkout -B "$OSMO_BRANCH" "origin/$OSMO_BRANCH"
 # [2026-08-12] `ninja` NE SUFFIT PAS APRES CE PULL.
 # Le pull rapatrie tout l'arbre qemu-src, mais deux binaires distincts en
 # sortent et meson/ninja n'en connait qu'un :
@@ -206,7 +222,9 @@ RUN cd /opt/GSM/osmo_egprs && git pull
 # donc JAMAIS dans l'image run : on tournait avec le device de l'image de base,
 # sans rien qui le signale. On refait les deux ici, dans le meme layer que le
 # pull pour qu'ils ne puissent pas se desynchroniser via le cache docker.
-RUN cd /opt/GSM/qemu-src && git pull && \
+RUN cd /opt/GSM/qemu-src \
+    && git fetch origin "$OSMO_BRANCH" \
+    && git checkout -B "$OSMO_BRANCH" "origin/$OSMO_BRANCH" && \
     (cd build && ninja) && \
     make -C tools/calypso-ipc-device clean && \
     make -C tools/calypso-ipc-device -j"$(nproc)"
