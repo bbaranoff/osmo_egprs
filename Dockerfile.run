@@ -140,6 +140,33 @@ RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.bin /opt/GSM/osmocom-bb
 
 RUN . ~/.env/bin/activate && pip install matplotlib
 
+# ── Dashboard web : install-web-service.sh joue AU BOOT ───────────────────────
+# [2026-08-12] Remplace le geste manuel `bash /opt/osmo-egprs-web/install-web-service.sh`
+# qu'il fallait refaire dans chaque conteneur pour armer le HTTPS.
+#
+# Ce qui reste au BUILD (deja plus haut) : node, `npm install`, le unit du
+# service. Ce qui passe au BOOT : le certificat TLS auto-signe — une cle privee
+# generee au build serait la meme pour tous ceux qui tirent l'image. Le detail
+# du raisonnement est dans services/osmo-egprs-web-install.service.
+#
+# ⚠️ ORDRE : ce bloc DOIT rester APRES le `RUN cd /opt/osmo-egprs-web && git pull`
+# ci-dessus. La COPY ci-dessous modifie un fichier suivi par ce depot ; placee
+# avant, le `git pull` echouerait (« local changes would be overwritten »).
+#
+# SOURCE UNIQUE DU UNIT. install-web-service.sh installe le unit en le copiant
+# depuis /opt/osmo-egprs-web/osmo-egprs-web.service — la copie du depot
+# osmo-egprs-web, qui avait DIVERGE de celle-ci (elle avait perdu
+# `CAP_IFACE=any`, donc la capture du dashboard). On ecrase donc cette copie par
+# services/osmo-egprs-web.service : les deux emplacements servent desormais le
+# meme fichier, et le script ne peut plus reintroduire la regression.
+COPY services/osmo-egprs-web.service /opt/osmo-egprs-web/osmo-egprs-web.service
+# Fail-fast : si l'amont retire le script, on le sait au build, pas au boot par
+# un HTTPS muet.
+RUN test -s /opt/osmo-egprs-web/install-web-service.sh
+COPY services/osmo-egprs-web-install.service /etc/systemd/system/osmo-egprs-web-install.service
+RUN ln -sf /etc/systemd/system/osmo-egprs-web-install.service \
+        /etc/systemd/system/multi-user.target.wants/osmo-egprs-web-install.service
+
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 RUN cp /opt/GSM/qemu-src/opt-gsm-scripts/si_bridge.py /opt/GSM/si_bridge.py
 RUN cd /opt/GSM/osmo_egprs && git pull
