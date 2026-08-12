@@ -227,6 +227,14 @@ ensure_host_audio_relay() {
         HOST_AUDIO_RELAY=""
         echo -e "  ${YELLOW}[host-audio] relai non ouvert — fallback carte locale dans le conteneur${NC}"
     fi
+
+    # [2026-08-12] Sens MONTANT (micro). Le relai ci-dessus ne couvre que la
+    # descente (gsm_audio.monitor → HP de l'hôte). Le micro, lui, vient du
+    # navigateur, qui capture la source PAR DEFAUT de l'hôte — laquelle peut
+    # très bien être une entrée fantôme qui ne sort que du zéro (vécu ici :
+    # défaut non muté à 93 % et pourtant silence total, cf. host_mic()).
+    # On choisit donc la source à l'oreille, pas au nom. Non fatal.
+    "$bridge" host-mic || true
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

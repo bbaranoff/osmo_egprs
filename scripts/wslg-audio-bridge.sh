@@ -53,6 +53,119 @@ pactl_native() {
     fi
 }
 
+# Exécute un outil pulse quelconque (pactl, parec, timeout parec…) contre le
+# pulse de l'HÔTE, en WSLg comme en natif. Généralise pactl_native.
+host_pa() {
+    local bin="$1"; shift
+    if [ -S /mnt/wslg/PulseServer ]; then
+        PULSE_SERVER="unix:/mnt/wslg/PulseServer" "$bin" "$@"
+    else
+        local u uid rt
+        u="$(session_user)"; uid="$(id -u "$u")"; rt="/run/user/${uid}"
+        if [ "$(id -un)" = "$u" ]; then
+            XDG_RUNTIME_DIR="$rt" PULSE_SERVER="unix:${rt}/pulse/native" "$bin" "$@"
+        else
+            sudo -u "$u" XDG_RUNTIME_DIR="$rt" PULSE_SERVER="unix:${rt}/pulse/native" "$bin" "$@"
+        fi
+    fi
+}
+
+# ── HÔTE : choisir une source micro qui a REELLEMENT du signal ───────────────
+#
+# [2026-08-12] Panne vécue : le micro du dashboard web (bouton -> WebSocket ->
+# pacat -> sink gsm_mic) débitait au bon rythme (49400 o/3 s à 8 kHz s16le) mais
+# ne transportait que du ZERO. Cause : le navigateur capture la source PAR
+# DEFAUT du système, et sur cette machine le défaut pointait sur
+# alsa_input...hw_Generic_1__source — présente, NON mutée, volume 93 %, et
+# pourtant silence numérique intégral. La vraie entrée était hw_acp__source.
+# `pactl` ne permet pas de distinguer les deux : il faut ECOUTER.
+#
+# On ne code donc aucun nom de périphérique (ils changent d'une machine à
+# l'autre) : on mesure. Critère volontairement binaire — un micro vivant a
+# TOUJOURS un plancher de bruit, donc des octets non nuls ; une entrée mal
+# routée ne sort que des zéros. `tr -d '\0' | wc -c` suffit : pas de dépendance
+# python/sox, ça tourne partout où parec existe.
+# ATTENTION AU FAUX NEGATIF : une source SUSPENDUE met ~2 s a delivrer ses
+# premiers octets (mesure : timeout 1s -> 0 octet, timeout 3s -> 32000 octets
+# dont 31946 non nuls, sur la MEME source vivante). Juger sur une fenetre courte
+# revient a declarer muet tout peripherique au repos. On distingue donc deux
+# cas distincts, jamais confondus :
+#   - RIEN capture            -> le peripherique n'a pas demarre (indetermine)
+#   - capture mais TOUT A ZERO -> silence numerique (la vraie panne)
+# On lit jusqu'a MIC_PROBE_BYTES puis on coupe (head ferme le tube, parec recoit
+# SIGPIPE) : rapide sur un peripherique vivant, seul un mort coute le timeout.
+MIC_PROBE_SECS="${MIC_PROBE_SECS:-4}"
+MIC_PROBE_BYTES="${MIC_PROBE_BYTES:-16000}"   # 1 s @ 8 kHz s16le mono
+MIC_MIN_BYTES="${MIC_MIN_BYTES:-4000}"        # en deca : pas de verdict possible
+MIC_MIN_NONZERO="${MIC_MIN_NONZERO:-100}"
+MIC_MAX_PROBES="${MIC_MAX_PROBES:-8}"
+
+# Renvoie "<octets_captures> <octets_non_nuls>" sur stdout.
+probe_source() {
+    local src="$1" tmp raw nz
+    tmp="$(mktemp)"
+    # `|| true` : timeout sort en 124, head provoque un SIGPIPE — sous
+    # `set -o pipefail` l'un ou l'autre tuerait le script.
+    { host_pa timeout "$MIC_PROBE_SECS" parec -d "$src" \
+        --format=s16le --rate=8000 --channels=1 2>/dev/null || true; } \
+      | head -c "$MIC_PROBE_BYTES" > "$tmp" 2>/dev/null || true
+    raw="$(wc -c < "$tmp")"; nz="$(tr -d '\000' < "$tmp" | wc -c)"
+    rm -f "$tmp"
+    echo "${raw:-0} ${nz:-0}"
+}
+
+# 0 = signal, 1 = silence numerique, 2 = indetermine (rien capture)
+source_verdict() {
+    local r raw nz
+    r="$(probe_source "$1")"; raw="${r%% *}"; nz="${r##* }"
+    [ "$raw" -ge "$MIC_MIN_BYTES" ] || return 2
+    [ "$nz"  -ge "$MIC_MIN_NONZERO" ] || return 1
+    return 0
+}
+
+host_mic() {
+    command -v parec >/dev/null 2>&1 \
+        || { log "[mic] parec absent — selection micro ignoree"; return 0; }
+    host_pa pactl info >/dev/null 2>&1 \
+        || { log "[mic] pulse hote injoignable — selection micro ignoree"; return 0; }
+
+    local cur rc; cur="$(host_pa pactl get-default-source 2>/dev/null || true)"
+    if [ -n "$cur" ]; then
+        # `|| rc=$?` OBLIGATOIRE : sous `set -e` un appel nu de source_verdict
+        # renvoyant 1 (silence) ou 2 (rien capture) tuerait le script sur place,
+        # sans une ligne de log — panne observee, tres deroutante.
+        rc=0; source_verdict "$cur" || rc=$?
+        case "$rc" in
+            0) log "[mic] source par defaut deja valide : ${cur}"; return 0 ;;
+            1) log "[mic] defaut '${cur}' : SILENCE NUMERIQUE — recherche d'une autre entree..." ;;
+            2) log "[mic] defaut '${cur}' : aucune donnee (peripherique qui ne demarre pas) — recherche..." ;;
+        esac
+    fi
+
+    local src i=0
+    for src in $(host_pa pactl list short sources 2>/dev/null | awk '{print $2}' | grep -v '\.monitor$'); do
+        [ "$src" = "$cur" ] && continue
+        i=$((i + 1)); [ "$i" -gt "$MIC_MAX_PROBES" ] && break
+        rc=0; source_verdict "$src" || rc=$?      # cf. remarque set -e ci-dessus
+        if [ "$rc" = "0" ]; then
+            if host_pa pactl set-default-source "$src" >/dev/null 2>&1; then
+                log "[mic] source par defaut -> ${src} (signal detecte)"
+                log "[mic]   un onglet qui tient deja le micro reste epingle sur"
+                log "[mic]   l'ancien peripherique : recouper/relancer le bouton micro."
+                return 0
+            fi
+        else
+            log "[mic]   ${src} : $([ "$rc" = 1 ] && echo 'silence numerique' || echo 'aucune donnee')"
+        fi
+    done
+
+    log "[mic][!] AUCUNE source micro ne produit de signal (${i} testee(s))."
+    log "[mic][!]   -> micro coupe materiellement (touche/interrupteur) ?"
+    log "[mic][!]   -> mauvais profil UCM : verifier 'pactl list cards' / alsamixer."
+    log "[mic][!]   Sans ca l'echo-test rendra le HP mais jamais la voix."
+    return 0
+}
+
 # ── HÔTE : expose le pulse de l'hôte en TCP (idempotent) ─────────────────────
 host_relay() {
     if [ -S /mnt/wslg/PulseServer ]; then
@@ -133,9 +246,10 @@ EOSH
 cmd="${1:-}"; shift || true
 case "$cmd" in
     host-relay) host_relay ;;
+    host-mic)   host_mic ;;
     container)  container_bridge "${1:-}" "${2:-}" ;;
     test)       container_test "${1:-}" ;;
     down)       container_down "${1:-}" ;;
-    all)        host_relay; container_bridge "${1:-}" "${2:-}"; container_test "${1:-}" ;;
-    *) echo "usage: $0 {host-relay|container <name> [gw]|test <name>|down <name>|all <name> [gw]}" >&2; exit 2 ;;
+    all)        host_relay; host_mic; container_bridge "${1:-}" "${2:-}"; container_test "${1:-}" ;;
+    *) echo "usage: $0 {host-relay|host-mic|container <name> [gw]|test <name>|down <name>|all <name> [gw]}" >&2; exit 2 ;;
 esac
