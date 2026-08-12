@@ -262,9 +262,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     socat ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Branche commune aux 3 dépôts maison ──────────────────────────────────────
+# qemu (-src), osmo_egprs et osmo-egprs-web sont clonés/mis à jour sur CETTE
+# branche, ici comme dans Dockerfile.run. Un seul bouton : `--build-arg
+# OSMO_BRANCH=<autre>` suffit à basculer toute l'image, sans éditer un seul
+# clone. Déclarée juste avant le premier usage pour ne pas invalider le cache
+# des couches qui précèdent.
+ARG OSMO_BRANCH=sms_voice_mt_mo_a50
+
 # Build QEMU fork bbaranoff/qemu (cible arm-softmmu, machine "calypso")
 RUN cd /opt/GSM \
-    && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
+    && git clone --branch "$OSMO_BRANCH" https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
     && cd /opt/GSM/qemu-src \
     && python3 -m venv /root/.venv-qemu \
     && . /root/.venv-qemu/bin/activate \
@@ -341,7 +349,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN update-alternatives --set gcc /usr/bin/gcc-9
 
-RUN git clone https://github.com/bbaranoff/osmo_egprs
+RUN git clone --branch "$OSMO_BRANCH" https://github.com/bbaranoff/osmo_egprs
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
