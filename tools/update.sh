@@ -25,9 +25,16 @@ cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
 
 
 apt update && apt install git -y
+# ── Branche des depots maison ────────────────────────────────────────────────
+# Meme convention que l'ARG OSMO_BRANCH des Dockerfile/Dockerfile.run de cette
+# branche : les trois depots (osmo_egprs, osmo-egprs-web, qemu-src) suivent la
+# MEME branche. Avant ce correctif, ce script ramenait osmo_egprs ET
+# osmo-egprs-web sur "main" a chaque execution — la branche se sabordait
+# elle-meme. Surchargeable :  OSMO_BRANCH=main ./update.sh
+OSMO_BRANCH="${OSMO_BRANCH:-sms_voice_mt_mo_a50}"
 rm -r /opt/osmo-egprs-web
-git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
-cd /opt/osmo-egprs-web && git checkout main
+git clone --branch "$OSMO_BRANCH" https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
+cd /opt/osmo-egprs-web && git checkout "$OSMO_BRANCH"
 UNIT=/etc/systemd/system/osmo-egprs-web.service
 
 # ajoute (ou met à jour) Environment=CAP_IFACE=any sous [Service], idempotent

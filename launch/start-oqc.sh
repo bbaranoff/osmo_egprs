@@ -46,7 +46,7 @@ Cherché dans : ../qemu-src, $GSM_ROOT/qemu-src, ~/qemu-src
 Indiquez son emplacement :
     OQC_ROOT=/chemin/vers/qemu-src ./launch/start-oqc.sh
 ou récupérez-le :
-    git clone https://github.com/bbaranoff/qemu qemu-src
+    git clone --branch sms_voice_mt_mo_a50 https://github.com/bbaranoff/qemu qemu-src
 ERR
     exit 2
 fi

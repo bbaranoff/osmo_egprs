@@ -35,15 +35,22 @@ apt update && apt install git tcpdump binutils-arm-none-eabi -y
 #
 # Doit rester AVANT l'écriture de coeur.env plus bas : ce bloc peut remplacer
 # l'arbre entier, ce qui effacerait un coeur.env posé trop tôt.
+# ── Branche des depots maison ────────────────────────────────────────────────
+# Meme convention que l'ARG OSMO_BRANCH des Dockerfile/Dockerfile.run de cette
+# branche : les trois depots (osmo_egprs, osmo-egprs-web, qemu-src) suivent la
+# MEME branche. Avant ce correctif, ce script ramenait osmo_egprs ET
+# osmo-egprs-web sur "main" a chaque execution — la branche se sabordait
+# elle-meme. Surchargeable :  OSMO_BRANCH=main ./update.sh
+OSMO_BRANCH="${OSMO_BRANCH:-sms_voice_mt_mo_a50}"
 EGPRS_DIR=/opt/GSM/osmo_egprs
 if [ -d "$EGPRS_DIR/.git" ]; then
-    git -C "$EGPRS_DIR" fetch origin main && \
+    git -C "$EGPRS_DIR" fetch origin "$OSMO_BRANCH" && \
     git -C "$EGPRS_DIR" reset --hard FETCH_HEAD && \
-    echo "osmo_egprs : arbre git réaligné sur origin/main"
+    echo "osmo_egprs : arbre git réaligné sur origin/$OSMO_BRANCH"
 else
-    # Arbre nu de l'ISO : pas de dépôt, on retélécharge la branche main.
+    # Arbre nu de l'ISO : pas de dépôt, on retélécharge la branche $OSMO_BRANCH.
     egprs_stage="$(mktemp -d)"
-    if curl -fsSL "https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/main" \
+    if curl -fsSL "https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/$OSMO_BRANCH" \
          | tar -xz -C "$egprs_stage" --strip-components=1 && [ -s "$egprs_stage/start.sh" ]; then
         # On ne détruit l'arbre en place qu'une fois le tarball vérifié complet :
         # un réseau coupé ne doit pas laisser l'ISO sans scripts.
@@ -51,15 +58,15 @@ else
         mkdir -p /opt/GSM
         cp -a "$egprs_stage" "$EGPRS_DIR"
         find "$EGPRS_DIR" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-        echo "osmo_egprs : arbre nu rafraîchi depuis main (tarball)"
+        echo "osmo_egprs : arbre nu rafraîchi depuis $OSMO_BRANCH (tarball)"
     else
         echo "osmo_egprs : récupération impossible (réseau ?) — arbre existant conservé"
     fi
     rm -rf "$egprs_stage"
 fi
 rm -r /opt/osmo-egprs-web
-git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
-cd /opt/osmo-egprs-web && git checkout main
+git clone --branch "$OSMO_BRANCH" https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
+cd /opt/osmo-egprs-web && git checkout "$OSMO_BRANCH"
 UNIT=/etc/systemd/system/osmo-egprs-web.service
 
 # ajoute (ou met à jour) Environment=CAP_IFACE=any sous [Service], idempotent
