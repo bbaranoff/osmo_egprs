@@ -258,7 +258,7 @@ audio_bridge() {
     # gapk : RTP réseau → sink gsm_audio
     local GAPK=/scripts/gapk-start.sh; [ -f "$GAPK" ] || GAPK=/etc/osmocom/gapk-start.sh
     if [ -f "$GAPK" ]; then
-        run_in_tmux "gapk" "GAPK_ALSA_DEV=gsm_out bash '$GAPK' auto gsm gsm_out"
+        run_in_tmux "gapk" "GAPK_ALSA_DEV=gsm_out bash '$GAPK' auto gsmfr gsm_out"
         echo -e "  ${GREEN}✓ gapk auto (RTP réseau → gsm_audio)${NC}"
     else
         echo -e "  ${YELLOW}gapk-start.sh absent — pas de bridge RTP${NC}"
