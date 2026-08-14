@@ -1,5 +1,24 @@
+#!/usr/bin/env bash
+# update.sh — rafraîchit l'arbre osmo_egprs et le dashboard, puis applique les
+# correctifs ISO (feed HLR, routage SMS).
+#
+# [2026-08-14] PAS de `set -e`, VOLONTAIREMENT : ce script enchaîne des étapes
+# « au mieux » (apt, systemctl, VTY HLR) dont l'échec ne doit pas interrompre
+# les suivantes. Les endroits réellement dangereux sont gardés UN PAR UN
+# ci-dessous — un `set -e` global changerait le comportement de tout le reste
+# sans qu'on puisse le tester ailleurs que sur une ISO gravée.
+
+# Branche suivie par les dépôts maison. Surchargeable : OSMO_BRANCH=x ./update.sh
+OSMO_BRANCH="${OSMO_BRANCH:-main}"
+
 # 1) tronquer juste après la ligne Disclaimer (gardée)
-awk '1; /Disclaimer/{exit}' /etc/profile.d/01-keyboard-setup.sh > /tmp/kb.new
+# [2026-08-14] GARDE : sans le test d'existence, `awk` sur un fichier absent
+# produisait un /tmp/kb.new VIDE, et le `cat > …` de l'étape 3 TRONQUAIT alors
+# /etc/profile.d/01-keyboard-setup.sh au lieu de le compléter. Sur une machine
+# qui n'est pas l'ISO, ça effaçait le fichier au lieu de ne rien faire.
+KB=/etc/profile.d/01-keyboard-setup.sh
+if [ -s "$KB" ]; then
+awk '1; /Disclaimer/{exit}' "$KB" > /tmp/kb.new
 # 2) appender l'animation — heredoc QUOTÉ => zéro échappement
 apt update && apt install -y git socat
 cat >> /tmp/kb.new <<'ANIM'
@@ -19,9 +38,17 @@ done
 printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered — MT end-to-end Message : Bastien phone home\033[0m\n' "$ph" '' "$ph"
 printf '\033[?25h'
 ANIM
-sed -i -e 's/a5 0/a5 0/g' /etc/osmocom/osmo-*sc.cfg
 # 3) réécrire dans le même inode
-cat /tmp/kb.new > /etc/profile.d/01-keyboard-setup.sh
+cat /tmp/kb.new > "$KB"
+else
+    echo "01-keyboard-setup.sh absent ou vide — animation non posée (machine hors ISO)"
+fi
+
+# [2026-08-14] NEUTRALISÉE : `sed -i -e 's/a5 0/a5 0/g'` remplaçait « a5 0 » par
+# « a5 0 » — un no-op qui ne changeait que la date des fichiers. L'intention
+# était probablement 's/a5 1/a5 0/' (forcer A5/0), mais je ne devine pas un
+# réglage de chiffrement : décommente en corrigeant le motif si c'est bien ça.
+# sed -i -e 's/a5 1/a5 0/g' /etc/osmocom/osmo-*sc.cfg
 
 
 apt update && apt install git tcpdump binutils-arm-none-eabi -y
@@ -35,15 +62,41 @@ apt update && apt install git tcpdump binutils-arm-none-eabi -y
 #
 # Doit rester AVANT l'écriture de coeur.env plus bas : ce bloc peut remplacer
 # l'arbre entier, ce qui effacerait un coeur.env posé trop tôt.
-EGPRS_DIR=/opt/GSM/osmo_egprs
+# [2026-08-14] EGPRS_DIR n'est PLUS codé en dur sur /opt/GSM/osmo_egprs. Ce
+# chemin est celui de l'ISO et du conteneur ; sur une machine de dev le dépôt
+# vit ailleurs (ex. /home/nirvana/osmo_egprs). update.sh y créait alors un
+# SECOND arbre dans /opt/GSM au lieu de mettre à jour celui d'où on l'avait
+# lancé — « mise à jour » silencieusement sans effet sur le bon arbre.
+# On prend d'abord l'arbre qui CONTIENT ce script, et on retombe sur le chemin
+# historique sinon. Surchargeable : EGPRS_DIR=/chemin ./update.sh
+_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "${EGPRS_DIR:-}" ]; then
+    if [ -d "$_here/.git" ] && [ -s "$_here/start.sh" ]; then
+        EGPRS_DIR="$_here"
+    else
+        EGPRS_DIR=/opt/GSM/osmo_egprs
+    fi
+fi
+echo "osmo_egprs : arbre ciblé = $EGPRS_DIR (branche $OSMO_BRANCH)"
 if [ -d "$EGPRS_DIR/.git" ]; then
-    git -C "$EGPRS_DIR" fetch origin main && \
+    # [2026-08-14] GARDE : `reset --hard` DÉTRUIT tout travail non commité. Tant
+    # que EGPRS_DIR valait /opt/GSM (arbre jetable), c'était sans conséquence ;
+    # depuis qu'il peut désigner l'arbre de développement d'où l'on lance le
+    # script, ça effacerait les modifications en cours — y compris celles de
+    # update.sh lui-même, en pleine exécution. On refuse au lieu d'écraser.
+    if [ -n "$(git -C "$EGPRS_DIR" status --porcelain 2>/dev/null)" ]; then
+        echo "osmo_egprs : arbre SALE (modifications non commitées) — reset --hard REFUSÉ" >&2
+        git -C "$EGPRS_DIR" status --short >&2
+        echo "  commite ou remise (git stash) d'abord, ou : EGPRS_DIR=/autre/chemin $0" >&2
+    else
+    git -C "$EGPRS_DIR" fetch origin "$OSMO_BRANCH" && \
     git -C "$EGPRS_DIR" reset --hard FETCH_HEAD && \
-    echo "osmo_egprs : arbre git réaligné sur origin/main"
+    echo "osmo_egprs : arbre git réaligné sur origin/$OSMO_BRANCH"
+    fi
 else
-    # Arbre nu de l'ISO : pas de dépôt, on retélécharge la branche main.
+    # Arbre nu de l'ISO : pas de dépôt, on retélécharge la branche.
     egprs_stage="$(mktemp -d)"
-    if curl -fsSL "https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/main" \
+    if curl -fsSL "https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/$OSMO_BRANCH" \
          | tar -xz -C "$egprs_stage" --strip-components=1 && [ -s "$egprs_stage/start.sh" ]; then
         # On ne détruit l'arbre en place qu'une fois le tarball vérifié complet :
         # un réseau coupé ne doit pas laisser l'ISO sans scripts.
@@ -57,23 +110,46 @@ else
     fi
     rm -rf "$egprs_stage"
 fi
-rm -r /opt/osmo-egprs-web
-git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web
-cd /opt/osmo-egprs-web && git checkout main
+# [2026-08-14] Le `rm -r /opt/osmo-egprs-web` suivi d'un `git clone` n'était
+# protégé par RIEN : réseau coupé = dashboard détruit et rien pour le remplacer.
+# Le bloc osmo_egprs juste au-dessus prend pourtant exactement cette précaution
+# (« on ne détruit l'arbre en place qu'une fois le tarball vérifié complet ») —
+# la ligne suivante l'avait oubliée. On clone À CÔTÉ, on ne remplace qu'en cas
+# de succès.
+web_stage="$(mktemp -d)/osmo-egprs-web"
+if git clone --branch "$OSMO_BRANCH" https://github.com/bbaranoff/osmo-egprs-web "$web_stage"; then
+    rm -rf /opt/osmo-egprs-web
+    mv "$web_stage" /opt/osmo-egprs-web
+    echo "osmo-egprs-web : rafraîchi sur $OSMO_BRANCH"
+else
+    echo "osmo-egprs-web : clone impossible (réseau ?) — arbre existant CONSERVÉ" >&2
+fi
+rm -rf "$(dirname "$web_stage")"
+
 UNIT=/etc/systemd/system/osmo-egprs-web.service
 
 # ajoute (ou met à jour) Environment=CAP_IFACE=any sous [Service], idempotent
-if grep -q '^Environment=CAP_IFACE=' "$UNIT"; then
-  sed -i 's|^Environment=CAP_IFACE=.*|Environment=CAP_IFACE=any|' "$UNIT"
+# [2026-08-14] GARDE : sans le test d'existence, sur une machine sans l'unité
+# (tout ce qui n'est pas l'ISO) le `sed -i` échouait puis `systemctl restart`
+# aussi — sans `set -e`, deux erreurs qui défilaient sans rien arrêter et sans
+# que personne ne comprenne pourquoi le dashboard ne redémarrait pas.
+if [ -f "$UNIT" ]; then
+    if grep -q '^Environment=CAP_IFACE=' "$UNIT"; then
+      sed -i 's|^Environment=CAP_IFACE=.*|Environment=CAP_IFACE=any|' "$UNIT"
+    else
+      sed -i '/^\[Service\]/a Environment=CAP_IFACE=any' "$UNIT"
+    fi
+    systemctl daemon-reload
+    systemctl restart osmo-egprs-web.service
+    # vérif
+    systemctl show osmo-egprs-web.service -p Environment
 else
-  sed -i '/^\[Service\]/a Environment=CAP_IFACE=any' "$UNIT"
+    echo "$UNIT absent — service non configuré ici (machine hors ISO)"
 fi
 
-systemctl daemon-reload
-systemctl restart osmo-egprs-web.service
-
-# vérif
-systemctl show osmo-egprs-web.service -p Environment
+# Ancien emplacement, sans le /GSM/ : nettoyage d'héritage. À NE PAS confondre
+# avec $EGPRS_DIR (/opt/GSM/osmo_egprs) — deux chemins qui ne diffèrent que par
+# « GSM/ », avec un rm -rf dessus.
 rm -rf /opt/osmo_egprs
 
 # ═══════════════════════════════════════════════════════════════════════════════
