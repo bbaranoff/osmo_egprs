@@ -58,6 +58,60 @@ load_gsm_sinks() {
     done
 }
 
+# ── Loopback local : gsm_audio.monitor → la carte son de la machine ──────────
+# [2026-08-14] CE MAILLON N'EXISTAIT NULLE PART. Le commentaire de ensure_pulse
+# (« en local l'hôte entend via le module-loopback vers ses enceintes ») le
+# SUPPOSE déjà présent, mais aucun chemin du dépôt ne le chargeait :
+#   - enable_user_loopback() de start.sh n'est appelée par personne ;
+#   - network/loopback.sh n'est lancé que sciemment, à la main.
+# Résultat mesuré dans la VM osmo-egprs : gsm_audio RUNNING (mobile écrit
+# dedans), gsm_audio.monitor IDLE (personne ne lit), sortie ALSA SUSPENDED,
+# /proc/asound/card0/pcm0p/sub0/status = "closed". Appel établi, zéro son.
+# gsm_audio est un module-null-sink : sans consommateur, la voix descendante est
+# jetée PAR CONSTRUCTION. Ce n'est pas une panne, c'est un maillon manquant.
+#
+# ⚠️ Le choix du sink n'est pas cosmétique : reboucler sur gsm_audio ou gsm_mic
+# recrée la boucle fermée du 08/08 (cf. ensure_gapk : « les mobiles écrivent
+# dans gsm_out, on les rejouerait dans leur propre uplink »). On exclut donc
+# explicitement les deux null-sinks et on ne garde qu'une sortie matérielle.
+LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-20}"
+
+ensure_local_loopback() {
+    [ "${AUDIO:-1}" = "1" ] || return 0
+    [ "${AUDIO_LOCAL_LOOPBACK:-1}" = "1" ] || {
+        echo -e "  ${YELLOW}[audio] loopback local désactivé (AUDIO_LOCAL_LOOPBACK=0)${NC}"; return 0; }
+    pactl info >/dev/null 2>&1 || return 0
+
+    pactl list short sources 2>/dev/null | grep -qw 'gsm_audio.monitor' || {
+        echo -e "  ${YELLOW}[audio] gsm_audio.monitor absent — loopback local ignoré${NC}"; return 0; }
+
+    # Sortie matérielle = le sink par défaut, SAUF si c'est un de nos null-sinks.
+    local sink
+    sink="$(pactl get-default-sink 2>/dev/null || true)"
+    case "$sink" in
+        ''|gsm_audio|gsm_mic|@*)
+            sink="$(pactl list short sinks 2>/dev/null \
+                    | awk '$2 != "gsm_audio" && $2 != "gsm_mic" { print $2; exit }')" ;;
+    esac
+    [ -n "$sink" ] || {
+        echo -e "  ${YELLOW}[audio] aucune sortie matérielle — loopback local ignoré${NC}"; return 0; }
+
+    # Idempotent : ne pas empiler un 2e loopback (voix doublée + écho).
+    if pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
+         | grep -F 'source=gsm_audio.monitor' | grep -qF "sink=${sink}"; then
+        echo -e "  ${GREEN}[audio] loopback local déjà en place → ${sink}${NC}"
+        return 0
+    fi
+
+    if pactl load-module module-loopback \
+            source=gsm_audio.monitor sink="$sink" \
+            latency_msec="$LOOPBACK_LATENCY_MSEC" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}[audio] loopback local chargé : gsm_audio.monitor → ${sink} (${LOOPBACK_LATENCY_MSEC} ms)${NC}"
+    else
+        echo -e "  ${YELLOW}[audio] échec du loopback local vers ${sink}${NC}"
+    fi
+}
+
 # Post-condition : les PCM que `mobile` va réellement ouvrir s'ouvrent-ils ?
 # Tester le sink avec `pactl list sinks` ne suffit pas — c'est le mapping ALSA
 # de /etc/asound.conf qui casse (gsm_in → gsm_mic.monitor). On ouvre pour de
@@ -120,6 +174,7 @@ ensure_pulse() {
         done
         echo -e "  ${GREEN}[audio] PulseAudio déjà actif (sinks gsm_audio + gsm_mic uniques assurés)${NC}"
         assert_audio_devices || true
+        ensure_local_loopback
         return 0
     fi
 
@@ -179,6 +234,7 @@ ensure_pulse() {
         load_gsm_sinks
         echo -e "  ${GREEN}[audio] PulseAudio prêt (sinks gsm_audio + gsm_mic) @ ${PULSE_SOCK}${NC}"
         assert_audio_devices || true
+        ensure_local_loopback
     else
         echo -e "  ${YELLOW}[audio] PulseAudio injoignable — audio dégradé${NC}"
         echo -e "  ${YELLOW}        → voir ${LOG_DIR}/pulse-system.log${NC}"

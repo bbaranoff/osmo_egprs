@@ -424,13 +424,15 @@ fi
 # ── Étape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
 echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
-mkdir -p "$P"/{scripts,configs,checks,helpers}
+# [2026-08-14] `lib` ajouté : scripts/audio-local-loopback.sh source lib/audio.sh.
+# Sans ce répertoire l'ISO embarquait un wrapper qui ne pouvait pas se sourcer.
+mkdir -p "$P"/{scripts,configs,checks,helpers,lib}
 for f in start.sh start-direct.sh build.sh network/loopback.sh tools/vty-menu.sh tools/vty-connect.exp \
          network/firewall-wan.sh network/setup-wan-interop.sh network/setup-wan-sms.sh; do
     [ -f "$DIR/$f" ] && cp "$DIR/$f" "$P/$f" && chmod +x "$P/$f"
 done
 ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
-for d in scripts configs checks helpers; do
+for d in scripts configs checks helpers lib; do
     [ -d "$DIR/$d" ] && cp -r "$DIR/$d/." "$P/$d/" && find "$P/$d" -name "*.sh" -exec chmod +x {} \;
 done
 [ -f "$DIR/Dockerfile" ]     && cp "$DIR/Dockerfile"     "$P/"
@@ -713,6 +715,16 @@ After=sound.target
 Type=forking
 ExecStart=/usr/bin/pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 --log-target=file:/var/log/osmocom/pulse-system.log
 ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
+# [2026-08-14] Sans ceci, gsm_audio (module-null-sink) n'a AUCUN consommateur :
+# la voix descendante y est jetée par construction, la sortie ALSA reste
+# SUSPENDED et l'appel est muet. Le loopback est le maillon qui manquait — il
+# est posé ici, par le démon lui-même, donc il survit à un restart du service.
+# Non fatal (le script sort 0 quoi qu'il arrive) : l'audio ne doit jamais
+# empêcher la pile de monter. AUDIO_LOCAL_LOOPBACK=0 le neutralise.
+# La racine d'installation varie selon l'origine (/opt/osmo_egprs pour l'ISO,
+# /opt/GSM/osmo_egprs sur les machines montées à la main) — on prend la 1re qui
+# existe au lieu d'en coder une en dur.
+ExecStartPost=/bin/sh -c 'for r in /opt/GSM/osmo_egprs /opt/osmo_egprs /etc/osmocom/osmo_egprs; do [ -x "$r/scripts/audio-local-loopback.sh" ] && exec "$r/scripts/audio-local-loopback.sh" 30; done; exit 0'
 Restart=on-failure
 RestartSec=5
 [Install]
