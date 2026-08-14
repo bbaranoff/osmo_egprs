@@ -84,14 +84,51 @@ if [ -d "$EGPRS_DIR/.git" ]; then
     # depuis qu'il peut désigner l'arbre de développement d'où l'on lance le
     # script, ça effacerait les modifications en cours — y compris celles de
     # update.sh lui-même, en pleine exécution. On refuse au lieu d'écraser.
-    if [ -n "$(git -C "$EGPRS_DIR" status --porcelain 2>/dev/null)" ]; then
-        echo "osmo_egprs : arbre SALE (modifications non commitées) — reset --hard REFUSÉ" >&2
-        git -C "$EGPRS_DIR" status --short >&2
+    # `--untracked-files=no` est ESSENTIEL, et pas un détail de confort :
+    #   1. `reset --hard` ne touche QUE les fichiers suivis. Les non suivis ne
+    #      risquent rien, les compter serait refuser pour un danger inexistant.
+    #   2. update.sh génère lui-même un fichier non suivi ($envdir/coeur.env,
+    #      plus bas). Sans cette option, le tout premier passage rendait l'arbre
+    #      « sale » DÉFINITIVEMENT et le pull était refusé à chaque exécution
+    #      suivante — le script se bloquait lui-même. Constaté au test.
+    if [ -n "$(git -C "$EGPRS_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+        echo "osmo_egprs : fichiers SUIVIS modifiés non commités — reset --hard REFUSÉ" >&2
+        git -C "$EGPRS_DIR" status --short --untracked-files=no >&2
         echo "  commite ou remise (git stash) d'abord, ou : EGPRS_DIR=/autre/chemin $0" >&2
+    elif git -C "$EGPRS_DIR" fetch origin "$OSMO_BRANCH" \
+      && git -C "$EGPRS_DIR" reset --hard FETCH_HEAD; then
+        echo "osmo_egprs : arbre git réaligné sur origin/$OSMO_BRANCH"
     else
-    git -C "$EGPRS_DIR" fetch origin "$OSMO_BRANCH" && \
-    git -C "$EGPRS_DIR" reset --hard FETCH_HEAD && \
-    echo "osmo_egprs : arbre git réaligné sur origin/$OSMO_BRANCH"
+        # [2026-08-14] ÉCHEC DU PULL → on repart d'un clone neuf.
+        #
+        # ⚠️ RÉSERVÉ À L'ARBRE JETABLE /opt/GSM/osmo_egprs. Depuis que EGPRS_DIR
+        #    est auto-détecté, il peut désigner un arbre de DÉVELOPPEMENT : y
+        #    supprimer le dépôt sur une simple coupure réseau détruirait du
+        #    travail. Ailleurs, on refuse et on le dit.
+        #
+        # ⚠️ ORDRE : on clone À CÔTÉ d'abord, on ne supprime qu'une fois le clone
+        #    réussi. C'est la règle déjà appliquée deux fois dans ce fichier (le
+        #    tarball juste en dessous, et osmo-egprs-web plus bas) : un `rm` posé
+        #    AVANT le clone laisse l'ISO SANS SCRIPTS si le réseau lâche entre
+        #    les deux — et sans scripts, plus rien ne peut la réparer.
+        echo "osmo_egprs : pull ÉCHOUÉ sur $EGPRS_DIR" >&2
+        if [ "$EGPRS_DIR" = /opt/GSM/osmo_egprs ]; then
+            egprs_fresh="$(mktemp -d)/osmo_egprs"
+            if git clone --branch "$OSMO_BRANCH" \
+                   https://github.com/bbaranoff/osmo_egprs "$egprs_fresh"; then
+                rm -rf "$EGPRS_DIR"
+                mkdir -p /opt/GSM
+                mv "$egprs_fresh" "$EGPRS_DIR"
+                find "$EGPRS_DIR" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+                echo "osmo_egprs : arbre reconstruit par clone neuf ($OSMO_BRANCH)"
+            else
+                echo "osmo_egprs : clone de secours ÉCHOUÉ — arbre existant CONSERVÉ" >&2
+            fi
+            rm -rf "$(dirname "$egprs_fresh")"
+        else
+            echo "  arbre NON jetable ($EGPRS_DIR) — aucune suppression." >&2
+            echo "  répare-le à la main, ou relance avec EGPRS_DIR=/opt/GSM/osmo_egprs" >&2
+        fi
     fi
 else
     # Arbre nu de l'ISO : pas de dépôt, on retélécharge la branche.
@@ -104,7 +141,7 @@ else
         mkdir -p /opt/GSM
         cp -a "$egprs_stage" "$EGPRS_DIR"
         find "$EGPRS_DIR" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-        echo "osmo_egprs : arbre nu rafraîchi depuis main (tarball)"
+        echo "osmo_egprs : arbre nu rafraîchi depuis $OSMO_BRANCH (tarball)"
     else
         echo "osmo_egprs : récupération impossible (réseau ?) — arbre existant conservé"
     fi
