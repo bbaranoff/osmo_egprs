@@ -424,7 +424,7 @@ fi
 # ── Étape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
 echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
-# [2026-08-14] `lib` ajouté : scripts/audio-local-loopback.sh source lib/audio.sh.
+# [2026-08-14] `lib` ajouté : scripts/audio-chain.sh source lib/audio.sh.
 # Sans ce répertoire l'ISO embarquait un wrapper qui ne pouvait pas se sourcer.
 mkdir -p "$P"/{scripts,configs,checks,helpers,lib}
 for f in start.sh start-direct.sh build.sh network/loopback.sh tools/vty-menu.sh tools/vty-connect.exp \
@@ -703,10 +703,49 @@ chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 if [ -f "$ROOTFS/etc/pulse/system.pa" ]; then
     sed -i 's|^load-module module-native-protocol-unix.*|load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native|' \
         "$ROOTFS/etc/pulse/system.pa"
-    grep -q 'sink_name=gsm_audio' "$ROOTFS/etc/pulse/system.pa" || \
-        echo 'load-module module-null-sink sink_name=gsm_audio format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Audio' \
-        >> "$ROOTFS/etc/pulse/system.pa"
+    # [2026-08-14] gsm_mic MANQUAIT ICI. Seul gsm_audio était déclaré, alors que
+    # lib/audio.sh traite les deux sinks comme SOLIDAIRES (GSM_SINKS) et que
+    # configs/asound.conf fait pointer `pcm.gsm_in` sur `gsm_mic.monitor`.
+    # Conséquence mesurée dans la VM : `pactl list short sources` sans gsm_mic
+    # → gapk_io n'initialise pas la capture et ABANDONNE LES DEUX SENS
+    #   (pq_alsa.c:168 « Couldn't init ALSA device 'gsm_in' » puis
+    #    gapk_io.c:468 « Failed to initialize GAPK I/O »)
+    # → appel parfaitement établi et TOTALEMENT MUET. Les deux sinks doivent
+    # être déclarés ensemble, ici, comme le dit déjà lib/audio.sh.
+    for _s in "gsm_audio:GSM_Audio" "gsm_mic:GSM_Mic"; do
+        _n="${_s%%:*}"; _d="${_s##*:}"
+        grep -q "sink_name=${_n}\b" "$ROOTFS/etc/pulse/system.pa" || \
+            echo "load-module module-null-sink sink_name=${_n} format=s16le rate=8000 channels=1 sink_properties=device.description=${_d}" \
+            >> "$ROOTFS/etc/pulse/system.pa"
+    done
 fi
+# [2026-08-14] /etc/asound.conf N'ÉTAIT DÉPLOYÉ NULLE PART sur l'ISO. Il l'est
+# par ensure_pulse() de lib/audio.sh — mais lib/audio.sh n'est sourcé par
+# personne (son appelant annoncé, run_modules/25-audio.sh, n'existe pas). Sans
+# ce fichier les PCM `gsm_out`/`gsm_in` que `mobile` ouvre n'existent pas, donc
+# la voix TCH n'atteint jamais gsm_audio. Vérifié absent dans la VM au boot.
+if [ -f "$DIR/configs/asound.conf" ]; then
+    cp -f "$DIR/configs/asound.conf" "$ROOTFS/etc/asound.conf"
+    echo -e "  ${GREEN}✓${NC} /etc/asound.conf (PCM gsm_out/gsm_in → sinks PulseAudio)"
+fi
+cat > "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh" <<'ACHAIN'
+#!/bin/bash
+# osmo-audio-chain.sh — ferme la chaîne audio locale après le démarrage de
+# PulseAudio. Appelé en ExecStartPost par osmo-pulse.service.
+#   1. /etc/asound.conf présent (PCM gsm_out/gsm_in)
+#   2. les DEUX null-sinks gsm_audio + gsm_mic chargés
+#   3. le module-loopback gsm_audio.monitor → carte son
+# Sans (2), gapk_io abandonne LES DEUX SENS ; sans (3), la voix descendante est
+# jetée par le null-sink. Toujours exit 0 : l'audio ne doit jamais empêcher la
+# pile de monter. AUDIO=0 ou AUDIO_LOCAL_LOOPBACK=0 neutralisent.
+set -u
+for r in /opt/GSM/osmo_egprs /opt/osmo_egprs /etc/osmocom/osmo_egprs; do
+    [ -x "$r/scripts/audio-chain.sh" ] && exec "$r/scripts/audio-chain.sh" "${1:-30}"
+done
+exit 0
+ACHAIN
+chmod +x "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh"
+
 cat > "$ROOTFS/etc/systemd/system/osmo-pulse.service" <<'EOF'
 [Unit]
 Description=osmo_egprs PulseAudio system daemon (GSM audio)
@@ -721,10 +760,11 @@ ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
 # est posé ici, par le démon lui-même, donc il survit à un restart du service.
 # Non fatal (le script sort 0 quoi qu'il arrive) : l'audio ne doit jamais
 # empêcher la pile de monter. AUDIO_LOCAL_LOOPBACK=0 le neutralise.
-# La racine d'installation varie selon l'origine (/opt/osmo_egprs pour l'ISO,
-# /opt/GSM/osmo_egprs sur les machines montées à la main) — on prend la 1re qui
-# existe au lieu d'en coder une en dur.
-ExecStartPost=/bin/sh -c 'for r in /opt/GSM/osmo_egprs /opt/osmo_egprs /etc/osmocom/osmo_egprs; do [ -x "$r/scripts/audio-local-loopback.sh" ] && exec "$r/scripts/audio-local-loopback.sh" 30; done; exit 0'
+# Passe par un wrapper /usr/local/sbin (même patron que osmo-update.sh) : une
+# directive `ExecStartPost=/bin/sh -c "... \" ... \" ..."` avec guillemets
+# imbriqués est ACCEPTÉE par `systemctl cat` mais rejetée par le parseur —
+# `systemctl show -p ExecStartPost` revient alors VIDE et rien ne s'exécute.
+ExecStartPost=/usr/local/sbin/osmo-audio-chain.sh 30
 Restart=on-failure
 RestartSec=5
 [Install]

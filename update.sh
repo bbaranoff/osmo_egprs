@@ -287,3 +287,64 @@ mkdir -p /etc/osmocom /var/log/osmocom
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 } > "$SMS_ROUTING"
 echo "routage SMS écrit : $SMS_ROUTING ($ISO_N_MS MS, natif 127.0.0.1)"
+
+# ── 4. chaîne audio locale : asound.conf + les DEUX null-sinks + loopback ────
+# [2026-08-14] AJOUTÉ ICI PARCE QUE update.sh EST LE SEUL LEVIER QUI REPASSE À
+# CHAQUE BOOT. Les ISO déjà gravées ont un build-iso.sh antérieur au correctif ;
+# ce bloc les rattrape sans regraver. Trois maillons manquaient — constatés sur
+# la VM osmo-egprs, appel établi et TOTALEMENT muet :
+#
+#   a) /etc/asound.conf ABSENT → les PCM `gsm_out`/`gsm_in` que `mobile` ouvre
+#      n'existent pas → la voix TCH n'atteint jamais gsm_audio.
+#   b) le sink `gsm_mic` NON DÉCLARÉ dans system.pa (seul gsm_audio l'était),
+#      alors que asound.conf pointe `pcm.gsm_in` sur `gsm_mic.monitor` → gapk_io
+#      échoue à ouvrir la capture et ABANDONNE LES DEUX SENS (gapk_io.c:468).
+#   c) aucun `module-loopback` sur gsm_audio.monitor → gsm_audio est un
+#      null-sink, la voix descendante y est jetée par construction.
+#
+# Tout est idempotent et non fatal : l'audio ne doit jamais bloquer le boot.
+AUDIO_SRC="$EGPRS_DIR/configs/asound.conf"
+if [ -f "$AUDIO_SRC" ] && ! cmp -s "$AUDIO_SRC" /etc/asound.conf 2>/dev/null; then
+    cp -f "$AUDIO_SRC" /etc/asound.conf && echo "asound.conf déployé (PCM gsm_out/gsm_in)"
+fi
+
+SYSPA=/etc/pulse/system.pa
+if [ -f "$SYSPA" ]; then
+    for _s in "gsm_audio:GSM_Audio" "gsm_mic:GSM_Mic"; do
+        _n="${_s%%:*}"; _d="${_s##*:}"
+        if ! grep -q "sink_name=${_n}\b" "$SYSPA"; then
+            echo "load-module module-null-sink sink_name=${_n} format=s16le rate=8000 channels=1 sink_properties=device.description=${_d}" >> "$SYSPA"
+            echo "system.pa : null-sink ${_n} ajouté"
+        fi
+    done
+fi
+
+# Wrapper + drop-in systemd. ATTENTION au drop-in : une directive
+# `ExecStartPost=/bin/sh -c "... \" ... \" ..."` avec guillemets imbriqués passe
+# `systemctl cat` mais est REJETÉE par le parseur — `systemctl show -p
+# ExecStartPost` revient VIDE et rien ne s'exécute. D'où le wrapper sans quotes.
+cat > /usr/local/sbin/osmo-audio-chain.sh <<'ACHAIN'
+#!/bin/bash
+set -u
+for r in /opt/GSM/osmo_egprs /opt/osmo_egprs /etc/osmocom/osmo_egprs; do
+    [ -x "$r/scripts/audio-chain.sh" ] && exec "$r/scripts/audio-chain.sh" "${1:-30}"
+done
+exit 0
+ACHAIN
+chmod +x /usr/local/sbin/osmo-audio-chain.sh
+
+if [ -f /etc/systemd/system/osmo-pulse.service ]; then
+    mkdir -p /etc/systemd/system/osmo-pulse.service.d
+    cat > /etc/systemd/system/osmo-pulse.service.d/10-audio-chain.conf <<'DROPIN'
+[Service]
+ExecStartPost=/usr/local/sbin/osmo-audio-chain.sh 30
+DROPIN
+    systemctl daemon-reload 2>/dev/null || true
+    # Juge : `systemctl cat` montre le FICHIER, `show` montre ce que systemd a
+    # réellement parsé. C'est `show` qui fait foi.
+    if [ -n "$(systemctl show osmo-pulse -p ExecStartPost --value 2>/dev/null)" ]; then
+        echo "chaîne audio : drop-in osmo-pulse actif"
+    else
+        echo "chaîne audio : drop-in osmo-pulse NON pris en compte par systemd" >&2
+    fi
+fi
