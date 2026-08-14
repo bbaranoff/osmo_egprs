@@ -23,24 +23,18 @@
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
-# ── Ce script tourne DANS le conteneur. Refus net s'il est lancé sur l'HÔTE ────
-# [2026-08-12] Symétrique du garde de start.sh. Ici la confusion coûte plus cher
-# que dans l'autre sens : sur l'hôte, /opt/GSM/qemu-src n'existe pas, mais des
-# chemins comme /tmp/osmo-nitb/logs, eux, se créent tout seuls — on repart donc
-# avec un environnement à moitié construit, des journaux à un endroit où rien ne
-# les lira, et un « run.sh introuvable » qui ne dit pas la vraie cause.
+# ── [2026-08-14] GARDE « on doit être dans Docker » RETIRÉE ───────────────────
+# Elle exigeait /.dockerenv ET /etc/docker-entrypoint-cmd, et sortait en exit 1
+# quand l'un manquait. Sur l'ISO il n'y a pas de Docker : les deux fichiers sont
+# absents, la garde bloquait donc le seul lanceur utilisable là-bas. Retirée sur
+# demande explicite — c'est le cas d'usage ISO qui prime.
 #
-# Même discriminant que start.sh, vérifié dans les deux sens le 12/08 :
-# /.dockerenv ET /etc/docker-entrypoint-cmd (posé par scripts/entrypoint.sh).
-# On exige les deux, et ici on refuse quand ils sont ABSENTS.
-if [ ! -f /.dockerenv ] || [ ! -f /etc/docker-entrypoint-cmd ]; then
-    printf '\033[1;31mVous êtes sur l'"'"'hôte ! Utilisez start.sh\033[0m\n' >&2
-    printf '\n  \033[0;36m./start.sh\033[0m              (lanceur hôte : image, réseaux, docker run)\n' >&2
-    printf '  \033[0;36m./start-nitb.sh\033[0m         (le même, sur l'"'"'image osmocom-nitb)\n' >&2
-    printf '\n  start-direct.sh prépare l'"'"'environnement Calypso et lance run.sh À\n' >&2
-    printf '  L'"'"'INTÉRIEUR du conteneur ; start.sh l'"'"'y appelle pour vous.\n' >&2
-    exit 1
-fi
+# CE QU'ON PERD, et c'était sa raison d'être (constat du 12/08) : lancé par
+# erreur sur un HÔTE qui a Docker, ce script repart sur un environnement à
+# moitié construit — /opt/GSM/qemu-src n'y existe pas, mais /tmp/osmo-nitb/logs,
+# lui, se crée tout seul — et meurt sur un « run.sh introuvable » qui ne désigne
+# pas la vraie cause. Si ce symptôme réapparaît sur une machine avec Docker,
+# c'est ça : là-bas le lanceur est ./start.sh (ou ./start-nitb.sh), pas celui-ci.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
