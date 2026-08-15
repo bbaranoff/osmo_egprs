@@ -269,7 +269,15 @@ apply_config_templates() {
 
     generate_pjsip_interop_trunks     "$op_id" "$n_operators" >> "$dest/asterisk/pjsip.conf"
     generate_extensions_interop_out   "$op_id" "$n_operators" >> "$dest/asterisk/extensions.conf"
-    _generate_sms_routing_conf_fallback "$op_id" "$n_operators" >  "$dest/osmocom/sms-routing.conf"
+    # Routes SMS (fallback = generateur par defaut). Condition d'echec : les
+    # MSISDN reels (op*10000+1, +2) absents OU route parasite (op0000/op000).
+    # Si non remplie -> regen.
+    _src="$dest/osmocom/sms-routing.conf"
+    _generate_sms_routing_conf_fallback "$op_id" "$n_operators" >  "$_src"
+    if ! grep -q "^$(( op_id * 10000 + 1 )) = " "$_src" 2>/dev/null \
+       || grep -qE "^${op_id}0000? = " "$_src" 2>/dev/null; then
+        _generate_sms_routing_conf_fallback "$op_id" "$n_operators" >  "$_src"
+    fi
 }
 
 # ── Affichage de l'effectif ──────────────────────────────────────────────────

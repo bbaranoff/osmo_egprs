@@ -106,13 +106,11 @@ _generate_sms_routing_conf_fallback() {
     for i in $(seq 1 "$n_operators"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
     printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        printf '%s0000 = %s\n' "$i" "$i"
         # Préfixe à CINQ chiffres : la maquette numérote les abonnés i0001,
         # i0002… (MS#1 = 10001, MS#2 = 10002). Sans lui, aucun préfixe ne
         # couvrait ces numéros et le relais rejetait tout SMS local avec
         # « No route for destination ». Constaté le 2026-07-29.
-        printf '%s000 = %s\n' "$i" "$i"
-        for j in 001 002 003 004 005; do printf '%s%s = %s\n' "$i" "$j" "$i"; done
+        for ms in 1 2; do printf '%s = %s\n' "$(( i * 10000 + ms ))" "$i"; done   # MSISDN exacts op*10000+ms (10001,10002,...)
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }

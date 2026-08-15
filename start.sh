@@ -381,8 +381,7 @@ _generate_sms_routing_conf_fallback() {
     done
     printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        printf '%s0000 = %s\n' "$i" "$i"
-        for j in 001 002 003 004 005; do printf '%s%s = %s\n' "$i" "$j" "$i"; done
+        for ms in 1 2; do printf '%s = %s\n' "$(( i * 10000 + ms ))" "$i"; done   # MSISDN exacts op*10000+ms (10001,10002,...) — PAS de concatenation
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }

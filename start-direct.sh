@@ -318,6 +318,29 @@ say_end " OK " "$C_OK" "Génération mobile MS#2 (faketrx)" "$MS2_CFG"
 export MOBILE_CFG_MS1="$MS1_CFG"
 export MOBILE_CFG_MS2="$MS2_CFG"
 export CALYPSO_MS2_CFG="$MS2_CFG"
+
+# --- Routes SMS (MSISDN reels des abonnes) -----------------------------------
+cat > "${OSMOCOM_CFG:-/etc/osmocom}/sms-routing.conf" <<'SMSROUTES'
+# sms-routing.conf
+
+[local]
+operator_id = 1
+sc_address  = 19990011444
+
+[operators]
+1 = 172.20.0.11
+
+[routes]
+10001 = 1
+10002 = 1
+
+[relay]
+port = 7890
+connect_timeout = 10
+retry_count = 3
+retry_delay = 5
+SMSROUTES
+
 # --- 5. exports supplémentaires pour le profil hybrid -------------------------
 if [ "$MODE" = "faketrx-qemu" ] || [ "$CALYPSO_PROFILE" = "hybrid" ]; then
     export QEMU_ATTACH_TRX="${QEMU_ATTACH_TRX:-0}"
