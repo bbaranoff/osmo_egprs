@@ -84,20 +84,6 @@ COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 COPY configs/asound.conf /etc/
 # ── Scripts de démarrage ──────────────────────────────────────────────────────
 
-# ── Pont TRX burst-level (CALYPSO_BRIDGE=pont) ────────────────────────────────
-# AVANT : le pont n'etait NULLE PART dans cette image. Il n'existait dans le
-# conteneur que parce qu'on l'y avait depose a la main ; une reconstruction de
-# l'image le faisait disparaitre, et start-direct.sh tombait sur sa branche
-# « pont introuvable (...) » en degradant silencieusement le mode.
-# Le chemin est desormais EXPLICITE et unique : /opt/GSM/pont/pont.py, expose
-# par PONT_PY que start-direct.sh consomme (`_PONT="${PONT_PY:-...}"`).
-# ⚠️ La source qui part dans l'image est pont/pont.py DU CONTEXTE DE BUILD
-# (/opt/GSM/osmo_egprs/pont/). Apres avoir modifie /opt/GSM/pont/pont.py a
-# chaud, la recopier ici avant de reconstruire, sinon l'image reste en arriere.
-RUN mkdir -p /opt/GSM/pont
-COPY pont/pont.py /opt/GSM/pont/pont.py
-ENV PONT_PY=/opt/GSM/pont/pont.py
-
 COPY scripts/sms-interop-relay.py /etc/osmocom/sms-interop-relay.py
 COPY scripts/gapk-start.sh /etc/osmocom/gapk-start.sh
 COPY scripts/osmo-start.sh /root/osmo-start.sh

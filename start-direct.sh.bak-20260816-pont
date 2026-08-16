@@ -365,27 +365,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         # un pont.log ouvert avant se retrouve sur un inode SUPPRIME (sortie
         # invisible, "(deleted)" dans /proc/<pid>/fd/1). /dev/shm survit.
         # setsid : le pont doit survivre a la fin du shell de start-direct.
-        # [2026-08-16] LE `sleep 25` ETAIT UNE COURSE, PAS UNE BARRIERE.
-        # 25 s etait un pari sur la duree du teardown de run.sh. Des que
-        # celui-ci archive de gros journaux (mesure : 62 Mo -> ~40 s), le pont
-        # se rebindait sur 5700-5702 EN PLEIN teardown, qui echouait alors sur
-        # « restes du run precedent : port:5700 port:5701 port:5702 » et
-        # abandonnait toute la sequence. Le symptome se deplacait avec la
-        # taille des journaux, ce qui le faisait passer pour intermittent.
-        # On attend maintenant un EVENEMENT et non une duree : osmo-bts-trx,
-        # qui est l'interlocuteur TRX-UDP du pont et ne demarre qu'APRES le
-        # teardown. Sa presence prouve donc que les ports sont a nous.
-        ( _n=0
-          while [ "$_n" -lt 180 ] && ! pgrep -x osmo-bts-trx >/dev/null 2>&1; do
-              _n=$((_n + 1)); sleep 1
-          done
-          if [ "$_n" -ge 180 ]; then
-              echo "[pont] osmo-bts-trx jamais vu apres 180 s — demarrage quand meme"
-          else
-              echo "[pont] osmo-bts-trx detecte apres ${_n} s — la pile est debout, on binde"
-          fi
-          sleep 1
-          pkill -f "$_PONT" 2>/dev/null; sleep 1
+        ( sleep 25; pkill -f "$_PONT" 2>/dev/null; sleep 1
           exec setsid python3 -u "$_PONT" ) >/dev/shm/pont.log 2>&1 &
         printf '  %spont: journal%s /dev/shm/pont.log (hors LOG_DIR, efface par le teardown)\n' "${C_DIM:-}" "${C_Z:-}"
     else
