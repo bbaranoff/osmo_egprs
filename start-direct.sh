@@ -352,7 +352,19 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     # 66-grgsm-decode (MOD_ENABLED_IF) — le pont fournit lui-meme le GSMTAP.
     export CALYPSO_PIPELINE=bridge
     _PONT="${PONT_PY:-/opt/GSM/pont/pont.py}"
-    if [ -r "$_PONT" ]; then
+    # [2026-08-16] N'ARMER LE LANCEUR QUE SUR UN VRAI DEMARRAGE.
+    # Ce bloc s'execute AVANT le `case "$ACTION"` plus bas. Sur `--stop` (comme
+    # sur --list/--status/--check-paths) on armait donc quand meme le lanceur
+    # differe, que `run.sh --stop` tuait aussitot — d'ou le « line 450: Killed »
+    # crache par bash en plein arret propre. Un arret qui programme un demarrage
+    # n'a aucun sens, et le message faisait croire a une panne.
+    # Le pont DEJA VIVANT, lui, est bien arrete : le teardown le connait
+    # desormais (`f:pont/pont.py` dans _td_patterns) et mod_teardown_stop
+    # l'applique aussi.
+    if [ "$ACTION" != start ]; then
+        printf '  %spont TRX%s : non arme (action=%s, pas un demarrage)\n' \
+               "${C_DIM:-}" "${C_Z:-}" "$ACTION"
+    elif [ -r "$_PONT" ]; then
         # SINGLETON : tuer un pont precedent, sinon il tient 5700-5702 et le
         # teardown de run.sh echoue ("restes du run precedent : port:5700...").
         pkill -f "$_PONT" 2>/dev/null || true

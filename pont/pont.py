@@ -1065,13 +1065,25 @@ def th_airrec():
     silence = _np.zeros(spf, dtype=_np.complex64)
     nxt = (now_fn() + 2) % GSM_HYPERFRAME
     while True:
-        lag = (now_fn() - nxt) % GSM_HYPERFRAME
-        if lag > 650:            # >3 s de retard : on ne rattrapera pas, on recale
+        # ⚠️ COMPARAISON SIGNEE OBLIGATOIRE. `nxt` demarre 2 trames dans le
+        # FUTUR : `(now_fn() - nxt) % GSM_HYPERFRAME` vaut alors ~2 715 646 et
+        # non -2. La premiere version prenait donc ce retard imaginaire pour un
+        # decrochage, recalait, et repartait par `continue` SANS DORMIR : boucle
+        # folle qui brulait un coeur et n'ecrivait jamais un octet (temoin :
+        # cinq segments air_pont_*.cfile de 0 o). Meme idiome que
+        # emit_with_timing : au-dela d'un demi-hyperframe, la difference est
+        # NEGATIVE, pas enorme.
+        d = (now_fn() - nxt) % GSM_HYPERFRAME
+        if d > GSM_HYPERFRAME // 2:      # nxt est dans le futur : on l'attend
+            time.sleep(FRAME_DUR / 2.0)
+            continue
+        if d > 650:                      # >3 s de retard : irrattrapable, on recale
             with _ar_lock:
                 _ar_frames.clear()
             nxt = (now_fn() + 2) % GSM_HYPERFRAME
+            time.sleep(FRAME_DUR)        # jamais de continue sans dormir ici
             continue
-        if lag < 2:
+        if d < 2:
             time.sleep(FRAME_DUR / 2.0)
             continue
         with _ar_lock:
