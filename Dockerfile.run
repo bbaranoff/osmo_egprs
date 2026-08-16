@@ -35,8 +35,8 @@ RUN echo 'wireshark-common wireshark-common/install-setuid boolean true' | debco
 # ne supporte que v0. Le header v1 a 2 octets de plus → décalage des soft-bits
 # → BER constant 55/456 sur chaque frame → FBSB_SEARCH échoue en boucle.
 # Fix : forcer ver_req=0 dans la réponse SETFORMAT → le BTS reste en v0.
-RUN sed -i 's/ver_req = int(request\[1\])/ver_req = 0  # PATCHED: force TRXD v0/' \
-    /opt/GSM/osmocom-bb/src/target/trx_toolkit/ctrl_if_trx.py
+# (patch TRXD v0 retire : burst_fwd.py:66 re-encode deja par interface,
+#  trxcon recoit du v0 quoi qu'il arrive -> le forcage etait inutile)
 RUN rm -rf /opt/GSM/firmware
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
 RUN if [ ! -d "/opt/osmo-egprs-web/" ]; then git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web; fi

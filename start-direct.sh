@@ -319,27 +319,80 @@ export MOBILE_CFG_MS1="$MS1_CFG"
 export MOBILE_CFG_MS2="$MS2_CFG"
 export CALYPSO_MS2_CFG="$MS2_CFG"
 
-# --- Routes SMS (MSISDN reels des abonnes) -----------------------------------
-cat > "${OSMOCOM_CFG:-/etc/osmocom}/sms-routing.conf" <<'SMSROUTES'
-# sms-routing.conf
+# --- Mode PONT TRX (CALYPSO_BRIDGE=pont) : le pont maison REMPLACE la chaine IQ --
+# Le pont (/opt/GSM/pont/pont.py) se presente comme transceiver TRX-UDP a osmo-bts-trx
+# (5700/5701/5702), decode les bursts DL en L2 -> GSMTAP 4730/4731 (shunt in-QEMU ->
+# a_cd), et encode l'UL depuis les sidebands /dev/shm/calypso_* -> TRXD -> BTS.
+# Il REND REDONDANTS et on ETEINT : osmo-trx-ipc (transceiver), calypso-ipc-device
+# (pont IQ), si_bridge (decode DL), demod-bridge. On GARDE QEMU (Calypso+shunt) et
+# osmo-bts-trx. Reversible : ne pas passer CALYPSO_BRIDGE=pont.
+if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
+    export CALYPSO_BRIDGE
+    export CALYPSO_SKIP_TRX_IPC=1        # plus d'osmo-trx-ipc (le pont est le transceiver)
+    export CALYPSO_SKIP_IPC_DEVICE=1     # plus de calypso-ipc-device (plus d'IQ)
+    export CALYPSO_SKIP_BRIDGE_PY=1      # plus de si_bridge (le pont decode)
+    export CALYPSO_SKIP_DEMOD_BRIDGE=1   # plus de demod-bridge
+    # Le pont a BESOIN d'osmo-bts-trx en face (c'est son interlocuteur TRX-UDP).
+    # On l'impose explicitement : un SKIP_BTS herite d'un run precedent (env
+    # fossilise) laisserait le pont sans personne au bout du fil.
+    export CALYPSO_SKIP_BTS=0
+    # FB (FCCH) : en mode pont il n'y a plus de chaine gr-gsm/IQ, donc plus de
+    # detection FB REELLE (calypso_dsp_shunt_real_fb_read). Sans FB, la FBSB de
+    # l'ARM echoue -> "Channel sync error" -> le mobile ne campe jamais, meme
+    # avec des SI. On laisse donc le shunt FABRIQUER le FB (canned), tandis que
+    # le SCH, lui, reste REEL : le pont le decode et le publie sur 4731.
+    export CALYPSO_SHUNT_REAL_FB=0
+    export CALYPSO_SHUNT_NO_CANNED=0
+    # 65-record-drain / 66-grgsm-decode sont rallumes par ce forceur meme hors
+    # full-grgsm : on le neutralise (aucune IQ a drainer ni a decoder ici).
+    export CALYPSO_FORCE_DEMOD_BRIDGE=0
+    # Preset EXISTANT "bridge" = pont Python a la place d'ipc/trx-ipc : c'est
+    # exactement notre cas. Il pose SKIP_IPC_DEVICE=1 / SKIP_TRX_IPC=1, et
+    # comme il n'est pas full-grgsm il DESACTIVE aussi 65-record-drain et
+    # 66-grgsm-decode (MOD_ENABLED_IF) — le pont fournit lui-meme le GSMTAP.
+    export CALYPSO_PIPELINE=bridge
+    _PONT="${PONT_PY:-/opt/GSM/pont/pont.py}"
+    if [ -r "$_PONT" ]; then
+        # SINGLETON : tuer un pont precedent, sinon il tient 5700-5702 et le
+        # teardown de run.sh echoue ("restes du run precedent : port:5700...").
+        pkill -f "$_PONT" 2>/dev/null || true
+        sleep 1
+        printf '  %spont TRX%s : REMPLACE osmo-trx-ipc + calypso-ipc-device + si_bridge (SHUNT_LEGIT burst-direct)\n' "${C_DIM:-}" "${C_Z:-}"
+        # LANCEMENT DIFFERE : run.sh fait d'abord son teardown (qui verifie que
+        # 5700-5702 sont LIBRES). On ne binde donc qu'apres, sinon on se
+        # bloque nous-memes. 25 s = teardown + demarrage des modules.
+        # LOG HORS LOG_DIR : run.sh archive/efface LOG_DIR pendant son teardown ;
+        # un pont.log ouvert avant se retrouve sur un inode SUPPRIME (sortie
+        # invisible, "(deleted)" dans /proc/<pid>/fd/1). /dev/shm survit.
+        # setsid : le pont doit survivre a la fin du shell de start-direct.
+        ( sleep 25; pkill -f "$_PONT" 2>/dev/null; sleep 1
+          exec setsid python3 -u "$_PONT" ) >/dev/shm/pont.log 2>&1 &
+        printf '  %spont: journal%s /dev/shm/pont.log (hors LOG_DIR, efface par le teardown)\n' "${C_DIM:-}" "${C_Z:-}"
+    else
+        printf '  pont introuvable (%s)\n' "$_PONT"
+    fi
+fi
 
-[local]
-operator_id = 1
-sc_address  = 19990011444
+# --- Mode BRIDGE IPC-MS (CALYPSO_BRIDGE=ipc) : MS#1 servi par osmo-trx-ms-ipc ----
+# Le firmware qemu/osmocon de MS#1 est SKIP (gates dans 40-qemu.sh/50-osmocon.sh).
+# osmo-trx-ms-ipc lit le DL fc32 relaye par l'IPC (UDP CALYPSO_TRX_IQ_RX_PORT=5810),
+# emet l'UL fc32 sur 5811 (relay_init le lit deja), et sert L1CTL sur /tmp/osmocom_l2.
+if [ "${CALYPSO_BRIDGE:-}" = ipc ]; then
+    export CALYPSO_BRIDGE
+    export CALYPSO_IPC_RELAY=1
+    : "${CALYPSO_TRX_IQ_HOST:=127.0.0.1}";   export CALYPSO_TRX_IQ_HOST
+    : "${CALYPSO_TRX_IQ_RX_PORT:=5810}";     export CALYPSO_TRX_IQ_RX_PORT
+    : "${CALYPSO_TRX_IQ_TX_PORT:=5811}";     export CALYPSO_TRX_IQ_TX_PORT
+    _MSIPC="$(command -v osmo-trx-ms-ipc || echo /opt/GSM/osmo-trx/Transceiver52M/osmo-trx-ms-ipc)"
+    if [ -x "$_MSIPC" ]; then
+        printf '  %sMS#1 = osmo-trx-ms-ipc%s  (DL<-udp %s:%s, UL->%s, L1CTL /tmp/osmocom_l2)\n' \
+            "${C_DIM:-}" "${C_Z:-}" "$CALYPSO_TRX_IQ_HOST" "$CALYPSO_TRX_IQ_RX_PORT" "$CALYPSO_TRX_IQ_TX_PORT"
+        ( sleep 6; "$_MSIPC" >"${LOG_DIR:-/tmp/osmo-nitb/logs}/osmo-trx-ms-ipc.log" 2>&1 ) &
+    else
+        printf '  osmo-trx-ms-ipc PAS COMPILE (%s) — build requis\n' "$_MSIPC"
+    fi
+fi
 
-[operators]
-1 = 172.20.0.11
-
-[routes]
-10001 = 1
-10002 = 1
-
-[relay]
-port = 7890
-connect_timeout = 10
-retry_count = 3
-retry_delay = 5
-SMSROUTES
 
 # --- 5. exports supplémentaires pour le profil hybrid -------------------------
 if [ "$MODE" = "faketrx-qemu" ] || [ "$CALYPSO_PROFILE" = "hybrid" ]; then
