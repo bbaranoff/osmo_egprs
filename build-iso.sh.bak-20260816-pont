@@ -426,16 +426,13 @@ echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
 # [2026-08-14] `lib` ajouté : scripts/audio-chain.sh source lib/audio.sh.
 # Sans ce répertoire l'ISO embarquait un wrapper qui ne pouvait pas se sourcer.
-mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont}
+mkdir -p "$P"/{scripts,configs,checks,helpers,lib}
 for f in start.sh start-direct.sh build.sh network/loopback.sh tools/vty-menu.sh tools/vty-connect.exp \
          network/firewall-wan.sh network/setup-wan-interop.sh network/setup-wan-sms.sh; do
     [ -f "$DIR/$f" ] && cp "$DIR/$f" "$P/$f" && chmod +x "$P/$f"
 done
 ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
-# [2026-08-16] `pont` AJOUTE A LA LISTE. Dockerfile.run contient desormais
-# `COPY pont/pont.py`, donc sans ce repertoire dans la charge de l'ISO le
-# `docker build -f Dockerfile.run .` echoue net au premier demarrage.
-for d in scripts configs checks helpers lib pont; do
+for d in scripts configs checks helpers lib; do
     [ -d "$DIR/$d" ] && cp -r "$DIR/$d/." "$P/$d/" && find "$P/$d" -name "*.sh" -exec chmod +x {} \;
 done
 [ -f "$DIR/Dockerfile" ]     && cp "$DIR/Dockerfile"     "$P/"

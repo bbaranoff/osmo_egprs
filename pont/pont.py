@@ -1008,14 +1008,23 @@ def capture_iq(bits148):
     """B : module le burst en GMSK et l'ajoute au cfile (complex float32)."""
     if _cf is None or _np is None:
         return
-    # NRZ -> MSK/GMSK : phase +/- pi/2 par symbole, mise en forme gaussienne.
-    d = _np.array([1.0 if x == 0x01 else -1.0 for x in bits148])
-    up = _np.zeros(len(d) * CFILE_OSR); up[::CFILE_OSR] = d
+    # ⚠️ CE MODULATEUR EST LE JUMEAU DE _ar_mod. Il portait LES TROIS defauts
+    # corriges le 16/08 (polarite, indice x4 trop faible, differentiel absent).
+    # Il n'a qu'un appelant (send_trxd_ul) et ne s'arme que si PONT_CFILE est
+    # defini, donc il dormait — mais un jumeau casse est le prochain piege. Il
+    # est desormais aligne sur _ar_mod : toute correction va aux DEUX.
+    b   = (_np.frombuffer(bytes(bits148), dtype=_np.uint8) == 0x01).astype(_np.float64)
+    nrz = 2.0 * b - 1.0
+    prv = _np.empty_like(nrz)
+    prv[0] = nrz[0]
+    prv[1:] = nrz[:-1]
+    a   = nrz * prv
+    up = _np.zeros(len(a) * CFILE_OSR); up[::CFILE_OSR] = a
     n = 4 * CFILE_OSR
     t = (_np.arange(-n, n + 1)) / float(CFILE_OSR)
     g = _np.exp(-2.0 * (_np.pi ** 2) * (0.3 ** 2) * t ** 2 / _np.log(2.0))
     g /= g.sum()
-    phase = _np.cumsum(_np.convolve(up, g, mode="same")) * (_np.pi / 2.0 / CFILE_OSR)
+    phase = _np.cumsum(_np.convolve(up, g, mode="same")) * (_np.pi / 2.0)
     _np.exp(1j * phase).astype(_np.complex64).tofile(_cf)
     _cf.flush()
 
@@ -1051,13 +1060,35 @@ def _ar_mod(bits148, osr):
     #    -67708 Hz au lieu de +67708.
     # Les deux ensemble : +67703 Hz mesures, la cible.
     #
-    # ⚠️ RESTE OUVERT : l'encodage differentiel (dh = d XOR d-1) de 05.04 n'est
-    # PAS applique ici. Il est SANS EFFET sur le FCCH (tout a zero reste tout a
-    # zero), donc il ne pouvait pas etre la cause du non-calage ; il pourrait en
-    # revanche fausser les bits des bursts de donnees. A trancher par la mesure
-    # une fois que gr-gsm accroche.
-    b  = (_np.frombuffer(bytes(bits148), dtype=_np.uint8) == 0x01).astype(_np.float64)
-    a  = 1.0 - 2.0 * b
+    # 3. ENCODAGE DIFFERENTIEL ABSENT — TRANCHE PAR LA MESURE le 16/08, c'etait
+    #    le DERNIER defaut. Il est SANS EFFET sur le FCCH (tout a zero reste tout
+    #    a zero) : c'est precisement pour ca qu'on pouvait avoir une tonalite
+    #    FCCH parfaite a +67708 Hz, une cadence de trames exacte, et malgre tout
+    #    ZERO rafale en sortie de grgsm_decode, meme avec -p.
+    #    L'ORACLE est le source de gr-gsm, lib/receiver/receiver_impl.cc:860,
+    #    fonction gmsk_mapper() qui fabrique la reference de correlation :
+    #        previous_symbol = 2*input[0] - 1;
+    #        current_symbol  = 2*input[i] - 1;
+    #        encoded_symbol  = current_symbol * previous_symbol;  /* differentiel */
+    #        gmsk_output[i]  = j * encoded_symbol * gmsk_output[i-1];
+    #    Le recepteur correle donc contre une sequence d'apprentissage ELLE-MEME
+    #    encodee differentiellement. Sans differentiel a l'emission, la TSC ne
+    #    correle jamais, aucun burst n'est detecte, et rien ne sort.
+    #    MESURE : sur la tranche du 16/08 15h42, TSC du SCH = 1.000 en supposant
+    #    "pas de differentiel" et 0.453 en supposant "differentiel" -> le pont
+    #    emettait bien alpha = 1-2b. Apres re-encodage hors ligne de cette meme
+    #    tranche avec la regle ci-dessous : 211 lignes decodees (SI1/2/3/4 et
+    #    Paging Request Type 1). Rien d'autre n'a ete touche.
+    #    NOTE polarite : gr-gsm mappe bit 0 -> -1 (2b-1), soit l'INVERSE de la
+    #    lettre de 05.04 (1-2d). Sans importance : le produit nrz(i)*nrz(i-1) est
+    #    insensible a un changement global de signe. On garde la convention de
+    #    gr-gsm parce que c'est lui qui decode.
+    b   = (_np.frombuffer(bytes(bits148), dtype=_np.uint8) == 0x01).astype(_np.float64)
+    nrz = 2.0 * b - 1.0                 # NRZ facon gr-gsm : bit 0 -> -1
+    prv = _np.empty_like(nrz)
+    prv[0]  = nrz[0]                    # gr-gsm initialise previous = input[0]
+    prv[1:] = nrz[:-1]
+    a   = nrz * prv                     # alpha = nrz(i) * nrz(i-1)
     up = _np.zeros(len(a) * osr)
     up[::osr] = a
     ph = _np.cumsum(_np.convolve(up, _ar_g, mode="same")) * (_np.pi / 2.0)
