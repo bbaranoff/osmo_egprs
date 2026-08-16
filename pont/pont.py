@@ -1048,10 +1048,8 @@ def th_airrec():
     t = (_np.arange(-n, n + 1)) / float(AIRREC_OSR)
     g = _np.exp(-2.0 * (_np.pi ** 2) * (0.3 ** 2) * t ** 2 / _np.log(2.0))
     _ar_g = g / g.sum()
-    try:
-        signal.signal(signal.SIGUSR1, _ar_on_usr1)
-    except ValueError:
-        pass                        # pas le thread principal : Split indisponible
+    # (Le gestionnaire SIGUSR1 est installe dans main(), THREAD PRINCIPAL :
+    #  signal.signal() leve ValueError partout ailleurs — cf. le commentaire la-bas.)
     if not _ar_rotate():
         _ar_off = True
         return
@@ -1427,6 +1425,19 @@ def main():
     ST.log("pont TRX démarré : base=%d (CLCK/CTRL/DATA %d/%d/%d) BSIC=%d ARFCN=%d UL_FN_ADVANCE=%d"
            % (TRX_BASE, TRX_BASE, TRX_BASE+1, TRX_BASE+2, BSIC, ARFCN, UL_FN_ADVANCE))
     ST.log("slot-map (osmo-bsc.cfg) : %s" % TS_CONFIG)
+    # SIGUSR1 = « Split » d'AIRREC (le dashboard s'en sert pour decouper une
+    # tranche). ⚠️ signal.signal() ne fonctionne QUE dans le thread principal :
+    # l'installer depuis th_airrec levait ValueError, que le try/except avalait
+    # -> le gestionnaire n'etait JAMAIS pose et le bouton Record du web ne
+    # provoquait aucune rotation (mesure : segment inchange apres kill -USR1).
+    # Une degradation silencieuse : le pont continuait a enregistrer, seul le
+    # decoupage etait mort.
+    if AIRREC:
+        try:
+            signal.signal(signal.SIGUSR1, _ar_on_usr1)
+            ST.log("SIGUSR1 arme : split AIRREC disponible (kill -USR1 %d)" % os.getpid())
+        except ValueError as e:
+            ST.log("SIGUSR1 NON arme (%s) — le split du dashboard sera inoperant" % e)
     # Toute sonde s'annonce au demarrage : une sonde muette est indiscernable
     # d'une sonde absente (regle de mesure du projet).
     if BSP_FEED:
