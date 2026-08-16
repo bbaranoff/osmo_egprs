@@ -368,22 +368,6 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         # SINGLETON : tuer un pont precedent, sinon il tient 5700-5702 et le
         # teardown de run.sh echoue ("restes du run precedent : port:5700...").
         pkill -f "$_PONT" 2>/dev/null || true
-        # [2026-08-16] KILLALL DEMANDE PAR L'OPERATEUR, et assume.
-        # Le motif nominatif ci-dessus rate tout pont lance sous un autre chemin
-        # (PONT_PY surcharge, une sauvegarde .bak), et c'est ce qui faisait
-        # echouer le teardown sur « port:5700 port:5701 port:5702 ».
-        # ⚠️ CE QUE CA EMPORTE, en plus du pont : fake_trx.py (le transceiver de
-        # MS#2), sms-interop-relay.py (routage SMS inter-operateurs, HORS pile
-        # run.sh donc non relance automatiquement), gsm_sniff.py et les scripts
-        # des panes tmux. C'est acceptable ICI parce qu'on est sur le chemin d'un
-        # DEMARRAGE (ACTION=start) : le teardown de run.sh va de toute facon tout
-        # arreter deux secondes plus tard. Ne PAS reprendre ce geste dans un
-        # module de run.sh, ou il tuerait le filtre d'horodatage du run en cours.
-        # CALYPSO_NO_KILLALL=1 pour s'en passer.
-        if [ "${CALYPSO_NO_KILLALL:-0}" != "1" ]; then
-            printf '  %spont TRX%s : killall -9 python3 (demande ; emporte aussi fake_trx / sms-interop-relay)\n' "${C_DIM:-}" "${C_Z:-}"
-            killall -9 python3 2>/dev/null || true
-        fi
         sleep 1
         printf '  %spont TRX%s : REMPLACE osmo-trx-ipc + calypso-ipc-device + si_bridge (SHUNT_LEGIT burst-direct)\n' "${C_DIM:-}" "${C_Z:-}"
         # LANCEMENT DIFFERE : run.sh fait d'abord son teardown (qui verifie que

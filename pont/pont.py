@@ -37,6 +37,24 @@ PONT_RSSI     = int(os.environ.get("PONT_RSSI", "60"))
 GSMTAP_HOST   = "127.0.0.1"
 PORT_GSMTAP   = int(os.environ.get("CALYPSO_SHUNT_GSMTAP_PORT", "4730") or "4730")  # SI/CCCH/SDCCH/SACCH
 PORT_SCH      = int(os.environ.get("CALYPSO_SHUNT_SCH_PORT",    "4731") or "4731")  # SCH/BSIC
+# ------------------------------- TAP D'OBSERVATION --------------------------
+# Le pont decode DEJA tout le descendant en L2 (SI, CCCH, SDCCH, SACCH, FACCH)
+# et le pousse en GSMTAP vers le shunt sur PORT_GSMTAP. Cette L2 n'allait donc
+# nulle part ou un analyseur puisse la lire. On en fait un MIROIR vers un port
+# d'observation, et on tape aussi le MONTANT, que le pont a en main avant de
+# l'encoder en bursts.
+# POURQUOI CE CHEMIN PLUTOT QUE LE CFILE. L'I/Q d'AIRREC est reconstruite a
+# partir des bits ; je n'ai pas su la rendre decodable par gr-gsm (4 variantes
+# de modulation testees, 0 ligne decodee), et de toute facon grgsm_decode ne
+# decode PAS le montant : il se cale sur FCCH/SCH, qui n'existent qu'en
+# descendant. Le tap donne le meme resultat sans demodulation du tout.
+# ⚠️ 4729 est aussi le port ou le firmware du mobile tape SA propre L2 : les
+# deux sources coexistent dans la meme capture. Celle du pont porte le point
+# de vue RESEAU (ce qui est passe sur le lien), celle du mobile son point de
+# vue local. Elles peuvent diverger — et c'est justement l'ecart interessant.
+# PONT_TAP_PORT=4727 (p.ex.) pour les separer.
+TAP           = os.environ.get("PONT_TAP", "1") not in ("0", "", "no")
+TAP_PORT      = int(os.environ.get("PONT_TAP_PORT", "4729"))
 SB_SDCCH_UL   = "/dev/shm/calypso_sdcch_ul"     # 48o: seq u32 | l1s%51 u8 | l1s_fn u32 | l2[23]
 SB_RACH       = "/dev/shm/calypso_rach"
 DCCH_CFG      = "/dev/shm/calypso_dcch_cfg"
@@ -243,6 +261,7 @@ class Stats:
         s.n_tch_ul_drop=0                # trames voix jetees : file pleine
         s.n_tch_ul_vole=0                # voix cedee a une FACCH (normatif)
         s.n_tch_burst=0                  # bursts TCH montants reellement emis
+        s.n_tap_dl=0;    s.n_tap_ul=0     # trames L2 mirroitees vers l'analyseur
     def log(s, msg): print("[pont] %s" % msg, flush=True)
 ST = Stats()
 
@@ -306,15 +325,31 @@ GSMTAP_BCCH=0x01; GSMTAP_CCCH=0x04; GSMTAP_SDCCH4=0x07; GSMTAP_SACCH=0x07|0x80
 # recoit du bourrage et le mobile ne voit jamais de sysinfo.
 SI_TYPES   = {0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e}          # SI1 SI2 SI3 SI4 SI2bis SI2ter
 CCCH_TYPES = {0x3f, 0x39, 0x3a, 0x21, 0x22, 0x24}          # IMM-ASSIGN(+EXT/REJ), PAG-REQ 1/2/3
-def gsmtap(fn, chan, l2):
+def gsmtap(fn, chan, l2, tn=0, uplink=False):
     # En-tête GSMTAP v2 (16 o) : version=2, hdr_len=4 (mots 32b), type=UM(0x01),
     # timeslot, arfcn(H), signal(b), snr(B), frame_number(I), sub_type=chan,
     # antenna, sub_slot, res. Format attendu par le shunt (feed_si).
-    h = struct.pack(">BBBBHbBIBBBB", 2, 4, 0x01, 0, ARFCN, 0, 0, fn, chan, 0, 0, 0)
+    # GSMTAP_ARFCN_F_UPLINK = 0x4000 : sans ce drapeau Wireshark interprete une
+    # trame montante comme descendante et se trompe de sens de dissection.
+    arfcn = ARFCN | (0x4000 if uplink else 0)
+    h = struct.pack(">BBBBHbBIBBBB", 2, 4, 0x01, tn, arfcn, 0, 0, fn, chan, 0, 0, 0)
     return h + bytes(l2)
+
+def tap(fn, chan, l2, tn=0, uplink=False):
+    """Miroir d'observation. Best-effort : jamais d'exception sur ce chemin, il
+    est appele depuis les boucles temps reel."""
+    if not TAP:
+        return
+    try:
+        sk_gsmtap.sendto(gsmtap(fn, chan, l2, tn, uplink), (GSMTAP_HOST, TAP_PORT))
+        ST.n_tap_ul += 1 if uplink else 0
+        ST.n_tap_dl += 0 if uplink else 1
+    except OSError:
+        pass
 
 def feed_dl_l2(fn, chan, l2, port):
     sk_gsmtap.sendto(gsmtap(fn, chan, l2), (GSMTAP_HOST, port))
+    tap(fn, chan, l2)          # miroir vers l'analyseur — meme L2, autre port
 
 # ============================== VOIX TCH/F ====================================
 # Contrats RELEVES dans le code (jamais supposes) :
@@ -442,6 +477,8 @@ def ul_facch_from_sideband():
                     # d'appel qui n'aboutit pas (le DISC part sur FACCH).
                     # Desormais on FILE le bloc L2 ; l'ordonnanceur unique
                     # l'emettra, en volant la voix comme le fait une vraie FACCH.
+                    tap(now_fn(), GSMTAP_FACCH, l2[:GSM_MACBLOCK_LEN],
+                        tch_cfg_read() or 0, True)
                     with _tch_q_lock:
                         _tch_q_facch.append(bytes(l2[:GSM_MACBLOCK_LEN]))
                     ST.n_facch_ul += 1
@@ -876,10 +913,65 @@ CFILE_OSR  = int(os.environ.get("PONT_CFILE_OSR", "4"))
 #   masque : en mode pont il n'existe aucune chaine IQ reelle a capturer.
 #   retirer : le jour ou une vraie source RF alimente le chemin.
 AIRREC      = os.environ.get("PONT_AIRREC", "1") not in ("0", "", "no")
-AIRREC_DIR  = os.environ.get("PONT_AIRREC_DIR", "/dev/shm/osmo-rec")
+# [2026-08-16] SUR DISQUE, PLUS EN RAM. /dev/shm ne fait que 8 Go et porte
+# AUSSI les journaux du run : a 17,3 Mo/s (descendant + montant) il etait
+# plein en ~6 minutes, ce qui imposait un decoupage en segments. L'overlay
+# du conteneur offre 295 Go libres : on peut donc ecrire UN SEUL FICHIER
+# CONTINU par run et par sens, ce qui est la seule forme directement
+# decodable — un cfile decoupe oblige a concatener avant toute analyse.
+AIRREC_DIR  = os.environ.get("PONT_AIRREC_DIR", "/root/osmo-rec")
 AIRREC_OSR  = int(os.environ.get("PONT_AIRREC_OSR", "4"))            # 4 -> 1083333 sps
-AIRREC_SEG  = int(os.environ.get("PONT_AIRREC_SEG_MB",     "256")) * 1024 * 1024
+# PLAFOND DUR, par sens. Atteint, on ARRETE d'ecrire — on ne fait PAS
+# tourner : le fichier reste entier et decodable. 16 Gio = ~31 min a
+# 8,67 Mo/s, largement au-dela de toute fenetre d'analyse utile.
+AIRREC_MAX  = int(os.environ.get("PONT_AIRREC_MAX_MB",   "16384")) * 1024 * 1024
+# Alerte (sans effacer) quand le repertoire depasse ce total : plusieurs runs
+# s'y accumulent, et supprimer les captures de l'operateur sans le lui dire
+# serait pire que de le prevenir.
+AIRREC_DIRMAX = int(os.environ.get("PONT_AIRREC_DIR_MAX_MB", "65536")) * 1024 * 1024
 AIRREC_KEEP = int(os.environ.get("PONT_AIRREC_KEEP",         "6"))
+# MONTANT. Meme debit que le descendant (8,67 Mo/s) : on ecrit la trame
+# entiere, silence compris, parce que c'est le silence qui porte le temps.
+# On en garde MOINS par defaut (3 segments = 768 Mio, ~1,5 min) : le montant
+# est epars, on le consulte sur une fenetre courte, et /dev/shm porte aussi
+# les journaux. PONT_AIRREC_UL=0 coupe le montant sans toucher au descendant.
+# [2026-08-16] DEFAUT PASSE A 0. Le cfile montant n'a PAS de consommateur :
+# aucun outil ne sait demoduler un enregistrement montant (grgsm_decode se
+# cale sur FCCH/SCH, qui n'existent qu'en descendant, et aucun de ses
+# demappeurs n'est montant). Il coutait donc 8,67 Mo/s pour un fichier que
+# personne ne peut lire. Le montant est desormais observable par le TAP
+# GSMTAP, en L2 deja decodee — ce qui est ce qu'on voulait en voir.
+# =1 pour le reactiver (rejeu par un outil maison, analyse de forme d'onde).
+AIRREC_UL   = os.environ.get("PONT_AIRREC_UL", "1") not in ("0", "", "no")
+# SORTIES, SYMETRIQUES ENTRE LES DEUX SENS. Le service web (server.js FFT_SRC)
+# connait deux puits de longue date :
+#   ms  -> /dev/shm/dsp_iq.cfile   pane « MS — Calypso DSP »
+#   bts -> /tmp/iq_fft.fifo        pane « BTS — DL relay LIVE »
+# Leur producteur etait calypso-ipc-device, que le mode pont saute : les deux
+# panes etaient donc VIDES. On les realimente, sens pour sens.
+#   FIFO  = vue live (best-effort, jamais bloquante)
+#   CFILE = enregistrement continu sur DISQUE, decoupable par offsets
+#   MIROIR= copie bornee en RAM, uniquement pour la pane qui lit un cfile
+# Une chaine VIDE coupe la sortie correspondante.
+AIRREC_DL_PATH   = os.environ.get("PONT_AIRREC_DL_PATH",   "/root/record.cfile")
+AIRREC_DL_FIFO   = os.environ.get("PONT_AIRREC_DL_FIFO",   "/tmp/iq_fft.fifo")
+AIRREC_UL_PATH   = os.environ.get("PONT_AIRREC_UL_PATH",   "/root/record_ul.cfile")
+AIRREC_UL_FIFO   = os.environ.get("PONT_AIRREC_UL_FIFO",   "/tmp/iq_fft_ms.fifo")
+# ⚠️ SEULE ASYMETRIE, et elle est imposee : la pane « MS » lit un CFILE et non
+# une fifo, sur /dev/shm (8 Go, qui porte AUSSI les journaux). A 8,67 Mo/s un
+# fichier qui grossit y tient 15 minutes. Ce miroir REBOUCLE donc — la pane n'en
+# lit que la queue, elle ne voit qu'un hoquet. Le cfile DISQUE ci-dessus, lui,
+# ne reboucle jamais : c'est celui qu'on decoupe (un rebouclage casserait les
+# offsets du Record).
+# [2026-08-16] MIROIR RAM DESACTIVE PAR DEFAUT. Il servait a nourrir la pane
+# « MS » du web, qui lisait un CFILE. Mais un fichier qui REBOUCLE casse le
+# lecteur de queue du web (statSync().size s'effondre a chaque tour -> pane
+# vide toutes les ~29 s). La pane lit desormais la FIFO /tmp/iq_fft_ms.fifo,
+# qui est le bon objet pour un flux continu. Ce miroir n'a donc plus d'usage
+# et il consommait 8,67 Mo/s de RAM. Remettre un chemin pour le reactiver.
+AIRREC_UL_MIROIR = os.environ.get("PONT_AIRREC_UL_MIROIR", "")
+AIRREC_WRAP_MB   = int(os.environ.get("PONT_AIRREC_WRAP_MB", "256"))
+AIRREC_UL_KEEP = int(os.environ.get("PONT_AIRREC_UL_KEEP", "3"))
 AIRREC_FREE = int(os.environ.get("PONT_AIRREC_MINFREE_MB", "1024")) * 1024 * 1024
 
 _pmt = None
@@ -927,107 +1019,278 @@ def capture_iq(bits148):
     _np.exp(1j * phase).astype(_np.complex64).tofile(_cf)
     _cf.flush()
 
-# ======================= AIRREC : enregistrement DL permanent =================
-_ar_lock   = threading.Lock()
-_ar_frames = {}                     # fn -> {tn: bits148}, vide par l'ecrivain
-_ar_fh     = None
-_ar_path   = None
-_ar_bytes  = 0
-_ar_split  = False                  # arme par SIGUSR1 (bouton « Split » du web)
-_ar_off    = False                  # coupure definitive (tmpfs plein, I/O KO)
-_ar_g      = None                   # gabarit gaussien, calcule UNE fois
-_ar_stats  = {"frames": 0, "bursts": 0, "segs": 0}
+# ============ AIRREC : enregistrement permanent, descendant ET montant =======
+# UNE classe, DEUX instances. Le descendant et le montant partagent exactement la
+# meme discipline ; les separer en deux jeux de fonctions, c'est ce qui avait
+# produit le bug des anneaux TCH (slot 48 d'un cote, 64 de l'autre, lecture au
+# mauvais pas). On ne recommence pas.
+#
+# UN SEUL THREAD ecrit les deux fichiers, cadence par la meme horloge : a une FN
+# donnee correspond donc le MEME offset dans les deux cfile. Les deux captures
+# sont alignees a l'echantillon pres et se correlent directement.
+_ar_g = None                        # gabarit gaussien, calcule UNE fois
 
-def _ar_mod(bits148):
-    """148 bits -> 148*OSR echantillons complex64 (GMSK BT=0.3).
-    Meme modulation que capture_iq, mais le gabarit gaussien est PRECALCULE : il
-    ne depend pas du burst, et le recalculer a chaque fois coutait le gros du
-    temps de traitement."""
-    d  = _np.where(_np.frombuffer(bits148, dtype=_np.uint8) == 0x01, 1.0, -1.0)
-    up = _np.zeros(len(d) * AIRREC_OSR)
-    up[::AIRREC_OSR] = d
-    ph = _np.cumsum(_np.convolve(up, _ar_g, mode="same")) * (_np.pi / 2.0 / AIRREC_OSR)
+def _ar_mod(bits148, osr):
+    """148 bits -> 148*osr echantillons complex64 (GMSK BT=0.3)."""
+    # [2026-08-16] DEUX DEFAUTS CORRIGES, l'un et l'autre MESURES.
+    #
+    # JUGE : le FCCH est un burst de 148 bits a ZERO ; en GMSK il doit produire
+    # une tonalite PURE a +1625/24 kHz = +67708 Hz, soit +0,3927 rad/echantillon
+    # a 1083333 sps. C'est ce ton que gr-gsm cherche pour se caler. Mesure sur un
+    # enregistrement de reference qui se decode : une plage de 592 echantillons
+    # (= 148 symboles x OSR 4) a +67708 Hz. Mesure sur la sortie d'AIRREC AVANT
+    # ce correctif : ZERO echantillon a +67708 Hz, zero a -67708 Hz. Aucun FCCH,
+    # donc aucun calage possible, donc zero ligne decodee quoi qu'on tente.
+    #
+    # 1. INDICE DE MODULATION x4 TROP FAIBLE. `cumsum` avance deja de 1 par
+    #    SYMBOLE (g est normalise a somme 1, un impulsion par symbole), donc
+    #    multiplier par pi/2/osr donnait pi/(2*osr) par symbole au lieu de pi/2.
+    #    Mesure : -16926 Hz au lieu de -67708. Le `/ osr` saute.
+    # 2. POLARITE INVERSEE. GSM 05.04 : alpha = 1 - 2*d, donc bit 0 -> +1 et
+    #    bit 1 -> -1. Le code faisait l'inverse, ce qui plarait le FCCH a
+    #    -67708 Hz au lieu de +67708.
+    # Les deux ensemble : +67703 Hz mesures, la cible.
+    #
+    # ⚠️ RESTE OUVERT : l'encodage differentiel (dh = d XOR d-1) de 05.04 n'est
+    # PAS applique ici. Il est SANS EFFET sur le FCCH (tout a zero reste tout a
+    # zero), donc il ne pouvait pas etre la cause du non-calage ; il pourrait en
+    # revanche fausser les bits des bursts de donnees. A trancher par la mesure
+    # une fois que gr-gsm accroche.
+    b  = (_np.frombuffer(bytes(bits148), dtype=_np.uint8) == 0x01).astype(_np.float64)
+    a  = 1.0 - 2.0 * b
+    up = _np.zeros(len(a) * osr)
+    up[::osr] = a
+    ph = _np.cumsum(_np.convolve(up, _ar_g, mode="same")) * (_np.pi / 2.0)
     return _np.exp(1j * ph).astype(_np.complex64)
 
-def _ar_purge():
-    """Ne garde que KEEP-1 segments (on fait la place pour le neuf)."""
-    try:
-        segs = sorted(f for f in os.listdir(AIRREC_DIR)
-                      if f.startswith("air_pont_") and f.endswith(".cfile"))
-    except OSError:
-        return
-    for f in segs[:max(0, len(segs) - (AIRREC_KEEP - 1))]:
+class _AirRec:
+    """Un sens d'enregistrement : sa file de trames, ses segments, son etat."""
+    def __init__(s, sens, prefixe, keep, fixe="", fifo="", miroir="", wrap_mb=0):
+        s.sens    = sens            # "descendant" / "montant", pour les messages
+        s.prefixe = prefixe         # air_pont_ / air_pont_ul_
+        s.keep    = keep
+        s.lock    = threading.Lock()
+        s.frames  = {}              # fn -> {tn: bits148}
+        s.fh = None; s.path = None; s.bytes = 0
+        s.split = False; s.off = False
+        s.n_frames = 0; s.n_bursts = 0; s.n_segs = 0
+        s.fixe      = fixe          # chemin impose ; vide -> nom horodate
+        s.fifo_path = fifo          # vue live
+        s.fifo_fd   = None
+        s.fifo_next = 0
+        s.mir_path  = miroir        # copie bornee en RAM
+        s.mir_fh    = None
+        s.mir_bytes = 0
+        s.wrap      = wrap_mb * 1024 * 1024
+        s.n_fifo = 0; s.n_fifo_drop = 0
+
+    def feed(s, fn, tn, bits148):
+        """Depot SEUL, aucun calcul : on est sur le chemin temps reel du pont.
+        Toute la modulation se fait dans le thread ecrivain."""
+        if s.off:
+            return
+        with s.lock:
+            s.frames.setdefault(fn, {})[tn] = bits148
+
+    def _alerte_volume(s):
+        """On N'EFFACE PLUS RIEN. L'ancienne version purgeait les vieux segments
+        pour tenir dans le tmpfs ; sur disque il n'y a plus de raison de detruire
+        les captures de l'operateur sans le lui demander. On se contente de
+        l'avertir quand le repertoire enfle."""
+        total = 0
         try:
-            os.unlink(os.path.join(AIRREC_DIR, f))
-            ST.log("airrec purge %s" % f)
+            for f in os.listdir(AIRREC_DIR):
+                if f.endswith(".cfile"):
+                    try: total += os.path.getsize(os.path.join(AIRREC_DIR, f))
+                    except OSError: pass
+        except OSError:
+            return
+        if total > AIRREC_DIRMAX:
+            ST.log("airrec ⚠️ %s contient %.1f Go de captures (seuil %.1f Go) — "
+                   "rien n'est efface automatiquement, faites le menage"
+                   % (AIRREC_DIR, total / 1e9, AIRREC_DIRMAX / 1e9))
+
+    def rotate(s):
+        """Ouvre LE fichier du run (un seul, continu). Conserve son nom d'origine
+        parce que SIGUSR1 permet encore d'en forcer un neuf a la main."""
+        if s.fh is not None:
+            try:    s.fh.close()
+            except OSError: pass
+            s.fh = None
+            ST.log("airrec %s fichier clos : %s (%.1f Mo)"
+                   % (s.sens, s.path, s.bytes / 1048576.0))
+        try:
+            os.makedirs(AIRREC_DIR, exist_ok=True)
+        except OSError as e:
+            ST.log("airrec %s: %s inaccessible (%s) — COUPE" % (s.sens, AIRREC_DIR, e))
+            return False
+        # GARDE TMPFS. /dev/shm porte AUSSI les journaux du run : on s'arrete
+        # AVANT de le remplir. Un enregistrement qui tue la machine qu'il observe
+        # n'a aucune valeur, et la panne se manifesterait dix modules plus loin.
+        try:
+            st = os.statvfs(os.path.dirname(s.fixe or "") or AIRREC_DIR)
+            if st.f_bavail * st.f_frsize < AIRREC_FREE:
+                ST.log("airrec %s: moins de %d Mo libres sur %s — COUPE"
+                       % (s.sens, AIRREC_FREE // 1048576, AIRREC_DIR))
+                return False
         except OSError:
             pass
-
-def _ar_rotate():
-    """Ferme le segment courant, en ouvre un neuf, purge les plus vieux.
-    SEGMENTS et non anneau binaire : chaque segment reste INDEPENDAMMENT
-    decodable (gr-gsm se resynchronise sur FCCH/SCH, qui reviennent toutes les
-    51 trames, ~235 ms). Un anneau avec point de bouclage aurait corrompu le flux
-    a chaque tour, precisement la ou on a besoin qu'il soit lisible."""
-    global _ar_fh, _ar_path, _ar_bytes
-    if _ar_fh is not None:
-        try:    _ar_fh.close()
-        except OSError: pass
-        _ar_fh = None
-        ST.log("airrec segment clos : %s (%.1f Mo)" % (_ar_path, _ar_bytes / 1048576.0))
-    try:
-        os.makedirs(AIRREC_DIR, exist_ok=True)
-    except OSError as e:
-        ST.log("airrec: %s inaccessible (%s) — enregistrement COUPE" % (AIRREC_DIR, e))
-        return False
-    # GARDE TMPFS. /dev/shm porte AUSSI les journaux du run : on s'arrete AVANT
-    # de le remplir. Un enregistrement qui tue la machine qu'il observe n'a
-    # aucune valeur, et la panne se manifesterait dix modules plus loin.
-    try:
-        st = os.statvfs(AIRREC_DIR)
-        if st.f_bavail * st.f_frsize < AIRREC_FREE:
-            ST.log("airrec: moins de %d Mo libres sur %s — enregistrement COUPE"
-                   % (AIRREC_FREE // 1048576, AIRREC_DIR))
+        s._alerte_volume()
+        if s.fixe:
+            try:
+                os.makedirs(os.path.dirname(s.fixe) or ".", exist_ok=True)
+            except OSError:
+                pass
+        if s.mir_path and s.mir_fh is None:
+            try:
+                s.mir_fh = open(s.mir_path, "wb", buffering=1024 * 1024)
+                ST.log("airrec %s miroir -> %s (reboucle a %d Mo, pane FFT)"
+                       % (s.sens, s.mir_path, s.wrap // 1048576))
+            except OSError as e:
+                ST.log("airrec %s miroir %s indisponible (%s)" % (s.sens, s.mir_path, e))
+        s.path = s.fixe or os.path.join(
+            AIRREC_DIR, "%s%s.cfile"
+            % (s.prefixe, time.strftime("%Y%m%d%H%M%S", time.gmtime())))
+        try:
+            s.fh = open(s.path, "wb", buffering=1024 * 1024)
+        except OSError as e:
+            ST.log("airrec %s: ouverture %s impossible (%s)" % (s.sens, s.path, e))
             return False
-    except OSError:
-        pass
-    _ar_purge()
-    _ar_path = os.path.join(AIRREC_DIR, "air_pont_%s.cfile"
-                            % time.strftime("%Y%m%d%H%M%S", time.gmtime()))
-    try:
-        _ar_fh = open(_ar_path, "wb", buffering=1024 * 1024)
-    except OSError as e:
-        ST.log("airrec: ouverture %s impossible (%s)" % (_ar_path, e))
-        return False
-    _ar_bytes = 0
-    _ar_stats["segs"] += 1
-    ST.log("airrec segment ouvert : %s" % _ar_path)
-    return True
+        s.bytes = 0
+        s.n_segs += 1
+        ST.log("airrec %s -> %s (fichier UNIQUE et CONTINU pour tout le run ; "
+               "plafond %d Mo)" % (s.sens, s.path, AIRREC_MAX // 1048576))
+        return True
+
+    def _sorties_annexes(s, octets):
+        """FIFO + miroir. BEST-EFFORT ABSOLU : une vue est un agrement, elle ne
+        doit jamais pouvoir figer l'enregistrement.
+        - O_NONBLOCK a l'ouverture : sans lecteur, open() rend ENXIO au lieu de
+          BLOQUER indefiniment. C'est LE piege des fifo, et il aurait gele le
+          thread d'ecriture des la premiere trame.
+        - EAGAIN a l'ecriture = lecteur trop lent -> on JETTE, on compte.
+        - EPIPE (lecteur parti) -> on referme, on rouvrira plus tard."""
+        if s.fifo_path:
+            if s.fifo_fd is None and s.n_frames >= s.fifo_next:
+                s.fifo_next = s.n_frames + 217          # nouvelle tentative ~1 s
+                if not os.path.exists(s.fifo_path):
+                    # Le noeud doit exister pour qu'un open O_WRONLY reussisse un
+                    # jour. On le cree nous-memes : sinon la vue reste morte tant
+                    # que personne n'a pense a faire le mkfifo a la main, et rien
+                    # ne le signale.
+                    try:
+                        os.mkfifo(s.fifo_path, 0o644)
+                        ST.log("airrec %s : fifo %s creee" % (s.sens, s.fifo_path))
+                    except OSError as e:
+                        ST.log("airrec %s : mkfifo %s impossible (%s)"
+                               % (s.sens, s.fifo_path, e))
+                try:
+                    s.fifo_fd = os.open(s.fifo_path, os.O_WRONLY | os.O_NONBLOCK)
+                    ST.log("airrec %s : fifo %s ouverte — vue live alimentee"
+                           % (s.sens, s.fifo_path))
+                except OSError:
+                    pass
+            if s.fifo_fd is not None:
+                try:
+                    os.write(s.fifo_fd, octets); s.n_fifo += 1
+                except BlockingIOError:
+                    s.n_fifo_drop += 1
+                except OSError:
+                    try: os.close(s.fifo_fd)
+                    except OSError: pass
+                    s.fifo_fd = None
+        if s.mir_fh is not None:
+            try:
+                s.mir_fh.write(octets); s.mir_bytes += len(octets)
+                if s.wrap and s.mir_bytes >= s.wrap:
+                    s.mir_fh.flush(); s.mir_fh.seek(0); s.mir_fh.truncate(0)
+                    s.mir_bytes = 0
+            except OSError:
+                try: s.mir_fh.close()
+                except OSError: pass
+                s.mir_fh = None
+
+    def ecrire(s, fn, spf, step, blen, silence):
+        """Ecrit UNE trame TDMA. Rend False si l'enregistrement doit s'arreter."""
+        if s.off or s.fh is None:
+            return True
+        with s.lock:
+            slots = s.frames.pop(fn, None)
+            if len(s.frames) > 512:      # trames jamais reclamees : pas de fuite
+                s.frames.clear()
+        if slots:
+            trame = _np.zeros(spf, dtype=_np.complex64)
+            for tn, bits in slots.items():
+                o = tn * step
+                trame[o:o + blen] = _ar_mod(bits, AIRREC_OSR)
+                s.n_bursts += 1
+        else:
+            trame = silence          # le SILENCE porte le temps : on l'ecrit
+        try:
+            octets = trame.tobytes()
+            s._sorties_annexes(octets)
+            s.fh.write(octets)
+            s.bytes += trame.nbytes
+            s.n_frames += 1
+        except OSError as e:
+            ST.log("airrec %s ecriture ECHEC (%s) — COUPE" % (s.sens, e))
+            s.off = True
+            return True
+        # PLUS DE ROTATION A LA TAILLE. Au plafond on ARRETE : le fichier reste
+        # entier, donc decodable tel quel. Une rotation aurait rendu la capture
+        # inexploitable sans concatenation prealable.
+        if s.bytes >= AIRREC_MAX:
+            ST.log("airrec %s : plafond %d Mo atteint — ARRET de l'ecriture, "
+                   "le fichier %s reste complet et decodable"
+                   % (s.sens, AIRREC_MAX // 1048576, s.path))
+            try: s.fh.flush()
+            except OSError: pass
+            s.off = True
+        elif s.split:                # SIGUSR1 : nouveau fichier, a la demande
+            s.split = False
+            if not s.rotate():
+                s.off = True
+        return True
+
+def _ar_est_a_moi(nom, prefixe):
+    """`air_pont_` est un prefixe de `air_pont_ul_` : sans ce filtre, la purge du
+    DESCENDANT effacerait les segments du MONTANT. Piege de prefixe classique."""
+    reste = nom[len(prefixe):-len(".cfile")]
+    return reste.isdigit() and len(reste) == 14
+
+_AR_DL = _AirRec("descendant", "air_pont_",    AIRREC_KEEP,
+                 AIRREC_DL_PATH, AIRREC_DL_FIFO, "",               0)
+_AR_UL = _AirRec("montant",    "air_pont_ul_", AIRREC_UL_KEEP,
+                 AIRREC_UL_PATH, AIRREC_UL_FIFO, AIRREC_UL_MIROIR, AIRREC_WRAP_MB)
+if not AIRREC_UL:
+    _AR_UL.off = True
 
 def airrec_feed(fn, tn, bits148):
-    """Appele depuis th_data_rx. NE CALCULE RIEN : th_data_rx est le chemin temps
-    reel du pont (il relaie aussi vers le BSP), on n'y met qu'un depot sous
-    verrou. Toute la modulation se fait dans le thread ecrivain."""
-    if _ar_off or not AIRREC:
-        return
-    with _ar_lock:
-        _ar_frames.setdefault(fn, {})[tn] = bits148
+    """DESCENDANT — appele depuis th_data_rx."""
+    if AIRREC:
+        _AR_DL.feed(fn, tn, bits148)
+
+def airrec_feed_ul(fn, tn, bits148):
+    """MONTANT — appele depuis send_trxd_ul, APRES le chiffrement A5 : on
+    enregistre ce qui part REELLEMENT sur l'air. C'est ce qui rend le couple
+    `-p` / `-e -k` significatif du cote montant comme du cote descendant."""
+    if AIRREC and AIRREC_UL:
+        _AR_UL.feed(fn, tn, bits148)
 
 def _ar_on_usr1(_sig, _frm):
-    """SIGUSR1 = « Split » : clot le segment courant pour le figer et le rendre
-    telechargeable, et en rouvre un immediatement. Pas de socket de controle
-    supplementaire : le pont a deja trois ports a lui, un quatrieme serait un
-    quatrieme reste a nettoyer au teardown."""
-    global _ar_split
-    _ar_split = True
+    """SIGUSR1 = « Split » : clot les segments courants pour les figer et en
+    rouvre aussitot. Les DEUX sens sont coupes au meme instant, sinon les
+    tranches descendante et montante ne couvriraient pas la meme fenetre."""
+    _AR_DL.split = True
+    _AR_UL.split = True
 
 def th_airrec():
-    """Ecrit UNE trame TDMA par periode, cadencee par l'horloge du pont
-    (now_fn(), derivee du temps absolu) : c'est ce qui garantit que le fichier a
-    la bonne DUREE, donc qu'il est decodable. On ecrit avec 2 trames de retard,
-    le temps que les 8 slots d'une meme trame soient arrives — ils viennent en 8
-    datagrammes distincts et rien ne garantit leur ordre."""
-    global _ar_bytes, _ar_split, _ar_off, _ar_g
+    """Ecrit UNE trame TDMA par periode et par sens, cadence par l'horloge du
+    pont (now_fn(), derivee du temps absolu) : c'est ce qui garantit que les
+    fichiers ont la bonne DUREE, donc qu'ils sont decodables. On ecrit avec 2
+    trames de retard, le temps que les 8 slots d'une meme trame soient arrives —
+    ils viennent en 8 datagrammes distincts et rien ne garantit leur ordre."""
+    global _ar_g
     if not AIRREC:
         ST.log("airrec DESACTIVE (PONT_AIRREC=0) — aucun cfile ne sera ecrit")
         return
@@ -1037,26 +1300,30 @@ def th_airrec():
             globals()["_np"] = _n2
         except ImportError:
             ST.log("airrec demande mais numpy absent -> pas d'enregistrement")
-            _ar_off = True
+            _AR_DL.off = _AR_UL.off = True
             return
     if AIRREC_OSR % 4 != 0:
         ST.log("airrec: OSR=%d refuse (156,25 x OSR doit etre entier) -> multiple de 4"
                % AIRREC_OSR)
-        _ar_off = True
+        _AR_DL.off = _AR_UL.off = True
         return
     n = 4 * AIRREC_OSR
     t = (_np.arange(-n, n + 1)) / float(AIRREC_OSR)
     g = _np.exp(-2.0 * (_np.pi ** 2) * (0.3 ** 2) * t ** 2 / _np.log(2.0))
     _ar_g = g / g.sum()
-    # (Le gestionnaire SIGUSR1 est installe dans main(), THREAD PRINCIPAL :
-    #  signal.signal() leve ValueError partout ailleurs — cf. le commentaire la-bas.)
-    if not _ar_rotate():
-        _ar_off = True
+    if not _AR_DL.rotate():
+        _AR_DL.off = True
+    if AIRREC_UL and not _AR_UL.rotate():
+        _AR_UL.off = True
+    if _AR_DL.off and _AR_UL.off:
         return
-    ST.log("airrec ACTIF -> %s (segments de %d Mo, %d gardes, coupure sous %d Mo libres). "
-           "⚠️ I/Q RECONSTRUITE a partir des bits emis : ni bruit, ni ToA reelle, "
-           "ni fading — rejeu fidele aux BITS, PAS une capture d'air."
-           % (AIRREC_DIR, AIRREC_SEG // 1048576, AIRREC_KEEP, AIRREC_FREE // 1048576))
+    ST.log("airrec ACTIF -> %s | descendant=%s montant=%s | UN fichier continu "
+           "par sens, plafond %d Mo, coupure sous %d Mo libres. "
+           "⚠️ I/Q RECONSTRUITE a partir des bits : ni bruit, ni ToA reelle, ni "
+           "fading — rejeu fidele aux BITS, PAS une capture d'air."
+           % (AIRREC_DIR, "oui" if not _AR_DL.off else "non",
+              "oui" if not _AR_UL.off else "non",
+              AIRREC_MAX // 1048576, AIRREC_FREE // 1048576))
     spf     = 1250 * AIRREC_OSR                 # 8 slots x 156,25 symboles
     step    = (625 * AIRREC_OSR) // 4           # 156,25 x OSR, entier si OSR%4==0
     blen    = 148 * AIRREC_OSR
@@ -1065,50 +1332,24 @@ def th_airrec():
     while True:
         # ⚠️ COMPARAISON SIGNEE OBLIGATOIRE. `nxt` demarre 2 trames dans le
         # FUTUR : `(now_fn() - nxt) % GSM_HYPERFRAME` vaut alors ~2 715 646 et
-        # non -2. La premiere version prenait donc ce retard imaginaire pour un
+        # non -2. Une premiere version prenait ce retard imaginaire pour un
         # decrochage, recalait, et repartait par `continue` SANS DORMIR : boucle
-        # folle qui brulait un coeur et n'ecrivait jamais un octet (temoin :
-        # cinq segments air_pont_*.cfile de 0 o). Meme idiome que
-        # emit_with_timing : au-dela d'un demi-hyperframe, la difference est
-        # NEGATIVE, pas enorme.
+        # folle qui brulait un coeur et n'ecrivait jamais un octet.
         d = (now_fn() - nxt) % GSM_HYPERFRAME
         if d > GSM_HYPERFRAME // 2:      # nxt est dans le futur : on l'attend
             time.sleep(FRAME_DUR / 2.0)
             continue
-        if d > 650:                      # >3 s de retard : irrattrapable, on recale
-            with _ar_lock:
-                _ar_frames.clear()
+        if d > 650:                      # >3 s de retard : irrattrapable, recale
+            with _AR_DL.lock: _AR_DL.frames.clear()
+            with _AR_UL.lock: _AR_UL.frames.clear()
             nxt = (now_fn() + 2) % GSM_HYPERFRAME
             time.sleep(FRAME_DUR)        # jamais de continue sans dormir ici
             continue
         if d < 2:
             time.sleep(FRAME_DUR / 2.0)
             continue
-        with _ar_lock:
-            slots = _ar_frames.pop(nxt, None)
-            if len(_ar_frames) > 512:   # trames jamais reclamees : pas de fuite
-                _ar_frames.clear()
-        if slots:
-            frame = _np.zeros(spf, dtype=_np.complex64)
-            for tn, bits in slots.items():
-                o = tn * step
-                frame[o:o + blen] = _ar_mod(bits)
-                _ar_stats["bursts"] += 1
-        else:
-            frame = silence         # le SILENCE porte le temps : on l'ecrit
-        try:
-            _ar_fh.write(frame.tobytes())
-            _ar_bytes += frame.nbytes
-            _ar_stats["frames"] += 1
-        except OSError as e:
-            ST.log("airrec ecriture ECHEC (%s) — enregistrement COUPE" % e)
-            _ar_off = True
-            return
-        if _ar_split or _ar_bytes >= AIRREC_SEG:
-            _ar_split = False
-            if not _ar_rotate():
-                _ar_off = True
-                return
+        _AR_DL.ecrire(nxt, spf, step, blen, silence)
+        _AR_UL.ecrire(nxt, spf, step, blen, silence)
         nxt = (nxt + 1) % GSM_HYPERFRAME
 
 def send_trxd_ul(tn, fn, burst148, cipher=False):
@@ -1130,6 +1371,11 @@ def send_trxd_ul(tn, fn, burst148, cipher=False):
     buf += bytes(255 if b == 0x01 else 0 for b in burst148)
     sk_data.sendto(bytes(buf), _bts_addr["data"])
     capture_burst(fn, tn, burst148, True)
+    # AIRREC MONTANT : ICI et pas avant — `burst148` vient de passer a5_apply,
+    # c'est donc le burst tel qu'il part REELLEMENT sur l'air. Enregistrer avant
+    # le chiffrement donnerait un fichier que `-e/-k` ne saurait pas relire et
+    # qui ne montrerait pas ce que le reseau voit.
+    airrec_feed_ul(fn, tn, burst148)
     capture_iq(burst148)
     ST.n_ul_sent += 1
 
@@ -1235,6 +1481,11 @@ def ul_sdcch_from_sideband():
                     last_seq = seq
                     l1s_fn = struct.unpack_from("<I", b, 4)[0]
                     l2 = b[16:39]
+                    # MONTANT : on tape la L2 TELLE QUE LE MOBILE L'A POSEE,
+                    # avant encodage et avant chiffrement. C'est la seule vue
+                    # lisible du montant : aucun outil ne sait demoduler un
+                    # enregistrement montant (pas de FCCH/SCH pour se caler).
+                    tap(now_fn(), GSMTAP_SDCCH4, l2, 0, True)
                     bursts = xcch_encode_4(l2)
                     # ⚠️ MEME BUG QUE LE RACH : `l1s_fn` est l'horloge du FIRMWARE,
                     # pas celle du pont (que la BTS suit via IND CLOCK). Emettre
@@ -1380,6 +1631,13 @@ def th_stats():
                + " | FACCH dl=%d ul=%d gap=%d" % (ST.n_facch_dl, ST.n_facch_ul, ST.n_tch_gap)
                + " | BSP fed=%d err=%d" % (ST.n_bsp_fed, ST.n_bsp_err)
                + " | ul_court=%d" % ST.n_tch_ul_court
+               + " | TAP dl=%d ul=%d" % (ST.n_tap_dl, ST.n_tap_ul)
+               + " | FIFO dl=%d/%d ul=%d/%d"
+                 % (_AR_DL.n_fifo, _AR_DL.n_fifo_drop,
+                    _AR_UL.n_fifo, _AR_UL.n_fifo_drop)
+               + " | AIRREC dl=%dtr/%dbu ul=%dtr/%dbu"
+                 % (_AR_DL.n_frames, _AR_DL.n_bursts,
+                    _AR_UL.n_frames, _AR_UL.n_bursts)
                + " | TCHUL bursts=%d file_v=%d file_f=%d drop=%d vol=%d"
                  % (ST.n_tch_burst, len(_tch_q_voice), len(_tch_q_facch),
                     ST.n_tch_ul_drop, ST.n_tch_ul_vole))
@@ -1425,6 +1683,12 @@ def main():
     ST.log("pont TRX démarré : base=%d (CLCK/CTRL/DATA %d/%d/%d) BSIC=%d ARFCN=%d UL_FN_ADVANCE=%d"
            % (TRX_BASE, TRX_BASE, TRX_BASE+1, TRX_BASE+2, BSIC, ARFCN, UL_FN_ADVANCE))
     ST.log("slot-map (osmo-bsc.cfg) : %s" % TS_CONFIG)
+    if TAP:
+        ST.log("tap GSMTAP ACTIF -> %s:%d (descendant ET montant, drapeau uplink "
+               "pose). Wireshark : udp port %d. PONT_TAP=0 pour couper."
+               % (GSMTAP_HOST, TAP_PORT, TAP_PORT))
+    else:
+        ST.log("tap GSMTAP desactive (PONT_TAP=0)")
     # SIGUSR1 = « Split » d'AIRREC (le dashboard s'en sert pour decouper une
     # tranche). ⚠️ signal.signal() ne fonctionne QUE dans le thread principal :
     # l'installer depuis th_airrec levait ValueError, que le try/except avalait
