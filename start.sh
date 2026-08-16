@@ -983,13 +983,15 @@ start_bridge_mode() {
         # pour que CALYPSO_MODE soit correctement passé et reconnu
         exec docker exec -ti "$_qemu_container" bash -c \
             "cd /opt/GSM/osmo_egprs && \
+             ./start-direct.sh --stop && \
              NO_MENU=1 \
              MODE='${HANDOFF_MODE}' \
              QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' \
-             ENCRYPTION='${ENCRYPTION}' \
+             ENCRYPTION='a5 1' \
+             CALYPSO_BRIDGE='pont' \
              CALYPSO_MODE='shunt_legit' \
              ${_wan_env} \
-             ./start-direct.sh"
+             ./start-direct.sh --force"
     fi
 }
 
