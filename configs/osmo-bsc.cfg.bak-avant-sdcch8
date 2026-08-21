@@ -140,7 +140,7 @@ network
   cell reselection hysteresis __CELL_RESEL_HYST__
   rxlev access min __RXLEV_ACCESS_MIN__
   radio-link-timeout 32
-  channel allocator mode chan-req descending
+  channel allocator mode chan-req ascending
   channel allocator mode assignment ascending
   channel allocator mode handover ascending
   channel allocator mode vgcs-vbs ascending
