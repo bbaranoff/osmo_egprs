@@ -781,119 +781,25 @@ _DL_ACC = {}   # clé bloc -> {fn0, bursts[4]}
 #   42,46(SACCH) — c'est la table que si_bridge utilise (_SD4_DL=[22,26,32,36]).
 # Le groupement fn//4 de la v1 était FAUX : il coupait les blocs n'importe où,
 # d'où 100 % de CRC fail.
-# [2026-08-21] PLAN DE BLOCS PAR COMBINAISON — le trou qui tuait la LU sur MS1.
-# Ces deux tables etaient l'UNIQUE plan du pont, et c'est celui du TS0 combine.
-# `TS_CONFIG` lisait bien « SDCCH8 » dans osmo-bsc.cfg et le journal l'affichait
-# au demarrage, mais la valeur ne servait QU'A un `startswith` (« ce slot est-il
-# de la signalisation ? ») : le plan de trames, lui, restait /4 partout. Un
-# portier ouvert sur une piece qui n'existe pas. Des que le BSC a alloue du
-# SDCCH/8 (channel allocator descending), la SABM partait sur le TS0 aux bases
-# du /4 -> la BTS n'entendait rien -> rll_ready=no -> T200 -> LU echouee.
-#
-# Les deux AUTRES implementations du banc connaissent deja le /8 :
-#   calypso_dsp_shunt.c:set_dcch()  /4 -> {22,26,32,36}[ss]  ·  /8 -> ss*4
-#   qemu_wrap.c:2089               UL /8 -> (ss*4 + 15) % 51
-# On reprend leur table a l'identique. Trois implementations qui divergeraient
-# sur ces bases produiraient un montant hors fenetre EN SILENCE.
-UL_OFFSET51 = 15        # GSM 05.02 : le bloc montant demarre 15 trames apres le DL
-
-class SlotPlan:
-    """Plan 51-multitrame d'un slot de signalisation : ou sont les blocs de 4
-    bursts, lesquels sont du canal DEDIE (donc chiffrables A5), ou repondre."""
-    def __init__(s, name, sdcch_dl, sacch_dl, other_dl):
-        s.name     = name
-        s.n_sub    = len(sdcch_dl)          # 4 ou 8 sous-voies
-        s.sdcch_dl = tuple(sdcch_dl)        # base DL fn%51, index = sous-voie
-        s.sacch_dl = tuple(sacch_dl)        # bases DL fn%51 des SACCH
-        s.other_dl = tuple(other_dl)        # BCCH/CCCH : jamais chiffre, jamais dedie
-        # SACCH : la base fn%51 NE SUFFIT PAS a identifier la sous-voie — elles
-        # se partagent les memes bases et ne se separent que sur la 102-multitrame
-        # (moitie basse pour les sous-voies hautes). D'ou une table sur 102 :
-        # /4 -> 42,46,93,97   ·   /8 -> 32,36,40,44,83,87,91,95.
-        _half = len(sacch_dl)
-        s.sacch_dl102 = tuple(sacch_dl[i % _half] + (51 if i >= _half else 0)
-                              for i in range(s.n_sub))
-        s.ded_bases   = tuple(sorted(set(s.sdcch_dl + s.sacch_dl)))
-        s.block_bases = tuple(sorted(set(s.sdcch_dl + s.sacch_dl + s.other_dl)))
-    def ul_base(s, ss):
-        """Base fn%51 du bloc MONTANT de la sous-voie `ss`."""
-        return (s.sdcch_dl[ss % s.n_sub] + UL_OFFSET51) % 51
-
-# TS0 combine (combinaison V) : FCCH/SCH aux 0,10,20,30,40 / 1,11,21,31,41,
-# BCCH 2, CCCH 6,12,16, SDCCH/4 22,26,32,36, SACCH/C4 42,46, idle 50.
-PLAN_SD4 = SlotPlan("CCCH+SDCCH4", (22, 26, 32, 36), (42, 46), (2, 6, 12, 16))
-# SDCCH/8 non combine (combinaison VII) : 8 blocs dedies a ss*4, SACCH/C8 a
-# 32,36,40,44 (sous-voies 0..3 ; 4..7 sur l'autre moitie de la 102-multitrame),
-# 48-50 idle. AUCUN BCCH/CCCH : ce slot ne porte pas de canal commun.
-PLAN_SD8 = SlotPlan("SDCCH8", (0, 4, 8, 12, 16, 20, 24, 28), (32, 36, 40, 44), ())
-
-def plan_for(phys):
-    """Plan du slot d'apres son phys_chan_config, ou None s'il n'en porte pas."""
-    if phys.startswith("SDCCH8"):
-        return PLAN_SD8
-    if phys.startswith("CCCH"):
-        return PLAN_SD4
-    return None
+_BLOCK_BASES = (2, 6, 12, 16, 22, 26, 32, 36, 42, 46)
+_SD4_DL = (22, 26, 32, 36)   # base DL par sous-voie SS0..3 (si_bridge)
 
 def _block_key(tn, phys, fn):
     """Identifie le bloc de 4 bursts auquel `fn` appartient.
     Retourne (tn, fn_du_1er_burst) ou None si `fn` n'est pas dans un bloc
     (FCCH, SCH, idle) — ces bursts ne vont PAS dans xcch."""
-    plan = plan_for(phys)
-    if plan is None:
-        return None
     m51 = fn % 51
-    for b in plan.block_bases:
+    for b in _BLOCK_BASES:
         if b <= m51 <= b + 3:
             return (tn, fn - (m51 - b))     # clé = FN du 1er burst du bloc
     return None
-
-def _dcch_active_ss(tn, plan):
-    """Sous-voie qui NOUS appartient sur ce slot, ou None si on l'ignore.
-
-    Rend None (donc : on traite tout, comme avant) tant que le firmware n'a pas
-    positivement designe CE slot avec CETTE combinaison. Le gate ne peut donc
-    que RETRECIR un perimetre connu, jamais fermer une porte par ignorance."""
-    kind, ss, dtn = _dcch_cfg()
-    if dtn != tn:
-        return None
-    if (PLAN_SD8 if kind else PLAN_SD4) is not plan:
-        return None
-    return ss % plan.n_sub
 
 def _acc_dl(tn, phys, fn, burst148):
     k = _block_key(tn, phys, fn)
     if k is None:
         return                       # FCCH / SCH / idle : rien à décoder en xcch
-    plan   = plan_for(phys)
-    base51 = k[1] % 51
-    # [2026-08-21] NE DECODER QUE NOTRE SOUS-VOIE.
-    # Sans ce filtre, un slot SDCCH/8 fait passer ses 12 bases (8 SDCCH + 4
-    # SACCH) dans xcch_decode ET dans a5_apply alors qu'UNE SEULE nous concerne :
-    # 204 bursts/s sur les 374 traites, dont ~92 % de vide. Deux consequences,
-    # l'une couteuse et l'autre grave :
-    #   - le compteur crc_fail est noye par des blocs vides par construction,
-    #     donc le taux de decodage ne veut plus rien dire ;
-    #   - tout bloc d'une AUTRE sous-voie qui passe le CRC est presente au shunt
-    #     comme du dedie et remonte au LAPDm du mobile, qui repond « I frame
-    #     response not allowed (state LAPD_STATE_IDLE) ».
-    # Le shunt, lui, ne presente QUE la fenetre de la sous-voie active
-    # (calypso_dsp_shunt_set_dcch) : le pont s'aligne sur la meme discipline.
-    _act = _dcch_active_ss(tn, plan)
-    if _act is not None:
-        if base51 in plan.sdcch_dl and base51 != plan.sdcch_dl[_act]:
-            return                   # SDCCH d'un autre abonne
-        if base51 in plan.sacch_dl and (k[1] % 102) != plan.sacch_dl102[_act]:
-            return                   # SACCH d'une autre sous-voie (cf. 102)
-    # Un bloc commence mais jamais fini (changement de canal, burst manquant)
-    # resterait indefiniment dans _DL_ACC. Borne dure : au-dela, on repart d'un
-    # accumulateur propre plutot que de fuir en silence.
-    if len(_DL_ACC) > 64:
-        _DL_ACC.clear()
-    # A5 : seulement le canal DEDIE. Les bases dependent de la combinaison —
-    # sur un SDCCH/8, {22,26,32,36,42,46} designe du VIDE et laissait tout le
-    # dedie en clair (donc indecodable des que le reseau chiffre).
-    if base51 in plan.ded_bases:
+    # A5 : seulement le canal DEDIE (SDCCH 22/26/32/36, SACCH 42/46).
+    if (k[1] % 51) in (22, 26, 32, 36, 42, 46):
         burst148 = a5_apply(burst148, fn, False)
     d = _DL_ACC.setdefault(k, {"fn0": k[1], "b": []})
     d["b"].append(burst116_from_normal(burst148))
@@ -901,24 +807,20 @@ def _acc_dl(tn, phys, fn, burst148):
     if len(d["b"]) == 4:
         l2, rc, ne = xcch_decode_4(d["b"])
         del _DL_ACC[k]
-        # [2026-08-21] CLE = (tn, base51), PAS base51 seul. Avec deux slots de
-        # signalisation, les bases communes aux deux plans (12, 16, 32, 36)
-        # etaient additionnees : la ligne DETAIL affichait « 12:20/40 » en
-        # melangeant du CCCH du TS0 et du SDCCH/8 du TS1. Un ratio construit
-        # sur deux canaux differents ne veut rien dire.
-        st = ST.n_by_base.setdefault((tn, base51), [0, 0])
+        base51 = k[1] % 51
+        st = ST.n_by_base.setdefault(base51, [0, 0])
         # TRACE DEDIE : la seule mesure qui tranche « le keystream est-il bon ? ».
         # Si les decodages s'ARRETENT pile quand A5=oui, le keystream est faux —
         # et on a le FN exact pour calculer l'ecart au lieu de balayer FN_ADJ.
         # MESURE DECISIVE : seulement la sous-voie ACTIVE (les autres sont vides
         # par construction et noieraient le signal). Sans plafond : c'est un
         # RATIO, il doit etre exact.
-        if _act is not None and base51 == plan.sdcch_dl[_act]:
+        if base51 == _SD4_DL[_dcch_ss() & 3]:
             tgt = ST.n_act_ciph if _a5_last["applied"] else ST.n_act_clear
             tgt[1] += 1
             if l2 is not None:
                 tgt[0] += 1
-        if base51 in plan.ded_bases:
+        if base51 in (22, 26, 32, 36, 42, 46):
             global _ded_n
             _ded_n += 1
             if _ded_n <= 60 or (_ded_n % 20) == 0:
@@ -939,24 +841,17 @@ def _acc_dl(tn, phys, fn, burst148):
         # traite comme un SI -> "No sysinfo yet" cote mobile.
         # L2 = trame LAPDm : [0]addr [1]ctrl [2]len puis L3 -> [3]=PD(0x06=RR)
         # [4]=type. (Repli sur by[1]/by[2] si le bloc est deja deshabille.)
-        if base51 in plan.sdcch_dl:
-            # CANAL DEDIE descendant (SDCCH/4 SS0..3 ou SDCCH/8 SS0..7) : LAPDm
-            # pur (UA, AUTH REQ,
+        base51 = k[1] % 51
+        if base51 in (22, 26, 32, 36):
+            # CANAL DEDIE descendant (SDCCH/4 SS0..3) : LAPDm pur (UA, AUTH REQ,
             # LU ACCEPT, ...). NE PAS filtrer par type RR — ce n'est pas du RR.
             # C'etait LE trou : tout le DL dedie etait jete, donc l'UA n'arrivait
             # jamais au mobile -> il repetait sa SABM -> "SABM not allowed in
             # this state" cote BTS alors que le lchan etait ESTABLISHED.
-            # ⚠️ SOUS-TYPE : on garde 0x07 (SDCCH4) meme pour un SDCCH/8. Ce
-            # champ n'est PAS une description du canal, c'est le selecteur de
-            # dispatch du shunt (calypso_dsp_shunt.c:3212) : sa liste blanche
-            # ne connait que 0x07/0x87/TCH, et 0x08 = GSMTAP_CHANNEL_SDCCH8 y
-            # serait JETE en silence — le miroir exact du bug FACCH 0x08/0x09
-            # corrige le 12/08. La combinaison reelle, elle, est portee par
-            # set_dcch(kind, ss) que le firmware publie depuis son chan_nr.
             feed_dl_l2(d["fn0"], GSMTAP_SDCCH4, l2, PORT_GSMTAP)
             check_assignment(l2, d["fn0"])     # arme le TCH si c'est un ASSIGNMENT
             return
-        if base51 in plan.sacch_dl:
+        if base51 in (42, 46):
             feed_dl_l2(d["fn0"], GSMTAP_SACCH, l2, PORT_GSMTAP)   # SACCH dediee
             return
         # BCCH / CCCH : routage PAR CONTENU (le shunt dispatche sur le sub_type).
@@ -1553,24 +1448,17 @@ def emit_with_timing(tn, target_fn, bursts, cipher=False, tch=False):
             continue
         send_trxd_ul(tn, fn_air, b148, cipher)
 
-# Canal dedie actif, publie par le FIRMWARE dans /dev/shm/calypso_dcch_cfg
-# (format qemu_wrap.c:1013-1026 : seq u32@0, kind@4, ss@5, tn@6, chan_nr@7).
-# kind : 0 = SDCCH/4 combine, 1 = SDCCH/8 — meme convention que set_dcch().
-#
-# [2026-08-21] Le pont ne lisait QUE `ss`, masque `& 3`, et jetait `kind` et
-# `tn`. D'ou les trois defauts qui, ensemble, tuaient la LU sur un SDCCH/8 :
-# sous-voie plafonnee a 4 (SS4..7 repliees sur SS0..3), fenetre UL toujours
-# celle du /4, et slot d'emission fige a 0.
+# Bases UL du SDCCH/4 combine, par sous-voie SS0..3 (qemu_wrap.c UL4).
+# La sous-voie active est publiee par le firmware dans /dev/shm/calypso_dcch_cfg
+# (format qemu_wrap.c:1017 : seq u32@0, kind@4, ss@5, tn@6, chan_nr@7).
+_UL4 = (37, 41, 47, 0)
+
 _dcch_fd = None
 
-def _dcch_cfg():
-    """(kind, ss, tn) du canal dedie actif — lu, jamais suppose.
+def _dcch_ss():
+    """Sous-voie dediee active (0..3), lue et jamais supposee.
 
-    ⚠️ UN SEUL fd persistant (cf. l'audit ci-dessous), et `& 7` sur la sous-voie :
-    sur SDCCH/8 il y en a HUIT, et le `& 3` d'avant repliait SS4..7 sur SS0..3 —
-    donc postait la SABM dans la fenetre d'un AUTRE abonne.
-
-    ⚠️ CORRIGE (audit) : une version anterieure faisait
+    ⚠️ CORRIGE (audit) : la version precedente faisait
     `os.pread(os.open(DCCH_CFG, ...), 16, 0)` sans jamais fermer le fd. Appelee
     ~42 fois/s par TROIS threads, elle saturait la table de descripteurs (1024)
     en ~24 s — mesure live : 1015 fd sur calypso_dcch_cfg. Ensuite TOUT os.open
@@ -1583,7 +1471,7 @@ def _dcch_cfg():
             _dcch_fd = os.open(DCCH_CFG, os.O_RDONLY)
         b = os.pread(_dcch_fd, 16, 0)
         if len(b) >= 8 and struct.unpack_from("<I", b, 0)[0]:
-            return (b[4] & 1, b[5] & 7, b[6] & 7)
+            return b[5] & 3
     except OSError as e:
         # Une sonde muette rend son silence indecidable (regle du projet) :
         # on compte et on annonce la premiere erreur.
@@ -1595,43 +1483,18 @@ def _dcch_cfg():
         _dcch_fd = None
         ST.n_dcch_err += 1
         if ST.n_dcch_err == 1:
-            ST.log("dcch_cfg illisible (%s) — dedie suppose SDCCH/4 SS0 TS0 "
-                   "jusqu'a nouvel ordre" % e)
-    return (0, 0, 0)
-
-def _dcch_plan():
-    """(plan, ss, tn) du canal dedie actif.
-
-    Le plan vient de `kind`, c'est-a-dire de l'avis du FIRMWARE sur son propre
-    chan_nr — exactement la source dont le shunt tire sa fenetre de presentation
-    (calypso_dsp_shunt_set_dcch). Le deduire de TS_CONFIG[tn] en ferait une
-    SECONDE verite, qui divergerait au premier desaccord et en silence."""
-    kind, ss, tn = _dcch_cfg()
-    return (PLAN_SD8 if kind else PLAN_SD4), ss, tn
-
-def _dcch_ss():
-    """Sous-voie dediee active (0..7).
-
-    ⚠️ CORRIGE (audit) : la version precedente faisait
-    `os.pread(os.open(DCCH_CFG, ...), 16, 0)` sans jamais fermer le fd. Appelee
-    ~42 fois/s par TROIS threads, elle saturait la table de descripteurs (1024)
-    en ~24 s — mesure live : 1015 fd sur calypso_dcch_cfg. Ensuite TOUT os.open
-    echouait EN SILENCE : kc_read() rendait « pas de Kc » (A5 mort), tch_cfg_read()
-    Ne duplique pas la lecture : _dcch_cfg() est la seule porte."""
-    return _dcch_cfg()[1]
+            ST.log("dcch_cfg illisible (%s) — sous-voie supposee SS0 jusqu'a nouvel ordre" % e)
+    return 0
 
 def next_sdcch_ul_fn(min_advance=4):
     """Prochaine FN de NOTRE horloge ouvrant un bloc SDCCH montant."""
-    plan, ss, _tn = _dcch_plan()
-    base51 = plan.ul_base(ss)
+    base51 = _UL4[_dcch_ss()]
     start = now_fn() + min_advance
     for k in range(51):
         fn = (start + k) % GSM_HYPERFRAME
         if fn % 51 == base51:
             return fn
     return start % GSM_HYPERFRAME
-
-_ul_sd_n = [0]     # compteur d'emissions SDCCH montantes (pour la trace ci-dessous)
 
 def ul_sdcch_from_sideband():
     """Lit la L2 SDCCH déposée par l'ARM, l'encode et l'émet (4 bursts étalés)."""
@@ -1653,26 +1516,13 @@ def ul_sdcch_from_sideband():
                     # avant encodage et avant chiffrement. C'est la seule vue
                     # lisible du montant : aucun outil ne sait demoduler un
                     # enregistrement montant (pas de FCCH/SCH pour se caler).
-                    plan, ss, tn = _dcch_plan()
-                    tap(now_fn(), GSMTAP_SDCCH4, l2, tn, True)
+                    tap(now_fn(), GSMTAP_SDCCH4, l2, 0, True)
                     bursts = xcch_encode_4(l2)
                     # ⚠️ MEME BUG QUE LE RACH : `l1s_fn` est l'horloge du FIRMWARE,
                     # pas celle du pont (que la BTS suit via IND CLOCK). Emettre
                     # dedans donnait 35 bursts "hors fenetre". On vise le prochain
                     # bloc SDCCH montant de NOTRE horloge.
-                    #
-                    # ⚠️ LE SLOT ETAIT LA CONSTANTE 0. Toute SABM partait donc sur
-                    # le TS0, quel que soit le chan_nr de l'IMMEDIATE ASSIGNMENT.
-                    # Des que le BSC allouait le SDCCH/8 du TS1, la BTS ecoutait
-                    # sur le TS1 et n'entendait rien : T200 x6 -> RR_REL_IND ->
-                    # « Location update failed », avec un lchan cote BSC bloque
-                    # en WAIT_RLL_RTP_ESTABLISH (rll_ready=no). Le slot vient
-                    # maintenant du firmware, comme la sous-voie et la fenetre.
-                    if _ul_sd_n[0] < 10 or (_ul_sd_n[0] % 50) == 0:
-                        ST.log("SDCCH-UL -> %s SS=%d TS=%d fenetre fn%%51=%d (#%d)"
-                               % (plan.name, ss, tn, plan.ul_base(ss), _ul_sd_n[0]))
-                    _ul_sd_n[0] += 1
-                    emit_with_timing(tn, next_sdcch_ul_fn(), bursts, cipher=True)
+                    emit_with_timing(0, next_sdcch_ul_fn(), bursts, cipher=True)
         except OSError:
             fd = None
         time.sleep(FRAME_DUR / 8)
@@ -1825,16 +1675,11 @@ def th_stats():
         # Detail par base de bloc (GSM 05.02) : montre d'ou vient le crc_fail.
         # 2=BCCH  6/12/16=CCCH  22/26/32/36=SDCCH  42/46=SACCH.
         if ST.n_by_base:
-            det = " ".join("TS%d/%d:%d/%d" % (b[0], b[1], v[0], v[0] + v[1])
+            det = " ".join("%d:%d/%d" % (b, v[0], v[0] + v[1])
                            for b, v in sorted(ST.n_by_base.items()))
-            ST.log("DETAIL blocs (TS/base51 : decodes/tentes) " + det)
-        _p, _ss, _tn = _dcch_plan()
-        _gate = "sous-voie seule" if TS_CONFIG.get(_tn, "") and \
-                plan_for(TS_CONFIG.get(_tn, "")) is _p else "TOUT (dedie non designe)"
-        ST.log("SOUS-VOIE ACTIVE (%s SS=%d TS=%d base DL=%d, UL=%d, filtre=%s) : "
-               "clair %d/%d  chiffre %d/%d"
-               % (_p.name, _ss, _tn, _p.sdcch_dl[_ss % _p.n_sub], _p.ul_base(_ss),
-                  _gate,
+            ST.log("DETAIL blocs (base51 : decodes/tentes) " + det)
+        ST.log("SOUS-VOIE ACTIVE (base %d) : clair %d/%d  chiffre %d/%d"
+               % (_SD4_DL[_dcch_ss() & 3],
                   ST.n_act_clear[0], ST.n_act_clear[1],
                   ST.n_act_ciph[0],  ST.n_act_ciph[1]))
 
@@ -1868,18 +1713,7 @@ def main():
         pass
     ST.log("pont TRX démarré : base=%d (CLCK/CTRL/DATA %d/%d/%d) BSIC=%d ARFCN=%d UL_FN_ADVANCE=%d"
            % (TRX_BASE, TRX_BASE, TRX_BASE+1, TRX_BASE+2, BSIC, ARFCN, UL_FN_ADVANCE))
-    # Une sonde muette rend son silence indecidable : on annonce le PLAN retenu
-    # pour chaque slot, pas seulement le texte lu. C'est precisement ce qui
-    # manquait — le pont affichait « 1: SDCCH8 » depuis toujours alors qu'aucun
-    # plan /8 n'existait, et cette ligne suffisait a faire croire au contraire.
     ST.log("slot-map (osmo-bsc.cfg) : %s" % TS_CONFIG)
-    for _tn in sorted(TS_CONFIG):
-        _p = plan_for(TS_CONFIG[_tn])
-        if _p is None:
-            continue
-        ST.log("  TS%d %-12s plan=%s  %d sous-voies  DL fn%%51=%s  UL fn%%51=%s  SACCH=%s"
-               % (_tn, TS_CONFIG[_tn], _p.name, _p.n_sub, list(_p.sdcch_dl),
-                  [_p.ul_base(i) for i in range(_p.n_sub)], list(_p.sacch_dl)))
     if TAP:
         ST.log("tap GSMTAP ACTIF -> %s:%d (descendant ET montant, drapeau uplink "
                "pose). Wireshark : udp port %d. PONT_TAP=0 pour couper."
