@@ -45,6 +45,10 @@ INTER_NET="gsm-inter"
 INTER_NET_SUBNET="172.20.0.0/24"
 INTER_NET_GATEWAY="172.20.0.1"
 
+# Quel nœud du WAN héberge le hub SS7. UN SEUL doit le faire : deux hubs, c'est
+# deux réseaux SS7 séparés qui s'ignorent, et rien ne le signale.
+WAN_HUB_NODE="${WAN_HUB_NODE:-1}"
+IMAGE_STP="${IMAGE_STP:-osmocom-stp}"
 INTER_STP_CONTAINER="osmo-inter-stp"
 INTER_STP_IP="172.20.0.10"
 
@@ -78,6 +82,7 @@ WAN_MESH=0
 VBOX_INTERCO=0
 VBOX_NODES=""
 VBOX_HOST_NODE=1
+BUILD_STP=0
 # shellcheck source=network/wan-nodes.sh
 . "$(dirname "$0")/network/wan-nodes.sh"
 
@@ -536,12 +541,39 @@ start_inter_stp() {
     local tmpdir
     tmpdir=$(mktemp -d)
     local inter_cfg="${tmpdir}/osmo-stp-interop.cfg"
-    echo -e "${GREEN}Génération config inter-STP (${n_operators} opérateurs)...${NC}"
-    bash ./helpers/create_interop.sh "$n_operators" "$inter_cfg" > /dev/null
+    if [ "${WAN_MESH:-0}" = "1" ]; then
+        # Plan WAN : un AS par couple (nœud, opérateur), point codes
+        # 1.<nœud><op>.<rôle>. Le hub doit connaître TOUS les nœuds, pas
+        # seulement les opérateurs locaux — sinon les ASP distants s'attachent
+        # à un AS qui n'existe pas et sont rejetés sans explication.
+        echo -e "${GREEN}Génération config inter-STP WAN (${WAN_NODE_COUNT} nœuds × ${n_operators})...${NC}"
+        bash ./helpers/create_interop.sh --wan "$WAN_NODE_COUNT" "$n_operators" "$inter_cfg" > /dev/null
+    else
+        echo -e "${GREEN}Génération config inter-STP (${n_operators} opérateurs)...${NC}"
+        bash ./helpers/create_interop.sh "$n_operators" "$inter_cfg" > /dev/null
+    fi
     if [ ! -f "$inter_cfg" ]; then
         echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
     fi
-    echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.23.0)...${NC}"
+    # Le hub ne fait que router du M3UA : l'image osmocom-stp (Dockerfile.stp)
+    # lui suffit et pèse une fraction d'osmocom-run. On ne la CONSTRUIT pas ici
+    # à l'insu de l'appelant — si elle manque, on reste sur l'image complète,
+    # qui contient aussi osmo-stp.
+    local stp_image="$IMAGE_RUN"
+    if [ "${BUILD_STP:-0}" = "1" ] && ! docker image inspect "$IMAGE_STP" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}Construction de ${IMAGE_STP} (Dockerfile.stp)...${NC}"
+        docker build -f "$(dirname "$0")/Dockerfile.stp" -t "$IMAGE_STP" "$(dirname "$0")" \
+            || echo -e "  ${YELLOW}⚠ échec — on restera sur ${IMAGE_RUN}${NC}"
+    fi
+    if docker image inspect "$IMAGE_STP" >/dev/null 2>&1; then
+        stp_image="$IMAGE_STP"
+        echo -e "  ${CYAN}image ${IMAGE_STP} (STP seul)${NC}"
+    elif [ "${WAN_MESH:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}image ${IMAGE_STP} absente — on utilise ${IMAGE_RUN}.${NC}"
+        echo -e "  ${CYAN}Pour la construire : docker build -f Dockerfile.stp -t ${IMAGE_STP} .${NC}"
+    fi
+
+    echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.0.0)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
     docker run -d \
         --rm \
@@ -552,7 +584,7 @@ start_inter_stp() {
         --cap-add NET_ADMIN \
         -v "${inter_cfg}:/etc/osmocom/osmo-stp-interop.cfg" \
         --entrypoint bash \
-        "$IMAGE_RUN" \
+        "$stp_image" \
         -c "sleep infinity" > /dev/null
     docker exec "$INTER_STP_CONTAINER" \
         tmux new-session -d -s stp \
@@ -633,6 +665,18 @@ setup_wan_interop() {
 wan_mesh_configure() {
     local n_operators=$1
     WAN_OPS="$n_operators"
+
+    # Le point code WAN vaut 1.<nœud><op>.<rôle> : le champ central du format
+    # ITU 3-8-3 tient sur 8 bits, soit 255. Avec 12 opérateurs, le nœud 9
+    # donnerait « 912 » — un point code invalide, refusé par osmo-stp au
+    # démarrage avec une erreur de parsing qui ne dit rien du nombre
+    # d'opérateurs. On arrête ici, en nommant la cause.
+    if [ "$n_operators" -gt 9 ]; then
+        echo -e "${RED}[WAN] ${n_operators} opérateurs : le plan de point codes WAN${NC}" >&2
+        echo -e "${RED}      (1.<nœud><op>.<rôle>) n'en admet que 9 par nœud.${NC}" >&2
+        echo -e "${CYAN}      Répartissez-les sur plusieurs nœuds, ou lancez sans --wan.${NC}" >&2
+        exit 1
+    fi
 
     # --virtualbox : le segment, les VM et la table sont fabriqués AVANT tout le
     # reste, puis relus comme n'importe quelle table. Le WAN qui suit ne sait
@@ -812,6 +856,20 @@ start_bridge_mode() {
     echo -e "${GREEN}IP hôte : ${CYAN}${HOST_IP}${NC}  (Linphone)${NC}"
     echo ""
 
+    # ── Où joindre le hub SS7, vu d'ici ──────────────────────────────────────
+    # Le hub est UNIQUE pour tout le WAN. Deux cas, et le mauvais donne un ASP
+    # qui ne s'attache jamais :
+    #   ce nœud héberge le hub  → les conteneurs le joignent en interne (172.20.0.10)
+    #   un autre nœud l'héberge → ils sortent sur le WAN, vers SON adresse
+    WAN_STP_TARGET="$INTER_STP_IP"
+    if [ "${WAN_MESH:-0}" = "1" ] && [ "${WAN_NODE_ID}" != "${WAN_HUB_NODE}" ]; then
+        WAN_STP_TARGET="${WAN_IP[$WAN_HUB_NODE]:-}"
+        if [ -z "$WAN_STP_TARGET" ]; then
+            echo -e "${RED}[SS7] le nœud ${WAN_HUB_NODE} (hub) n'est pas dans la table WAN${NC}" >&2
+            exit 1
+        fi
+    fi
+
     # ── Réseau backbone ──────────────────────────────────────────────────────
     if docker network inspect "$INTER_NET" &>/dev/null; then
         echo -e "  ${CYAN}Réseau backbone ${INTER_NET} déjà présent${NC}"
@@ -831,8 +889,13 @@ start_bridge_mode() {
     fi
 
     # ── Inter-STP ────────────────────────────────────────────────────────────
-    start_inter_stp "$n_operators"
-    wait_inter_stp_ready "$n_operators"
+    if [ "${WAN_MESH:-0}" != "1" ] || [ "${WAN_NODE_ID}" = "${WAN_HUB_NODE}" ]; then
+        start_inter_stp "$n_operators"
+        wait_inter_stp_ready "$n_operators"
+    else
+        echo -e "${CYAN}[SS7] hub porté par le nœud ${WAN_HUB_NODE} (${WAN_STP_TARGET}) — pas de hub ici.${NC}"
+        echo -e "${CYAN}      Les ASP de ce nœud s'y attacheront en M3UA/SCTP 2908.${NC}"
+    fi
 
     # ── HLR subscribers ──────────────────────────────────────────────────────
     local all_subscribers_file
@@ -881,11 +944,22 @@ start_bridge_mode() {
 
         local tmpdir
         tmpdir=$(mktemp -d)
+        # Plan de point codes. Hors WAN : 1.<op>.<rôle>, comme toujours. En WAN :
+        # le numéro de nœud entre dedans, sans quoi deux machines présentent au
+        # hub des adresses SS7 identiques — routage faux, et silencieux.
+        # Seul RCTX_INTER est surchargé : c'est le seul routing context que le
+        # hub voit. Ceux du MSC et du BSC restent internes au conteneur.
+        local _pc_mid="$i" _rctx_inter=""
+        if [ "${WAN_MESH:-0}" = "1" ]; then
+            _pc_mid="${WAN_NODE_ID}${i}"
+            _rctx_inter=$(( WAN_NODE_ID * 1000 + i * 100 + 50 ))
+        fi
+        RCTX_INTER_OVERRIDE="$_rctx_inter" \
         apply_config_templates "$tmpdir" \
             "$container_ip" "$gateway" \
-            "$i" "1.${i}.1" "1.${i}.2" "1.${i}.3" \
+            "$i" "1.${_pc_mid}.1" "1.${_pc_mid}.2" "1.${_pc_mid}.3" \
             "${OP_MCC[$i]}" "${OP_MNC[$i]}" "${OP_NAME[$i]}" \
-            "$INTER_STP_IP" "no shutdown" \
+            "$WAN_STP_TARGET" "no shutdown" \
             "$n_operators"
 
         local vol_args alsa_args
@@ -1082,6 +1156,19 @@ start_bridge_mode() {
     fi
     echo ""
 
+    # --virtualbox : le « set » ne se limite pas à cette machine. Les VM sont
+    # créées avant (setup-vbox-interco.sh) ; on les démarre ici, une fois que le
+    # hub et les opérateurs locaux sont debout — un nœud qui monte avant le hub
+    # voit sa SCTP refusée.
+    if [ "${VBOX_INTERCO:-0}" = "1" ]; then
+        local _lab="$(dirname "$0")/tools/vbox-wan-lab.sh"
+        if [ -x "$_lab" ] || [ -r "$_lab" ]; then
+            echo ""
+            echo -e "${GREEN}[*] Démarrage des VM du WAN...${NC}"
+            bash "$_lab" start || echo -e "  ${YELLOW}⚠ démarrage des VM incomplet${NC}"
+        fi
+    fi
+
     echo -e "\n${GREEN}${BOLD}Stack prête !${NC}"
 
     # ── Mode QEMU : handoff vers start-direct.sh ──────────────────────────────
@@ -1089,6 +1176,14 @@ start_bridge_mode() {
         local _qemu_container; _qemu_container=$(op_container 1)
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
         echo -e "  ${CYAN}[*] mode=${HANDOFF_MODE} pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hôte, NO_MENU)${NC}"
+
+        # Le start-direct lancé DANS le conteneur doit connaître son nœud : il
+        # revérifie (et corrige) l'identité SS7 avant de démarrer la pile, au
+        # lieu de dépendre de ce que start.sh a écrit dans les configs.
+        local _node_args=""
+        if [ "${WAN_MESH:-0}" = "1" ]; then
+            _node_args="--node ${WAN_NODE_ID} --op 1 --hub-ip ${WAN_STP_TARGET}"
+        fi
 
         local _wan_env=""
         if [ "${WAN_MESH:-0}" = "1" ]; then
@@ -1111,7 +1206,7 @@ start_bridge_mode() {
              CALYPSO_BRIDGE='pont' \
              CALYPSO_MODE='shunt_legit' \
              ${_wan_env} \
-             ./start-direct.sh --force"
+             ./start-direct.sh ${_node_args} --force"
     fi
 }
 
@@ -1290,6 +1385,11 @@ Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
                           (implique --wan). Cette machine devient un noeud, les
                           autres sont des VM sur un segment host-only.
   --vbox-node N           numéro de noeud porté par cette machine (défaut 1)
+  --hub-node N            noeud qui héberge l'inter-STP, le hub SS7 (défaut 1).
+                          UN SEUL noeud du WAN doit le porter.
+  --build-stp             construit l'image légère osmocom-stp (Dockerfile.stp)
+                          pour le hub. Sans elle, le hub tourne sur l'image
+                          complète, qui contient aussi osmo-stp.
 
   Sans --wan, rien ne change : aucun WAN n'est monté.
   Avec --wan, la radio passe en HYBRIDE par défaut (1 faketrx + 1 QEMU Calypso).
@@ -1311,6 +1411,9 @@ while [ $# -gt 0 ]; do
         --wan-id=*)     WAN_MESH=1; WAN_NODE_ID="${1#*=}" ;;
         --wan-conf)     WAN_CONF_FILE="${2:-}"; shift ;;
         --wan-conf=*)   WAN_CONF_FILE="${1#*=}" ;;
+        --build-stp)      BUILD_STP=1 ;;
+        --hub-node)       WAN_HUB_NODE="${2:-1}"; shift ;;
+        --hub-node=*)     WAN_HUB_NODE="${1#*=}" ;;
         --virtualbox)     WAN_MESH=1; VBOX_INTERCO=1 ;;
         --virtualbox=*)   WAN_MESH=1; VBOX_INTERCO=1; VBOX_NODES="${1#*=}" ;;
         --vbox-node)      VBOX_HOST_NODE="${2:-1}"; shift ;;

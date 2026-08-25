@@ -84,7 +84,10 @@ echo -e "${NC}"
 # Lancé DANS une VM, ce script ne peut rien faire d'utile et ses messages
 # d'erreur ne le diraient pas : VBoxManage y est simplement absent.
 if command -v systemd-detect-virt >/dev/null 2>&1; then
-    _virt="$(systemd-detect-virt 2>/dev/null || echo none)"
+    # `|| echo none` produirait deux lignes quand la commande sort en 1 (cas
+    # « aucune virtualisation ») : on ne garde que la première.
+    _virt="$(systemd-detect-virt 2>/dev/null | head -1)" || true
+    _virt="${_virt:-none}"
     case "$_virt" in
         oracle|kvm|qemu|vmware|microsoft)
             echo -e "${RED}Vous êtes DANS une machine virtuelle (${_virt}).${NC}" >&2

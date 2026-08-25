@@ -48,6 +48,11 @@ WAN_MESH=0
 VBOX_INTERCO=0
 VBOX_NODES=""
 VBOX_HOST_NODE=1
+# --node : le numéro de CE nœud, choisi au lancement et pas à la construction.
+# C'est ce qui permet une ISO unique pour les neuf nœuds.
+NODE_ID=""
+NODE_OP=1
+HUB_IP=""
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -75,6 +80,12 @@ Usage : ./start-direct.sh [options] [mode]
     --wan-nodes "1:IP:IND …"   même chose sans question (scriptable)
     --wan-id N          numéro du noeud local (sinon déduit des IP locales)
     --wan-conf FICHIER  table à lire/écrire (défaut /etc/osmo-wan.conf)
+    --node N            numéro de CE nœud, 1 à 9. Réécrit son identité SS7
+                        (point codes 1.<nœud><op>.<rôle>, routing contexts) et
+                        pointe son ASP sur l'inter-STP. Une seule ISO suffit
+                        alors pour les neuf nœuds — le numéro se choisit ici.
+    --op N              opérateur porté par ce nœud (défaut 1)
+    --hub-ip ADRESSE    inter-STP à joindre (défaut : selon docker ou VM)
     --virtualbox[=N]    WAN entre CETTE machine et N-1 VM VirtualBox (implique
                         --wan). À lancer depuis l'hôte, pas depuis une VM.
     --vbox-node N       numéro de noeud porté par cette machine (défaut 1)
@@ -113,6 +124,12 @@ while [ $# -gt 0 ]; do
         --virtualbox=*) WAN_MESH=1; VBOX_INTERCO=1; VBOX_NODES="${1#*=}" ;;
         --vbox-node)    VBOX_HOST_NODE="${2:-1}"; shift ;;
         --vbox-node=*)  VBOX_HOST_NODE="${1#*=}" ;;
+        --node)         NODE_ID="${2:-}"; shift ;;
+        --node=*)       NODE_ID="${1#*=}" ;;
+        --op)           NODE_OP="${2:-1}"; shift ;;
+        --op=*)         NODE_OP="${1#*=}" ;;
+        --hub-ip)       HUB_IP="${2:-}"; shift ;;
+        --hub-ip=*)     HUB_IP="${1#*=}" ;;
         -h|--help)     usage; exit 0 ;;
         faketrx-qemu|faketrx|qemu|virtphy|noproc|core|hybrid|hw)
             PROFILE="$1"
@@ -123,6 +140,43 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+# --- où tourne-t-on ? ---------------------------------------------------------
+# La question n'est pas cosmétique : le plan d'adressage EN DÉPEND.
+#   docker  → l'inter-STP est le conteneur osmo-inter-stp (172.20.0.10), le
+#             nœud a déjà son IP quand les démons démarrent.
+#   VM/ISO  → l'inter-STP est une machine à part (192.168.56.1), et l'adresse
+#             du nœud vient du DHCP : elle peut manquer au lancement.
+# Prendre l'un pour l'autre donne un ASP qui ne s'attache jamais, avec pour
+# seule trace un « connection refused » vers une adresse inexistante ici.
+#
+# /.dockerenv seul ne suffit pas — il est vrai dans n'importe quel conteneur.
+# On exige aussi /etc/docker-entrypoint-cmd, que scripts/entrypoint.sh dépose :
+# c'est ce couple qui identifie un conteneur DE CE DÉPÔT.
+detect_runtime_env() {
+    if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then
+        echo docker; return
+    fi
+    if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
+        echo docker; return
+    fi
+    # systemd-detect-virt SORT EN CODE 1 quand il ne trouve rien. Un
+    # « $(cmd || echo none) » produit alors DEUX lignes — la sortie « none » du
+    # programme, plus celle du repli — et aucun motif ne correspond : une
+    # machine physique se retrouvait classée « vm ». On ignore le code de
+    # sortie et on ne garde que la première ligne.
+    local v
+    v="$(systemd-detect-virt 2>/dev/null | head -1)" || true
+    v="${v:-none}"
+    case "$v" in
+        oracle|kvm|qemu|vmware|microsoft|xen|bochs|parallels) echo vm ;;
+        none|"") echo bare ;;
+        *) echo vm ;;
+    esac
+}
+RUNTIME_ENV="${RUNTIME_ENV:-$(detect_runtime_env)}"
+# Pour les scripts qui ne connaissent que deux mondes : docker, ou tout le reste.
+case "$RUNTIME_ENV" in docker) NODE_MODE=docker ;; *) NODE_MODE=native ;; esac
+
 # --- affichage (identique à run.sh) -------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     TTY=1
@@ -489,6 +543,8 @@ fi
 # --- 6. résumé ----------------------------------------------------------------
 banner
 printf '  %sprofil%s     %s (%s)\n' "$C_DIM" "$C_Z" "$CALYPSO_PROFILE" "$MODE"
+printf '  %senviron.%s   %s\n' "$C_DIM" "$C_Z" \
+    "$(case "$RUNTIME_ENV" in docker) echo "conteneur docker" ;; vm) echo "machine virtuelle" ;; *) echo "machine physique" ;; esac)"
 printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
 printf '  %sMS#1%s       %s  IMSI 001010001000001  ARFCN 514  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG"
 printf '  %sMS#2%s       %s  IMSI 001010001000002  ARFCN 516  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG"
@@ -525,6 +581,33 @@ case "$ACTION" in
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --check-paths
         ;;
 esac
+# --- 7ter. Identité de nœud (--node) -------------------------------------------
+# AVANT le WAN et avant run.sh : les point codes sont lus par osmo-stp, osmo-msc
+# et osmo-bsc à leur démarrage. Les changer après ne servirait à rien.
+if [ -n "$NODE_ID" ]; then
+    if ! [[ "$NODE_ID" =~ ^[1-9]$ ]]; then
+        say_end " KO " "$C_KO" "--node" "un chiffre de 1 à 9"; exit 2
+    fi
+    SETID="$HERE/network/set-node-id.sh"
+    if [ ! -r "$SETID" ]; then
+        say_end " KO " "$C_KO" "--node" "network/set-node-id.sh absent"; exit 1
+    fi
+    say_begin "Identité SS7 du nœud $NODE_ID"
+    setid_args=(--node "$NODE_ID" --op "$NODE_OP" --mode "$NODE_MODE")
+    [ -n "$HUB_IP" ] && setid_args+=(--hub-ip "$HUB_IP")
+    if [ "$DRY" -eq 1 ]; then
+        say_end " -- " "$C_DIM" "Identité SS7 du nœud $NODE_ID" "dry-run"
+        bash "$SETID" "${setid_args[@]}" --dry-run 2>&1 | sed 's/^/  /'
+    elif bash "$SETID" "${setid_args[@]}" > "${LOG_DIR:-/tmp}/set-node-id.log" 2>&1; then
+        say_end " OK " "$C_OK" "Identité SS7" "nœud $NODE_ID · PC 1.${NODE_ID}${NODE_OP}.x · mode $NODE_MODE"
+    else
+        say_end " KO " "$C_KO" "Identité SS7" "voir ${LOG_DIR:-/tmp}/set-node-id.log"
+        exit 1
+    fi
+    # Le numéro de nœud vaut aussi pour la voix et les SMS : c'est le même nœud.
+    WAN_NODE_ID="$NODE_ID"
+fi
+
 # --- 7bis. WAN à N noeuds ------------------------------------------------------
 # ICI et pas après : ce processus va devenir run.sh (exec), il n'y a pas d'après.
 # Asterisk n'est pas encore lancé — setup-wan-mesh.sh le voit, écrit la conf et
@@ -587,7 +670,8 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
         printf '  [dry-run] %s --native --id %s\n' "$WAN_MESH_SH" "$WAN_NODE_ID"
     else
         say_begin "WAN — application de la table"
-        if WAN_AUTO=1 bash "$WAN_MESH_SH" --native --id "$WAN_NODE_ID" \
+        # --native / --docker : même distinction que pour les point codes.
+        if WAN_AUTO=1 bash "$WAN_MESH_SH" "--$NODE_MODE" --id "$WAN_NODE_ID" \
                 --nodes "$(wan_nodes_spec)" --ops 1 \
                 --config "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" > "${LOG_DIR:-/tmp}/wan-mesh.log" 2>&1; then
             say_end " OK " "$C_OK" "WAN — noeud $WAN_NODE_ID, indicatif $(wan_local_ind)"

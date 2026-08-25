@@ -3,6 +3,12 @@
 # Aucun docker build direct dans ce script, tout passe par les scripts existants.
 set -euo pipefail
 
+# Couleurs définies AVANT tout : sous `set -u`, la première ligne colorée d'un
+# script qui les déclare plus bas échoue sur « variable sans liaison » — et le
+# message ne parle ni de couleurs ni de l'endroit fautif.
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
+YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
+
 VERSION="${OSMO_ISO_VERSION:-v2}"
 OUTPUT="osmo_egprs-${VERSION}.iso"
 # Répertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
@@ -39,6 +45,7 @@ ISO_WAN_OPS=1
 #
 # Sans --role, rien ne change : on produit l'ISO d'avant, sous son nom d'avant.
 ISO_ROLE=""
+ISO_ROLE_GIVEN=0
 ISO_NODE=""
 ISO_HUB_IP="192.168.56.1"
 ISO_SUBNET="192.168.56"
@@ -50,11 +57,38 @@ for arg in "$@"; do case "$arg" in
     --wan-nodes=*)  ISO_WAN=1; ISO_WAN_NODES="${arg#*=}" ;;
     --wan-id=*)     ISO_WAN=1; ISO_WAN_ID="${arg#*=}" ;;
     --wan-ops=*)    ISO_WAN=1; ISO_WAN_OPS="${arg#*=}" ;;
-    --role=*)       ISO_ROLE="${arg#*=}" ;;
+    --role=*)       ISO_ROLE="${arg#*=}"; ISO_ROLE_GIVEN=1 ;;
     --node=*)       ISO_NODE="${arg#*=}" ;;
     --hub-ip=*)     ISO_HUB_IP="${arg#*=}" ;;
     --subnet=*)     ISO_SUBNET="${arg#*=}" ;;
 esac; done
+
+[ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
+
+# ── Sans argument : LES DEUX images ─────────────────────────────────────────
+# Un WAN a besoin de deux choses différentes — un hub SS7 et des nœuds — et
+# rien ne dit laquelle on veut quand on ne précise rien. On produit donc les
+# deux, par deux passes complètes.
+#
+# UNE SEULE image d'opérateur suffit pour les neuf nœuds : le numéro se choisit
+# au démarrage (`start-direct.sh --node N`), qui réécrit les point codes. C'est
+# la raison pour laquelle on ne fabrique pas osmo-operator-1..9.
+#
+# Le hub d'abord : il ne dépend ni de build.sh ni de l'image osmocom-run, donc
+# un échec de son côté se voit en quelques minutes au lieu d'une heure.
+if [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0" ] && [ -z "$ISO_NODE" ]; then
+    echo -e "${CYAN}${BOLD}══ Aucun rôle demandé : construction des DEUX images ══${NC}"
+    echo -e "  1. ${CYAN}interstp.iso${NC}       le hub SS7 (PC 0.0.0)"
+    echo -e "  2. ${CYAN}osmo-operator.iso${NC}  un nœud — son numéro se choisit au démarrage :"
+    echo -e "     ${CYAN}./start-direct.sh --node N${NC}   (N de 1 à 9)"
+    echo ""
+    "$0" --role=interstp "$@" || { echo -e "${RED}Échec de interstp.iso${NC}" >&2; exit 1; }
+    "$0" --role=operator --output=osmo-operator.iso "$@" \
+        || { echo -e "${RED}Échec de osmo-operator.iso${NC}" >&2; exit 1; }
+    echo -e "${GREEN}${BOLD}═══ Les deux images sont prêtes ═══${NC}"
+    ls -lh "$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" 2>/dev/null | sed 's/^/  /'
+    exit 0
+fi
 
 case "${ISO_ROLE:-operator}" in
     interstp)
@@ -78,13 +112,10 @@ case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
 # build_run_image (image osmocom-run, via DOCKER_NO_CACHE).
 export DOCKER_NO_CACHE="$NO_CACHE"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
-YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
 
 cleanup() { umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
-[ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
 
 # ── Paquets hôte requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
 # Installés ici plutôt que dans le workflow CI : `sudo ./build-iso.sh` suffit
