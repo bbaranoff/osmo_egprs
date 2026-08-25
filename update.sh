@@ -97,9 +97,8 @@ cat > "$SYNC" <<'SYNCEOF'
 # osmo-sync.sh — animation SMS, puis mise à jour des trois dépôts.
 # Posé par update.sh ; appelé à l'ouverture de session depuis
 # /etc/profile.d/01-keyboard-setup.sh, et exécutable à la main :
-#   sudo osmo-sync.sh            question, les trois dépôts en clair, puis l'animation
+#   sudo osmo-sync.sh            les trois dépôts en clair, puis l'animation
 #   sudo osmo-sync.sh --quiet    sans l'animation finale
-#   sudo osmo-sync.sh -y         sans poser la question
 #   sudo osmo-sync.sh qemu-src   un seul dépôt
 set -u
 
@@ -107,43 +106,15 @@ LOG=/var/log/osmo-update.log
 G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; C='\033[0;36m'; B='\033[1m'; N='\033[0m'
 
 ANIM=1
-ASSUME_YES="${OSMO_SYNC_YES:-0}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --quiet)   ANIM=0 ;;
-        -y|--yes)  ASSUME_YES=1 ;;
+        -y|--yes)  ;;   # accepté et ignoré : plus de question à confirmer
         *) break ;;
     esac
     shift
 done
 ONLY="${1:-}"
-
-# ── Le disclaimer ───────────────────────────────────────────────────────────
-# La mise à jour n'est pas anodine : osmo_egprs et osmo-egprs-web sont EFFACÉS
-# puis reclonés. Ce qu'on a bricolé sur place pendant la session précédente —
-# une config éditée à la main, un patch d'essai — disparaît. Quelqu'un au milieu
-# d'un banc doit pouvoir dire non.
-#
-# Délai : sans terminal (service, cron) on ne pose pas la question, on met à
-# jour — c'est le rôle du service. Avec terminal, 15 s sans réponse valent oui :
-# une machine qu'on démarre pour la laisser tourner ne doit pas rester bloquée
-# sur une question que personne ne lira.
-ask_update() {
-    [ "$ASSUME_YES" = "1" ] && return 0
-    [ -t 0 ] || return 0
-    local a
-    echo ""
-    printf "  ${B}Do you want to update?${N}  Mettre à jour les trois dépôts ?\n"
-    printf "  ${Y}%s${N} et ${Y}%s${N} seront ${Y}effacés puis reclonés${N} (modifs locales perdues).\n" \
-        /opt/GSM/osmo_egprs /opt/osmo-egprs-web
-    printf "  ${C}qemu-src${N} est mis à jour sans effacement.\n"
-    printf "  [O/n] (15 s sans réponse = oui) : "
-    read -r -t 15 a || { echo ""; a=""; }
-    case "${a:-o}" in
-        [nN]*) echo ""; printf "  ${Y}Mise à jour passée.${N}  Plus tard : ${C}sudo osmo-sync.sh${N}\n\n"; return 1 ;;
-        *) return 0 ;;
-    esac
-}
 
 # ── L'animation ─────────────────────────────────────────────────────────────
 # Sur un tty seulement : les séquences de curseur (\033[?25l) écrites dans un
@@ -259,7 +230,8 @@ web_service() {
 }
 
 # ── Déroulé ─────────────────────────────────────────────────────────────────
-ask_update || exit 0
+# Pas de question : la synchro part d'elle-même. Pour ne pas mettre à jour,
+# on ne lance pas osmo-sync.sh (ou on retire /etc/profile.d/99-osmo-sync.sh).
 
 mkdir -p /opt/GSM "$(dirname "$LOG")" 2>/dev/null || true
 echo "===== osmo-sync $(date '+%F %T') =====" >> "$LOG" 2>/dev/null || true
@@ -374,7 +346,7 @@ fi
 # témoin que pose la fin de la configuration clavier, puis on écrit sur le tty où
 # l'utilisateur se trouve. L'enchaînement demandé tient sans toucher à l'ISO :
 #
-#     clavier fr → animation SMS → « Do you want to update? » → les 3 dépôts
+#     clavier fr → animation SMS → les 3 dépôts
 #
 # Détaché (setsid … &) : le service est un oneshot, le bloquer le temps du
 # clavier retarderait multi-user.target et tout ce qui en dépend.
