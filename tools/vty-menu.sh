@@ -57,10 +57,11 @@ menu_services() {
     local OP=$1
     while true; do
         # Ajout de l'option 7 pour le Baseband
-        CHOICE=$(whiptail --title " OPERATOR CONTROL : $OP " --menu "" 18 60 8 \
+        CHOICE=$(whiptail --title " OPERATOR CONTROL : $OP " --menu "" 20 62 9 \
             "1" "MSC (4254)" "2" "BSC (4242)" "3" "HLR (4258)" \
             "4" "MGW (4243)" "5" "GGSN (4260)" "6" "SGSN (4245)" \
             "7" "STP (4239)" "8" "BASEBAND (4247)" \
+            "T" "TMUX - la pile en direct (session osmo)" \
             "R" "<< BACK" 3>&1 1>&2 2>&3)
 
         [[ -z "$CHOICE" || "$CHOICE" == "R" ]] && break
@@ -73,7 +74,21 @@ menu_services() {
             5) connect_vty "$OP" "GGSN" 4260 "gg" ;;
             6) connect_vty "$OP" "SGSN" 4245 "sg" ;;
             7) connect_vty "$OP" "STP" 4239 "stp" ;;
-            8) 
+            T|t)
+                # La session que start.sh ouvre dans chaque conteneur operateur.
+                # Le terminal de lancement est pris par osmo-operator-1 ; c'est
+                # par ici qu'on rejoint les autres, sans avoir a retenir la
+                # commande docker.
+                tput cnorm
+                if docker exec "$OP" sh -c 'command -v tmux >/dev/null 2>&1' 2>/dev/null \
+                   && docker exec "$OP" tmux has-session -t osmo 2>/dev/null; then
+                    echo "  Detacher : Ctrl-b puis d"
+                    docker exec -ti "$OP" tmux attach -t osmo
+                else
+                    whiptail --msgbox "Pas de session tmux 'osmo' dans $OP.\n\nLe journal reste lisible :\n  docker exec $OP tail -f /var/log/osmocom/run.sh.log" 12 66
+                fi
+                ;;
+            8)
                 # Gestion multi-groupes Baseband (127.0.0.1, 127.0.0.2, etc.)
                 local GRP_IP
                 GRP_IP=$(whiptail --title " BASEBAND GROUP SELECT " --inputbox "Target IP (127.0.0.X) :" 10 40 "127.0.0.1" 3>&1 1>&2 2>&3)

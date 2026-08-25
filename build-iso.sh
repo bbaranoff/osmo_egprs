@@ -941,7 +941,7 @@ for i in 1 2 3 4 5; do
         echo "tools/update.sh termine (rc=$rc)"
         # ── Normalisation fstab : retire le doublon /tmp re-injecte par tools/update.sh ──
         # tools/update.sh (gist) re-ajoute 'tmpfs /tmp tmpfs nosuid,nodev 0 0' (SANS size=),
-        # creant un doublon avec l'entree canonique 'tmpfs /tmp ... size=2G' posee au build.
+        # creant un doublon avec l'entree canonique 'tmpfs /tmp ... size en pourcentage' posee au build.
         # On supprime toute ligne 'tmpfs /tmp tmpfs ...' depourvue de size= (le doublon),
         # en conservant l'entree 2G. Idempotent : sans effet si le doublon est absent.
         if [ -f /etc/fstab ]; then
@@ -1178,14 +1178,25 @@ LOGO
 # mot de passe (sinon sshd refuse le login root).
 echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
 
-# ── Espace writable du live : 2 Go pour /dev/shm + /tmp ─────────────────────
+# ── Espace writable du live : /dev/shm + /tmp, en POURCENTAGE de la RAM ─────
 # Le live boote en 'toram' → racine = overlay tmpfs (RAM). Les gros writers de la
 # stack sont les cfiles I/Q dans /dev/shm (FFT/record, plusieurs centaines de Mo)
-# et /tmp. On force 2 Go sur ces deux tmpfs via fstab (cap RAM-backed : necessite
-# autant de RAM dispo). systemd applique ces entrees au boot.
+# et /tmp. systemd applique ces entrees au boot.
+#
+# POURQUOI PLUS 2 Go EN DUR
+# Ces caps ne reservent rien, mais ils AUTORISENT : 2 + 2 Go, sur une machine
+# ou le squashfs occupe deja ~2,5 Go de RAM et ou la racine elle-meme est un
+# tmpfs, c'est plus que ce dont dispose une VM de 8 Go. Deux writers un peu
+# gourmands suffisaient alors a saturer la memoire - et le symptome n'est pas
+# "tmpfs plein" mais une machine exsangue : "No space left on device" sur la
+# racine, puis un sshd qui n'arrive meme plus a envoyer sa banniere.
+#
+# En pourcentage, le plafond suit la taille de la machine : 20 % + 15 % laissent
+# toujours les deux tiers de la RAM au squashfs, a la racine et aux processus.
+# Une VM a 16 Go y gagne autant qu'une VM a 8 Go cesse de se noyer.
 # Idempotent + anti-doublon : on purge d'abord toute entree tmpfs /tmp ou /dev/shm
 # preexistante (y compris la variante 'nosuid,nodev' sans size=) et l'ancien
-# commentaire de bloc, PUIS on (re)ecrit le bloc canonique size=2G. Garantit
+# commentaire de bloc, PUIS on (re)ecrit le bloc canonique size en pourcentage. Garantit
 # exactement une entree /tmp et une entree /dev/shm dans le fstab du squashfs.
 touch "$ROOTFS/etc/fstab"
 sed -i -E \
@@ -1196,17 +1207,17 @@ sed -i -E \
 # /dev/shm : sizing via fstab (sans risque de doublon generateur).
 cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
 # osmo_egprs live - espace writable (cfiles I/Q FFT)
-tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=2G   0 0
+tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=20%   0 0
 FSTAB
 # /tmp : PAS dans fstab. Une entree fstab /tmp entre en collision avec l'unite
 # systemd tmp.mount -> "systemd-fstab-generator: tmp.mount already exists,
 # Duplicate entry in /etc/fstab" (generateur en exit 1) ; en plus tools/update.sh la
-# reinjecte au boot. On gere /tmp en natif systemd via un drop-in size=2G : une
+# reinjecte au boot. On gere /tmp en natif systemd via un drop-in size=15% : une
 # seule source, zero doublon possible quoi que fasse update.sh.
 mkdir -p "$ROOTFS/etc/systemd/system/tmp.mount.d"
 cat > "$ROOTFS/etc/systemd/system/tmp.mount.d/size.conf" <<'EOF'
 [Mount]
-Options=mode=1777,strictatime,nosuid,nodev,size=2G
+Options=mode=1777,strictatime,nosuid,nodev,size=15%
 EOF
 chroot "$ROOTFS" systemctl enable tmp.mount 2>/dev/null || true
 

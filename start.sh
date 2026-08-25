@@ -104,10 +104,24 @@ HANDOFF_MODE="${HANDOFF_MODE:-qemu}"               # qemu | faketrx-qemu (combin
 HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Les deux plans d'adressage d'un operateur ───────────────────────────────
+# backbone  172.20.0.<10+op>  le segment que TOUS partagent avec l'inter-STP
+#                             (.10). C'est par la que passe le SS7, et c'est ce
+#                             reseau que network/setup-docker-lan-route.sh rend
+#                             joignable depuis le LAN des VM.
+# prive     192.168.<op+1>.x  un segment par operateur : son BTS, son PCU, son
+#                             GGSN. Rien n'y entre de l'exterieur.
+#
+# POURQUOI <op+1> ET PAS <op>
+# Le LAN du banc est 192.168.1.0/24 - celui des VM et du hub SS7 en .49. Un
+# operateur 1 en 192.168.1.0/24 entrerait en collision avec lui : deux routes
+# pour le meme reseau sur l'hote, et un conteneur qui ne peut plus joindre le
+# hub. Le decalage d'un rang laisse le .1 au LAN et commence les operateurs a
+# 192.168.2.0/24.
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
-op_private_ip()   { echo "172.20.$1.10"; }
-op_private_gw()   { echo "172.20.$1.1"; }
-op_private_net()  { echo "172.20.$1.0/24"; }
+op_private_ip()   { echo "192.168.$(($1 + 1)).10"; }
+op_private_gw()   { echo "192.168.$(($1 + 1)).1"; }
+op_private_net()  { echo "192.168.$(($1 + 1)).0/24"; }
 op_container()    { echo "osmo-operator-$1"; }
 op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
@@ -586,9 +600,27 @@ start_inter_stp() {
         --entrypoint bash \
         "$stp_image" \
         -c "sleep infinity" > /dev/null
-    docker exec "$INTER_STP_CONTAINER" \
-        tmux new-session -d -s stp \
-        "osmo-stp -c /etc/osmocom/osmo-stp-interop.cfg 2>&1 | tee /tmp/osmo-stp.log"
+    # tmux si l'image en a un, sinon un simple processus detache.
+    #
+    # osmocom-stp est l'image "STP seul" : elle ne porte que osmo-stp et ses
+    # bibliotheques - c'est tout son interet, 877 Mo contre 11 Go. tmux n'y est
+    # pas, et l'exec echouait alors sur "tmux: executable file not found in
+    # $PATH". Le conteneur tournait pourtant (sleep infinity) : un hub bien
+    # demarre, mais SANS osmo-stp dedans - il n'ecoutait rien, et les noeuds ne
+    # s'attachaient a personne.
+    #
+    # tmux n'apportait ici que le confort de s'attacher a la session. La
+    # barriere qui suit ne lit que /tmp/osmo-stp.log : un processus detache qui
+    # redirige vers ce meme fichier remplit le contrat, et l'image complete
+    # garde son tmux quand elle en a un.
+    if docker exec "$INTER_STP_CONTAINER" sh -c 'command -v tmux >/dev/null 2>&1'; then
+        docker exec "$INTER_STP_CONTAINER" \
+            tmux new-session -d -s stp \
+            "osmo-stp -c /etc/osmocom/osmo-stp-interop.cfg 2>&1 | tee /tmp/osmo-stp.log"
+    else
+        docker exec -d "$INTER_STP_CONTAINER" \
+            sh -c 'exec osmo-stp -c /etc/osmocom/osmo-stp-interop.cfg > /tmp/osmo-stp.log 2>&1'
+    fi
     echo -ne "${GREEN}[*] Attente demarrage inter-STP"
     local retries=25
     while [ $retries -gt 0 ]; do
@@ -1052,7 +1084,30 @@ start_bridge_mode() {
         # run.sh selon le mode no-process choisi
         local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} /etc/osmocom/run.sh"
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
-        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
+        # DANS UN TMUX, pas en simple processus detache.
+        #
+        # Le terminal courant est reserve a osmo-operator-1 (handoff QEMU plus
+        # bas) : c'est celui qu'on regarde. Les autres tournaient en
+        # "docker exec -d", c'est-a-dire sans session a laquelle se rattacher -
+        # on ne pouvait plus que LIRE leur journal, jamais reprendre la main sur
+        # la pile qui tourne.
+        #
+        # Une session nommee "osmo" rend chaque operateur joignable a la
+        # demande, sans rien afficher tant qu'on ne le demande pas :
+        #     docker exec -ti osmo-operator-2 tmux attach -t osmo
+        # (ou par tools/vty-menu.sh, qui liste les conteneurs)
+        #
+        # tee : le journal reste ecrit meme quand personne n'est attache, sinon
+        # un incident survenu hors session serait perdu. Repli sans tmux pour
+        # une image qui n'en aurait pas - le comportement d'avant, a l'identique.
+        if docker exec "$container_name" sh -c 'command -v tmux >/dev/null 2>&1'; then
+            docker exec -d "$container_name" bash -c \
+                "mkdir -p /var/log/osmocom && tmux new-session -d -s osmo \
+                 '{ ${run_cmd}; } 2>&1 | tee /var/log/osmocom/run.sh.log'"
+            echo -e "     ${CYAN}tmux 'osmo' : docker exec -ti ${container_name} tmux attach -t osmo${NC}"
+        else
+            docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
+        fi
 
         # Attente HLR
         echo -ne "  ${GREEN}[*] Attente HLR (4258)${NC}"
