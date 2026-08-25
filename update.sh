@@ -107,22 +107,30 @@ sms_anim() {
 }
 
 # ── Un dépôt ────────────────────────────────────────────────────────────────
-# Jamais de rm -rf avant d'avoir la nouvelle copie : l'ancienne version effaçait
-# /opt/GSM/osmo_egprs PUIS clonait — un réseau absent à cet instant laissait la
-# machine sans ses scripts, et le seul moyen de s'en sortir était de rebooter
-# sur l'ISO. Ici on ne remplace qu'une fois le clone réussi.
+# Deux régimes, parce que les trois dépôts n'ont pas le même poids ni le même
+# usage :
 #
-# --depth 1 : ces dépôts sont là pour être EXÉCUTÉS, pas fouillés. L'historique
-# de qemu pèse plusieurs gigaoctets et ne sert à rien sur la machine.
+#   wipe=1  osmo_egprs, osmo-egprs-web — on EFFACE et on reclone.
+#           Ce sont des arbres légers, et ce sont eux que les sessions
+#           précédentes ont pu salir : un fichier généré, un .pyc, un patch
+#           essayé à la main. Un fetch les laisserait en place ; le rm garantit
+#           que ce qui tourne est exactement ce que le dépôt décrit.
+#   wipe=0  qemu-src — incrémental. L'historique de qemu pèse plusieurs
+#           gigaoctets ; le recloner à chaque session, en live-boot toram,
+#           c'est le remplir de RAM pour rien.
 #
-# reset --hard : une modification locale est écrasée. C'est voulu — l'image est
-# une appliance, pas un poste de développement ; une divergence silencieuse y
-# donne une pile qui ne correspond plus à ce que le dépôt décrit.
-sync_repo() {   # $1=nom  $2=url  $3=destination
-    local name="$1" url="$2" dest="$3" br tmp
+# --depth 1 partout : ces dépôts sont là pour être EXÉCUTÉS, pas fouillés.
+#
+# CE QUE LE rm COÛTE, puisqu'il est demandé : entre l'effacement et la fin du
+# clone, la machine n'a plus ses scripts. Réseau coupé pile à ce moment-là et
+# /opt/GSM/osmo_egprs reste vide jusqu'au prochain boot. Le clone se fait donc
+# dans un temporaire VOISIN quand la place le permet — l'effacement n'a lieu
+# qu'une fois l'arbre neuf sur le disque, et la fenêtre se réduit à un mv.
+sync_repo() {   # $1=nom  $2=url  $3=destination  $4=1 pour effacer et recloner
+    local name="$1" url="$2" dest="$3" wipe="${4:-0}" br tmp
     printf "  ${B}%-16s${N} ${C}%s${N}\n" "$name" "$dest"
 
-    if [ -d "$dest/.git" ]; then
+    if [ "$wipe" != "1" ] && [ -d "$dest/.git" ]; then
         br="$(git -C "$dest" symbolic-ref --quiet --short HEAD 2>/dev/null)"
         [ -n "$br" ] || br=main
         if git -C "$dest" fetch --depth 1 --quiet origin "$br" 2>/dev/null \
@@ -136,13 +144,17 @@ sync_repo() {   # $1=nom  $2=url  $3=destination
         return 1
     fi
 
-    tmp="$(mktemp -d "${dest%/*}/.sync-XXXXXX" 2>/dev/null)" || tmp="$(mktemp -d)"
+    mkdir -p "$(dirname "$dest")"
+    tmp="$(mktemp -d "$(dirname "$dest")/.sync-XXXXXX" 2>/dev/null)" || tmp="$(mktemp -d)"
     if git clone --depth 1 --single-branch --quiet "$url" "$tmp/repo" 2>/dev/null; then
+        # L'annonce du rm est ici, et pas avant le clone : un clone qui échoue
+        # n'efface rien, et un journal qui dit « rm » puis « inchangé » laisse
+        # croire à une machine à moitié détruite.
+        [ -d "$dest" ] && printf "    ${Y}rm${N} %s\n" "$dest"
         rm -rf "$dest"
-        mkdir -p "$(dirname "$dest")"
         mv "$tmp/repo" "$dest"
         rm -rf "$tmp"
-        printf "    ${G}✓${N} cloné — %s\n" "$(git -C "$dest" log -1 --format='%h %s' 2>/dev/null)"
+        printf "    ${G}✓${N} clone frais — %s\n" "$(git -C "$dest" log -1 --format='%h %s' 2>/dev/null)"
         return 0
     fi
     rm -rf "$tmp"
@@ -193,14 +205,14 @@ echo ""
 rc=0
 case "$ONLY" in
     ""|all)
-        sync_repo osmo_egprs     https://github.com/bbaranoff/osmo_egprs     /opt/GSM/osmo_egprs     || rc=1
-        sync_repo osmo-egprs-web https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web     || rc=1
+        sync_repo osmo_egprs     https://github.com/bbaranoff/osmo_egprs     /opt/GSM/osmo_egprs 1   || rc=1
+        sync_repo osmo-egprs-web https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web 1   || rc=1
         web_service
-        sync_repo qemu-src       https://github.com/bbaranoff/qemu           /opt/GSM/qemu-src       || rc=1
+        sync_repo qemu-src       https://github.com/bbaranoff/qemu           /opt/GSM/qemu-src 0     || rc=1
         ;;
-    osmo_egprs)     sync_repo osmo_egprs     https://github.com/bbaranoff/osmo_egprs     /opt/GSM/osmo_egprs || rc=1 ;;
-    osmo-egprs-web) sync_repo osmo-egprs-web https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web || rc=1; web_service ;;
-    qemu-src|qemu)  sync_repo qemu-src       https://github.com/bbaranoff/qemu           /opt/GSM/qemu-src   || rc=1 ;;
+    osmo_egprs)     sync_repo osmo_egprs     https://github.com/bbaranoff/osmo_egprs     /opt/GSM/osmo_egprs 1 || rc=1 ;;
+    osmo-egprs-web) sync_repo osmo-egprs-web https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web 1 || rc=1; web_service ;;
+    qemu-src|qemu)  sync_repo qemu-src       https://github.com/bbaranoff/qemu           /opt/GSM/qemu-src 0 || rc=1 ;;
     *) printf "${R}dépôt inconnu : %s${N}  (osmo_egprs | osmo-egprs-web | qemu-src)\n" "$ONLY" >&2; exit 2 ;;
 esac
 
