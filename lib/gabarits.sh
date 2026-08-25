@@ -101,6 +101,15 @@ exten => _X.,1,NoOp(=== INTEROP OUT: inconnu ${EXTEN} ===)
 EOF
 }
 _generate_sms_routing_conf_fallback() {
+    # 'local i' n'est PAS cosmetique. Cette fonction est appelee, via
+    # apply_config_templates, DEPUIS la boucle "for i in ..." qui demarre les
+    # operateurs. Sans local, sa propre boucle ecrase la variable de l'appelant
+    # et la laisse a n_operators : tous les conteneurs suivants calculaient
+    # alors leurs ports avec le MEME indice, d'ou
+    #     Bind for 0.0.0.0:5082 failed: port is already allocated
+    # au deuxieme conteneur - et, avant l'erreur, deux operateurs annonces sur
+    # les memes SIP/RTP/SMS.
+    local i
     local op_id=$1 n_operators=$2 i j
     printf '# sms-routing.conf - Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
     for i in $(seq 1 "$n_operators"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
