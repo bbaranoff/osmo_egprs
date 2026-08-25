@@ -1,3 +1,5 @@
+rm -r /opt/GSM/osmo_egprs
+git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
 # ── animation : MT SMS entre deux téléphones ──
 printf '\033[?25l'
 ph='\033[1;33m☎\033[0m'
@@ -12,4 +14,3 @@ for ((p=0; p<=20; p++)); do
 done
 printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered — MT end-to-end Message : Bastien phone home\033[0m\n' "$ph" '' "$ph"
 printf '\033[?25h'
-cd /opt/GSM/osmo_egprs && git pull
