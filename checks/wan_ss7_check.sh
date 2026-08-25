@@ -187,33 +187,59 @@ echo -e "  ${CYAN}Attendu : le SS7 s'arrête au bord du noeud. On vérifie que c
 echo -e "  ${CYAN}le cas, et qu'on ne croit pas avoir un lien SS7 inter-noeud.${NC}"
 echo ""
 
-# 5a — l'ASP local vise-t-il une adresse privée ?
+# Le hub change la donne : s'il y en a un, le SS7 TRAVERSE, et ce sont les
+# point codes qu'il faut vérifier — pas leur absence.
+HUB_IP=""
+[ -r /etc/osmo-role ] && HUB_IP="$(awk -F= '/^OSMO_HUB_IP=/{print $2}' /etc/osmo-role)"
+
+# 5a — où pointe l'ASP local ?
 for i in $(seq 1 "$N_OPS"); do
     cfg="$(inside "$i" 'cat /etc/osmocom/osmo-stp.cfg')"
     if [ -z "$cfg" ]; then skip "op${i} : osmo-stp.cfg illisible"; continue; fi
     remote="$(echo "$cfg" | awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}')"
-    case "$remote" in
-        10.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|192.168.*|127.*)
-            ok "op${i} : ASP inter-STP → ${remote} (privée) — le SS7 reste local, conforme" ;;
-        "") skip "op${i} : pas d'ASP inter-STP déclaré" ;;
-        *)
-            for r in "${REMOTES[@]}"; do
-                [ "$remote" = "${WAN_IP[$r]}" ] && {
-                    warn "op${i} : ASP inter-STP → ${remote}, l'IP du node ${r} : M3UA passe le WAN EN CLAIR, sans SCTP multi-homing ni filtrage — à n'utiliser que sur un lien maîtrisé"; }
-            done
-            [ $VERBOSE -eq 1 ] && info "remote-ip=${remote}" ;;
-    esac
+    shut="$(echo "$cfg" | awk '/asp asp-to-inter/{f=1} f&&/shutdown/{print $0; exit}')"
+    pc="$(echo "$cfg" | awk '/^ point-code/{print $2; exit}')"
+    if [ -n "$HUB_IP" ] && [ "$remote" = "$HUB_IP" ]; then
+        if echo "$shut" | grep -q 'no shutdown'; then
+            ok "op${i} : ASP → hub inter-STP ${remote} (actif) — le SS7 traverse le WAN, PC ${pc}"
+        else
+            fail "op${i} : ASP → hub ${remote} mais ${BOLD}shutdown${NC} — aucun SS7 ne passera"
+        fi
+        # Un hub joignable ou non, ça ne se devine pas depuis la config.
+        if command -v nc >/dev/null 2>&1 && nc -z -w2 "$remote" 2908 2>/dev/null; then
+            ok "op${i} : hub ${remote}:2908 joignable"
+        else
+            warn "op${i} : hub ${remote}:2908 injoignable — l'ASP restera DOWN"
+            echo -e "     ${CYAN}Sur le noeud inter-STP : ./start-interstp.sh --status${NC}"
+        fi
+    else
+        case "$remote" in
+            172.2[0-9].*|127.*)
+                ok "op${i} : ASP inter-STP → ${remote} (docker local) — le SS7 reste dans le noeud"
+                [ "${#REMOTES[@]}" -ge 1 ] && info "pas de hub commun : voix et SMS traversent, le SS7 non" ;;
+            "") skip "op${i} : pas d'ASP inter-STP déclaré" ;;
+            *)  warn "op${i} : ASP inter-STP → ${remote} — M3UA sur un lien non maîtrisé ? (pas de chiffrement SCTP ici)" ;;
+        esac
+    fi
 done
 
-# 5b — collision de point codes entre noeuds
-# Les PC sont recalculés à l'identique sur chaque machine (1.<op>.2). Tant que
-# les SS7 ne se parlent pas, aucune importance ; le jour où l'on relie deux
-# inter-STP, deux PC identiques dans deux réseaux, c'est du routage circulaire.
+# 5b — le point code porte-t-il le numéro de noeud ?
+# Le plan local (1.<op>.<role>) se recalcule à l'identique partout : trois
+# noeuds attachés au même hub y présenteraient trois fois 1.1.2. Le plan WAN
+# (1.<noeud><op>.<role>) lève l'ambiguïté. On vérifie lequel est en place.
 if [ "${#REMOTES[@]}" -ge 1 ]; then
-    warn "point codes IDENTIQUES d'un noeud à l'autre (1.N.2 / 1.N.1 / 1.N.3 recalculés pareil)"
-    echo -e "     ${CYAN}Sans conséquence tant que le SS7 ne traverse pas. À corriger AVANT${NC}"
-    echo -e "     ${CYAN}tout lien M3UA inter-noeud : donner à chaque noeud son propre${NC}"
-    echo -e "     ${CYAN}network appearance ou son propre plan de point codes.${NC}"
+    pc_local="$(inside 1 'cat /etc/osmocom/osmo-stp.cfg' | awk '/^ point-code/{print $2; exit}')"
+    expected="1.${WAN_NODE_ID}1.2"
+    if [ "$pc_local" = "$expected" ]; then
+        ok "point code ${pc_local} : le numéro de noeud (${WAN_NODE_ID}) y est encodé — pas de collision au hub"
+    elif [ -n "$HUB_IP" ]; then
+        fail "point code ${pc_local} attendu ${expected} : ce noeud entrerait en collision avec ses pairs sur le hub"
+        echo -e "     ${CYAN}Reconstruire l'image : ./build-iso.sh --role operator --node ${WAN_NODE_ID}${NC}"
+    else
+        warn "point code ${pc_local} : plan local, identique sur tous les noeuds"
+        echo -e "     ${CYAN}Sans effet tant qu'il n'y a pas de hub commun. Pour du SS7 inter-noeud :${NC}"
+        echo -e "     ${CYAN}./build-iso.sh --role interstp   puis   --role operator --node N${NC}"
+    fi
 fi
 
 # 5c — un port M3UA exposé publiquement ?

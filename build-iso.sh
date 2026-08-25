@@ -25,14 +25,53 @@ ISO_WAN=0
 ISO_WAN_NODES=""
 ISO_WAN_ID=""
 ISO_WAN_OPS=1
+
+# ── RÔLE DE L'IMAGE ──────────────────────────────────────────────────────────
+# Une seule chaîne de construction, deux produits :
+#
+#   --role operator --node N   →  osmo-operator-N.iso
+#       Un noeud du WAN : coeur GSM complet, ses point codes à lui, son ASP
+#       attaché au hub. C'est l'image historique, plus l'identité de noeud.
+#
+#   --role interstp            →  interstp.iso
+#       Le hub SS7 : PC 0.0.0, aucun opérateur, il ne fait QUE router du M3UA
+#       entre les noeuds. C'est ce qui manquait pour que le SS7 traverse le WAN.
+#
+# Sans --role, rien ne change : on produit l'ISO d'avant, sous son nom d'avant.
+ISO_ROLE=""
+ISO_NODE=""
+ISO_HUB_IP="192.168.56.1"
+ISO_SUBNET="192.168.56"
+OUTPUT_SET=0
 for arg in "$@"; do case "$arg" in
-    --output=*)     OUTPUT="${arg#*=}" ;;
+    --output=*)     OUTPUT="${arg#*=}"; OUTPUT_SET=1 ;;
     --no-cache)     NO_CACHE="--no-cache" ;;
     --wan)          ISO_WAN=1 ;;
     --wan-nodes=*)  ISO_WAN=1; ISO_WAN_NODES="${arg#*=}" ;;
     --wan-id=*)     ISO_WAN=1; ISO_WAN_ID="${arg#*=}" ;;
     --wan-ops=*)    ISO_WAN=1; ISO_WAN_OPS="${arg#*=}" ;;
+    --role=*)       ISO_ROLE="${arg#*=}" ;;
+    --node=*)       ISO_NODE="${arg#*=}" ;;
+    --hub-ip=*)     ISO_HUB_IP="${arg#*=}" ;;
+    --subnet=*)     ISO_SUBNET="${arg#*=}" ;;
 esac; done
+
+case "${ISO_ROLE:-operator}" in
+    interstp)
+        ISO_ROLE="interstp"
+        [ "$OUTPUT_SET" = "1" ] || OUTPUT="interstp.iso"
+        # Le hub dessert N noeuds : sans table WAN on ne sait pas combien.
+        ISO_WAN=1 ;;
+    operator|"")
+        ISO_ROLE="operator"
+        if [ -n "$ISO_NODE" ]; then
+            [[ "$ISO_NODE" =~ ^[1-9]$ ]] || { echo "--node : 1 à 9" >&2; exit 2; }
+            [ "$OUTPUT_SET" = "1" ] || OUTPUT="osmo-operator-${ISO_NODE}.iso"
+            ISO_WAN_ID="${ISO_WAN_ID:-$ISO_NODE}"
+            ISO_WAN=1
+        fi ;;
+    *) echo "--role inconnu : $ISO_ROLE (operator|interstp)" >&2; exit 2 ;;
+esac
 case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
 
 # Propage --no-cache aux deux builds Docker : build.sh (image osmocom-nitb) et
@@ -145,11 +184,48 @@ echo -e "  PHY        : ${CYAN}${PHY_MODE}${NC}"
 
 TEMP_CONFIG="$(mktemp -d)"
 
+# ── Point codes et rattachement SS7 ──────────────────────────────────────────
+# Hors WAN : le plan historique, 1.<op>.<role>, et l'ASP inter-STP coupé —
+# l'ISO n'a qu'un opérateur, il n'a personne à qui parler en SS7.
+#
+# Avec --node N : le noeud entre DANS le point code, 1.<noeud><op>.<role>.
+# Sans ça, trois ISO attachées au même hub y présenteraient trois fois 1.11.2.
+# Un point code est une adresse : deux équipements avec la même, ce n'est pas
+# un conflit de nom, c'est du routage faux — et silencieux.
+ISO_PC_MSC="1.1.1"; ISO_PC_STP="1.1.2"; ISO_PC_BSC="1.1.3"
+ISO_INTER_SHUT="shutdown"
+ISO_INTER_IP="$INTER_STP_IP"
+if [ -n "$ISO_NODE" ]; then
+    ISO_PC_MSC="1.${ISO_NODE}${ISO_OP_ID}.1"
+    ISO_PC_STP="1.${ISO_NODE}${ISO_OP_ID}.2"
+    ISO_PC_BSC="1.${ISO_NODE}${ISO_OP_ID}.3"
+    ISO_INTER_IP="$ISO_HUB_IP"
+    ISO_INTER_SHUT="no shutdown"
+    # RCTX unique lui aussi : le hub identifie chaque AS par son routing context.
+    export RCTX_INTER_OVERRIDE=$(( ISO_NODE * 1000 + ISO_OP_ID * 100 + 50 ))
+    # local-ip de l'ASP laissée à 0.0.0.0 : l'adresse du noeud vient du DHCP et
+    # n'est pas forcément montée quand osmo-stp démarre. Se lier à une adresse
+    # absente échoue au lancement, sans rapport visible avec le réseau.
+    export INTER_LOCAL_IP_OVERRIDE="0.0.0.0"
+    echo -e "  Noeud WAN  : ${CYAN}${ISO_NODE}${NC}  PC ${CYAN}${ISO_PC_STP}${NC}  hub ${CYAN}${ISO_HUB_IP}${NC}  rctx ${RCTX_INTER_OVERRIDE}"
+fi
+
 apply_config_templates "$TEMP_CONFIG" \
     "$HOST_IP" "$GATEWAY_IP" \
-    "1" "1.1.1" "1.1.2" "1.1.3" \
+    "1" "$ISO_PC_MSC" "$ISO_PC_STP" "$ISO_PC_BSC" \
     "001" "01" "OsmoGSM" \
-    "$INTER_STP_IP" "shutdown" "1"
+    "$ISO_INTER_IP" "$ISO_INTER_SHUT" "1"
+
+# ── Rôle inter-STP : la config du hub, pour N noeuds ────────────────────────
+if [ "$ISO_ROLE" = "interstp" ]; then
+    _hub_nodes=3
+    if [ -n "$ISO_WAN_NODES" ]; then
+        _hub_nodes=$(printf '%s' "${ISO_WAN_NODES//,/ }" | wc -w)
+    fi
+    bash "$DIR/helpers/create_interop.sh" --wan "$_hub_nodes" "${ISO_WAN_OPS:-1}" \
+        "$TEMP_CONFIG/osmocom/osmo-stp-interop.cfg" || exit 1
+    echo -e "  ${GREEN}✓${NC} hub SS7 pour ${CYAN}${_hub_nodes}${NC} noeud(s) × ${ISO_WAN_OPS:-1} opérateur(s)"
+fi
 
 # ── Routage SMS ──────────────────────────────────────────────────────────────
 # APRES apply_config_templates, et non avant : celui-ci ecrase systematiquement
@@ -447,9 +523,10 @@ P="$ROOTFS/opt/osmo_egprs"
 # l'echec ne disait rien : l'ISO partait SANS aucun script WAN, et le seul
 # symptome etait un « introuvable » au moment d'en avoir besoin.
 mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont,network,tools}
-for f in start.sh start-direct.sh build.sh network/loopback.sh tools/vty-menu.sh tools/vty-connect.exp \
+for f in start.sh start-direct.sh start-interstp.sh build.sh network/loopback.sh \
+         tools/vty-menu.sh tools/vty-connect.exp \
          network/firewall-wan.sh network/setup-wan-interop.sh network/setup-wan-sms.sh \
-         network/wan-nodes.sh network/setup-wan-mesh.sh; do
+         network/wan-nodes.sh network/setup-wan-mesh.sh network/setup-vbox-interco.sh; do
     [ -f "$DIR/$f" ] && cp "$DIR/$f" "$P/$f" && chmod +x "$P/$f"
 done
 ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
@@ -714,6 +791,40 @@ WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} osmo-update (exécute le gist tools/update.sh au démarrage)"
+
+# ── Marqueur de rôle : ce que CETTE image est ───────────────────────────────
+# Lu par start-direct.sh et par la bannière. Sans lui, deux ISO issues de la
+# même chaîne sont indiscernables une fois démarrées — et on lance le mauvais
+# script sur la mauvaise machine.
+{
+    printf '# /etc/osmo-role — généré par build-iso.sh\n'
+    printf 'OSMO_ROLE=%s\n' "$ISO_ROLE"
+    [ -n "$ISO_NODE" ] && printf 'OSMO_WAN_NODE=%s\n' "$ISO_NODE"
+    printf 'OSMO_HUB_IP=%s\n' "$ISO_HUB_IP"
+} > "$ROOTFS/etc/osmo-role"
+
+if [ "$ISO_ROLE" = "interstp" ]; then
+    # Le hub, lui, DOIT démarrer seul : les noeuds s'attachent à lui au boot, et
+    # un hub qu'il faut lancer à la main transforme un démarrage simultané en
+    # course perdue d'avance.
+    cat > "$ROOTFS/etc/systemd/system/osmo-interstp.service" <<EOF
+[Unit]
+Description=osmo_egprs inter-STP — hub SS7 du WAN (PC 0.0.0)
+Wants=network-online.target
+After=network-online.target systemd-networkd-wait-online.service
+[Service]
+Type=forking
+PIDFile=/run/osmo-interstp.pid
+ExecStart=/opt/osmo_egprs/start-interstp.sh --ip ${ISO_HUB_IP}
+ExecStop=/opt/osmo_egprs/start-interstp.sh --stop
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
+    chroot "$ROOTFS" systemctl enable osmo-interstp 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} osmo-interstp.service — hub lancé au démarrage sur ${CYAN}${ISO_HUB_IP}${NC}"
+fi
 
 
 # Autologin root

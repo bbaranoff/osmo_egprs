@@ -43,6 +43,11 @@ DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
 # WAN : jamais par défaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
 # pose une ISO construite avec --wan) le monte avant de passer la main à run.sh.
 WAN_MESH=0
+# --virtualbox : monte le segment et les VM avant le WAN. Refusé si l'on tourne
+# DANS une VM — c'est l'hôte qui pilote VirtualBox (le script le vérifie).
+VBOX_INTERCO=0
+VBOX_NODES=""
+VBOX_HOST_NODE=1
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -70,6 +75,9 @@ Usage : ./start-direct.sh [options] [mode]
     --wan-nodes "1:IP:IND …"   même chose sans question (scriptable)
     --wan-id N          numéro du noeud local (sinon déduit des IP locales)
     --wan-conf FICHIER  table à lire/écrire (défaut /etc/osmo-wan.conf)
+    --virtualbox[=N]    WAN entre CETTE machine et N-1 VM VirtualBox (implique
+                        --wan). À lancer depuis l'hôte, pas depuis une VM.
+    --vbox-node N       numéro de noeud porté par cette machine (défaut 1)
     -h, --help          cette aide
 
   Sans --wan : aucun WAN. Avec --wan le profil reste faketrx-qemu (hybride,
@@ -101,6 +109,10 @@ while [ $# -gt 0 ]; do
         --wan-id=*)    WAN_MESH=1; WAN_NODE_ID="${1#*=}" ;;
         --wan-conf)    WAN_CONF_FILE="${2:-}"; shift ;;
         --wan-conf=*)  WAN_CONF_FILE="${1#*=}" ;;
+        --virtualbox)   WAN_MESH=1; VBOX_INTERCO=1 ;;
+        --virtualbox=*) WAN_MESH=1; VBOX_INTERCO=1; VBOX_NODES="${1#*=}" ;;
+        --vbox-node)    VBOX_HOST_NODE="${2:-1}"; shift ;;
+        --vbox-node=*)  VBOX_HOST_NODE="${1#*=}" ;;
         -h|--help)     usage; exit 0 ;;
         faketrx-qemu|faketrx|qemu|virtphy|noproc|core|hybrid|hw)
             PROFILE="$1"
@@ -541,6 +553,18 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     fi
     # shellcheck source=network/wan-nodes.sh
     . "$WAN_LIB"
+    # --virtualbox : segment host-only + VM + table, avant tout le reste.
+    if [ "$VBOX_INTERCO" -eq 1 ] && [ -z "${WAN_NODES:-}" ]; then
+        VB="$HERE/network/setup-vbox-interco.sh"
+        [ -r "$VB" ] || { say_end " KO " "$C_KO" "WAN" "network/setup-vbox-interco.sh absent"; exit 1; }
+        vb_args=(--host-node "$VBOX_HOST_NODE" --conf "${WAN_CONF_FILE:-/etc/osmo-wan.conf}")
+        [ -n "$VBOX_NODES" ] && vb_args+=(--nodes "$VBOX_NODES")
+        bash "$VB" "${vb_args[@]}" || exit 1
+        wan_nodes_load "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" || exit 1
+        WAN_NODES="$(wan_nodes_spec)"
+        WAN_NODE_ID="$VBOX_HOST_NODE"
+    fi
+
     if [ -n "${WAN_NODES:-}" ]; then
         wan_nodes_parse "$WAN_NODES" || exit 1
         [ "${WAN_NODE_ID:-0}" != "0" ] || wan_nodes_detect_self || {

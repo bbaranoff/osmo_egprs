@@ -58,6 +58,15 @@ wan_sms_port()  { echo $(( SMS_RELAY_BASE + $1 - 1 )); }
 op_backbone_ip(){ echo "172.20.0.$((10 + $1))"; }
 op_container()  { echo "${CONTAINER_PREFIX}$1"; }
 
+# ── Piège `pipefail` + `grep -q` ─────────────────────────────────────────────
+# `grep -q` sort dès la PREMIÈRE correspondance ; le producteur du pipeline
+# reçoit alors SIGPIPE et meurt en 141, et sous `set -o pipefail` c'est 141 que
+# le pipeline renvoie. Résultat : « trouvé » se lit « pas trouvé », de façon
+# intermittente — selon que la sortie tenait ou non dans le tampon du tube.
+# C'est exactement ce qui faisait dire à `check` que vboxdrv n'était pas chargé
+# alors qu'il l'était. On lit donc toute l'entrée, et on jette la sortie.
+qgrep() { grep "$@" >/dev/null; }
+
 usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
@@ -110,7 +119,7 @@ wan_nodes_validate || exit 1
 # On ne se fie donc pas à la présence du binaire mais à celle des containers.
 if [ -z "$MODE" ]; then
     if command -v docker >/dev/null 2>&1 && \
-       docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_PREFIX}1$"; then
+       docker ps --format '{{.Names}}' 2>/dev/null | qgrep "^${CONTAINER_PREFIX}1$"; then
         MODE="docker"
     else
         MODE="native"
@@ -181,7 +190,7 @@ strip_generated() { sed -e '/OSMO WAN MESH BEGIN/,/OSMO WAN MESH END/d' -e '/; �
 echo -e "${GREEN}[1/6] Vérification des cibles Asterisk...${NC}"
 for i in "${OP_IDS[@]}"; do
     if [ "$MODE" = "docker" ]; then
-        docker ps --format '{{.Names}}' | grep -q "^$(op_container "$i")$" \
+        docker ps --format '{{.Names}}' | qgrep "^$(op_container "$i")$" \
             || { echo -e "  ${RED}✗ $(op_container "$i") absent — lancez start.sh d'abord${NC}"; exit 1; }
         echo -e "  ${GREEN}✓${NC} $(op_container "$i")"
     else
@@ -275,7 +284,7 @@ for i in "${OP_IDS[@]}"; do
     # une (l'IP docker/hôte) : on l'ÉCRASE, on ne se contente pas de l'ajouter
     # quand elle manque — sinon le WAN annonce une adresse privée et l'audio
     # part dans le vide alors que la signalisation, elle, passe. C'est ce que
-    # fait network/setup-wan-interop.sh (« if ! grep -q external_media_address »),
+    # fait network/setup-wan-interop.sh (« if ! qgrep external_media_address »),
     # et ça se voit seulement à l'oreille : appel décroché, silence.
     awk -v ip="$LOCAL_IP" '
         /^\[/ { if (intr && !done) { emit(); done=1 } ; intr = ($0 == "[transport-udp]") ; print ; next }
@@ -539,7 +548,7 @@ else
                 asterisk -f & disown" 2>/dev/null || true
             echo -e "  ${CYAN}Op${i}${NC} Asterisk redémarré"
         else
-            if asterisk -rx 'core show uptime' 2>/dev/null | grep -qi uptime; then
+            if asterisk -rx 'core show uptime' 2>/dev/null | qgrep -i uptime; then
                 asterisk -rx 'core restart now' >/dev/null 2>&1 || true
                 echo -e "  ${CYAN}Op${i}${NC} Asterisk redémarré"
             else

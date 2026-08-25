@@ -17,12 +17,35 @@
 
 set -e
 
-n_operators="${1:-2}"
-outfile="${2:-osmo-stp-interop.cfg}"
-
-if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 24 ]; then
-    echo "Erreur : n_operators doit être 1..24" >&2
-    exit 1
+# ── Mode WAN ─────────────────────────────────────────────────────────────────
+#   create_interop.sh --wan <n_noeuds> <ops_par_noeud> <outfile>
+#
+# Le hub d'origine ne dessert qu'UNE machine : ses point codes 1.<op>.<role> se
+# recalculent à l'identique sur chaque noeud d'un WAN, donc trois noeuds reliés
+# au même hub présenteraient trois fois 1.1.2. Un point code est une ADRESSE :
+# la collision n'est pas un détail de nommage, elle rend le routage SS7 faux.
+#
+# Le plan WAN encode le noeud DANS le point code :
+#   PC = 1.<noeud><op>.<role>     noeud 1 op 1 → 1.11.2 ; noeud 3 op 2 → 1.32.2
+#   RCTX = noeud*1000 + op*100 + 50
+# Lisible à l'oeil (le premier chiffre est le noeud), unique, et le champ
+# central du 3-8-3 tient jusqu'à 9 noeuds × 9 opérateurs.
+WAN_MODE=0
+if [ "${1:-}" = "--wan" ]; then
+    WAN_MODE=1
+    n_nodes="${2:-3}"
+    ops_per_node="${3:-1}"
+    outfile="${4:-osmo-stp-interop.cfg}"
+    if ! [[ "$n_nodes" =~ ^[1-9]$ ]] || ! [[ "$ops_per_node" =~ ^[1-9]$ ]]; then
+        echo "Erreur : --wan <1-9 noeuds> <1-9 opérateurs>" >&2; exit 1
+    fi
+else
+    n_operators="${1:-2}"
+    outfile="${2:-osmo-stp-interop.cfg}"
+    if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 24 ]; then
+        echo "Erreur : n_operators doit être 1..24" >&2
+        exit 1
+    fi
 fi
 
 cat > "$outfile" <<'EOFCONFIG'
@@ -62,6 +85,20 @@ cs7 instance 0
 !
 EOFCONFIG
 
+if [ "$WAN_MODE" = "1" ]; then
+    for n in $(seq 1 "$n_nodes"); do
+        for o in $(seq 1 "$ops_per_node"); do
+            rctx_inter=$(( n * 1000 + o * 100 + 50 ))
+            pc_stp="1.${n}${o}.2"
+            cat >> "$outfile" <<EOF
+
+ as as-n${n}op${o} m3ua
+  routing-key ${rctx_inter} ${pc_stp}
+  traffic-mode override
+EOF
+        done
+    done
+else
 for i in $(seq 1 "$n_operators"); do
     rctx_inter=$(( i * 100 + 50 ))
     pc_stp="1.${i}.2"
@@ -73,24 +110,43 @@ for i in $(seq 1 "$n_operators"); do
   traffic-mode override
 EOF
 done
+fi
 
 cat >> "$outfile" <<'EOFROUTES'
 
  route-table system
 EOFROUTES
 
+if [ "$WAN_MODE" = "1" ]; then
+    for n in $(seq 1 "$n_nodes"); do
+        for o in $(seq 1 "$ops_per_node"); do
+            cat >> "$outfile" <<EOF
+  update route 1.${n}${o}.1 7.255.7 linkset as-n${n}op${o}
+  update route 1.${n}${o}.3 7.255.7 linkset as-n${n}op${o}
+EOF
+        done
+    done
+else
 for i in $(seq 1 "$n_operators"); do
     cat >> "$outfile" <<EOF
   update route 1.${i}.1 7.255.7 linkset as-op${i}
   update route 1.${i}.3 7.255.7 linkset as-op${i}
 EOF
 done
+fi
 
 cat >> "$outfile" <<'EOF'
 
 !
 EOF
 
-echo "✓ Config inter-STP générée : $outfile" >&2
-echo "  PC hub     : 0.0.0   Opérateurs : $n_operators" >&2
-echo "  Routes     : $((n_operators * 2)) (masque 7.255.7)" >&2
+if [ "$WAN_MODE" = "1" ]; then
+    echo "✓ Config inter-STP WAN générée : $outfile" >&2
+    echo "  PC hub  : 0.0.0   Noeuds : $n_nodes × $ops_per_node opérateur(s)" >&2
+    echo "  PC noeuds : 1.<noeud><op>.<role>   RCTX : noeud*1000 + op*100 + 50" >&2
+    echo "  Routes  : $(( n_nodes * ops_per_node * 2 )) (masque 7.255.7)" >&2
+else
+    echo "✓ Config inter-STP générée : $outfile" >&2
+    echo "  PC hub     : 0.0.0   Opérateurs : $n_operators" >&2
+    echo "  Routes     : $((n_operators * 2)) (masque 7.255.7)" >&2
+fi

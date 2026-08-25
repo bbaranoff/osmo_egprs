@@ -73,6 +73,11 @@ SMS_ROUTING_DIR=""
 #
 # Les deux sont EXCLUSIFS et aucun n'est actif par défaut.
 WAN_MESH=0
+# --virtualbox : les pairs du WAN sont des VM VirtualBox sur CETTE machine, et
+# cette machine est elle-même un noeud. Voir network/setup-vbox-interco.sh.
+VBOX_INTERCO=0
+VBOX_NODES=""
+VBOX_HOST_NODE=1
 # shellcheck source=network/wan-nodes.sh
 . "$(dirname "$0")/network/wan-nodes.sh"
 
@@ -628,6 +633,19 @@ setup_wan_interop() {
 wan_mesh_configure() {
     local n_operators=$1
     WAN_OPS="$n_operators"
+
+    # --virtualbox : le segment, les VM et la table sont fabriqués AVANT tout le
+    # reste, puis relus comme n'importe quelle table. Le WAN qui suit ne sait
+    # pas — et n'a pas à savoir — que ses pairs sont des VM.
+    if [ "${VBOX_INTERCO:-0}" = "1" ] && [ -z "${WAN_NODES:-}" ]; then
+        local _vb=("$(dirname "$0")/network/setup-vbox-interco.sh"
+                   --host-node "$VBOX_HOST_NODE" --conf "$WAN_CONF_FILE")
+        [ -n "${VBOX_NODES:-}" ] && _vb+=(--nodes "$VBOX_NODES")
+        bash "${_vb[@]}" || { echo -e "${RED}[WAN] interconnexion VirtualBox échouée${NC}" >&2; exit 1; }
+        wan_nodes_load "$WAN_CONF_FILE" || exit 1
+        WAN_NODES="$(wan_nodes_spec)"
+        WAN_NODE_ID="$VBOX_HOST_NODE"
+    fi
 
     if [ -n "${WAN_NODES:-}" ]; then
         wan_nodes_parse "$WAN_NODES" || exit 1
@@ -1268,6 +1286,11 @@ Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
   --wan-id N              numéro du noeud local (sinon déduit des IP locales)
   --wan-conf FICHIER      table à lire/écrire (défaut /etc/osmo-wan.conf)
 
+  --virtualbox[=N]        monte le WAN entre CETTE machine et des VM VirtualBox
+                          (implique --wan). Cette machine devient un noeud, les
+                          autres sont des VM sur un segment host-only.
+  --vbox-node N           numéro de noeud porté par cette machine (défaut 1)
+
   Sans --wan, rien ne change : aucun WAN n'est monté.
   Avec --wan, la radio passe en HYBRIDE par défaut (1 faketrx + 1 QEMU Calypso).
 
@@ -1288,6 +1311,10 @@ while [ $# -gt 0 ]; do
         --wan-id=*)     WAN_MESH=1; WAN_NODE_ID="${1#*=}" ;;
         --wan-conf)     WAN_CONF_FILE="${2:-}"; shift ;;
         --wan-conf=*)   WAN_CONF_FILE="${1#*=}" ;;
+        --virtualbox)     WAN_MESH=1; VBOX_INTERCO=1 ;;
+        --virtualbox=*)   WAN_MESH=1; VBOX_INTERCO=1; VBOX_NODES="${1#*=}" ;;
+        --vbox-node)      VBOX_HOST_NODE="${2:-1}"; shift ;;
+        --vbox-node=*)    VBOX_HOST_NODE="${1#*=}" ;;
         -h|--help)      usage_wan; exit 0 ;;
         *)              _pos_args+=("$1") ;;
     esac

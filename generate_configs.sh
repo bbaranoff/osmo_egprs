@@ -214,7 +214,12 @@ apply_config_templates() {
 
     local rctx_msc rctx_stp rctx_bsc rctx_inter
     rctx_msc=$(op_rctx_msc "$op_id");   rctx_stp=$(op_rctx_stp "$op_id")
-    rctx_bsc=$(op_rctx_bsc "$op_id");   rctx_inter=$(op_rctx_inter "$op_id")
+    rctx_bsc=$(op_rctx_bsc "$op_id")
+    # RCTX_INTER_OVERRIDE : posé par build-iso.sh quand l'image est un NOEUD DE
+    # WAN. Le routing context identifie l'AS auprès du hub ; la formule locale
+    # (op*100+50) donne la même valeur sur tous les noeuds, donc plusieurs AS
+    # indiscernables sur le même hub. Vide = formule d'origine, rien ne change.
+    rctx_inter="${RCTX_INTER_OVERRIDE:-$(op_rctx_inter "$op_id")}"
 
     # ── Les valeurs. globals.conf gagne ; sinon, la formule historique. ──────
     local arfcn="${ARFCN:-$(( 512 + op_id * 2 ))}"
@@ -231,7 +236,9 @@ apply_config_templates() {
     local sms_sc="${SMS_SC:-+336661234$(printf '%04d' "$op_id")}"
 
     local inter_local_ip rtp_start rtp_end sip_host_port
-    inter_local_ip=$(op_backbone_ip "$op_id")
+    # Idem : sur un noeud de WAN, l'adresse source de l'ASP n'est pas une IP du
+    # plan docker mais celle du segment — ou 0.0.0.0 quand elle vient du DHCP.
+    inter_local_ip="${INTER_LOCAL_IP_OVERRIDE:-$(op_backbone_ip "$op_id")}"
     rtp_start=$(linphone_rtp_start "$op_id"); rtp_end=$(linphone_rtp_end "$op_id")
     sip_host_port=$(linphone_sip_port "$op_id")
 
