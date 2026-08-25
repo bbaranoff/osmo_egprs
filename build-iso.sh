@@ -671,6 +671,22 @@ deb http://archive.ubuntu.com/ubuntu jammy-security   main universe multiverse
 SOURCES
 apt-get update -qq
 
+# ── Outils de diagnostic : nc, tcpdump, git ────────────────────────────────
+# ICI, en premier, et pas plus bas avec les autres : ce chroot tourne sous
+# set -e. Place dans un des groupes suivants, le moindre echec en amont - un
+# build-dep, un miroir qui bronche - emporterait cette ligne avec lui, et l ISO
+# sortirait sans eux sans que rien ne le dise. Juste apres apt-get update, il
+# n y a plus rien qui puisse les faire sauter.
+#
+#   nc       le VTY est la seule source de verite sur l etat SS7 : tout le
+#            depot l interroge par "nc 127.0.0.1 4239". Sans nc, les checks ne
+#            se plaignent pas - ils affichent un diagnostic VIDE, qui se lit
+#            comme "rien n est attache" alors que tout va bien.
+#   tcpdump  les captures GSMTAP/M3UA. Sans lui, une capture lancee en arriere
+#            plan echoue en silence et le pcap reste vide.
+#   git      la synchro du depot depuis la VM (update.sh).
+apt-get install -y $APT_OPTS --no-install-recommends netcat tcpdump git
+
 # deb-src + build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw,
 # gmp, log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local.
 # Genere les lignes deb-src a partir des deb (tous composants), comme le Dockerfile.
@@ -693,7 +709,7 @@ apt-get install -y $APT_OPTS --no-install-recommends \
 
 apt-get install -y $APT_OPTS --no-install-recommends \
     iproute2 iptables net-tools lksctp-tools \
-    tmux telnet expect whiptail netcat-openbsd \
+    tmux telnet expect whiptail \
     lsb-release pulseaudio pulseaudio-utils alsa-utils openssh-server \
     console-setup keyboard-configuration locales \
     binutils-arm-none-eabi psmisc gdb-multiarch
@@ -1090,6 +1106,137 @@ cat > "$ROOTFS/etc/systemd/system/tmp.mount.d/size.conf" <<'EOF'
 Options=mode=1777,strictatime,nosuid,nodev,size=2G
 EOF
 chroot "$ROOTFS" systemctl enable tmp.mount 2>/dev/null || true
+
+# ── Ce qui remplit la RAM : les ECRITURES DE LA PILE ────────────────────────
+# En 'toram' la racine est un overlay tmpfs : TOUT ce qui s'ecrit a l'execution
+# reste en RAM, rien n'atteint un disque. Le squashfs y est deja recopie, /tmp
+# et /dev/shm en reservent 2 Go chacun - le reste, quelques Go, est tout ce dont
+# dispose la racine.
+#
+# Trois writers non bornes suffisaient a la remplir, et le symptome n'apparait
+# qu'apres des heures : "No space left on device" sur une machine qui n'a
+# pourtant aucun disque plein.
+#   1. le journal systemd, sans plafond ;
+#   2. /var/log/osmocom/*.log - la pile journalise en 'filter all 1', et mobile
+#      tourne avec une vingtaine de categories de debug ;
+#   3. les captures pcap GSMTAP, ecrites en continu et sans limite de taille.
+# On les borne ici, dans l'image : un cap pose au build vaut pour toutes les VM,
+# alors qu'un nettoyage manuel est a refaire apres chaque boot.
+
+# 1. Journal : volatile (il est de toute facon perdu au reboot d'un live) et
+#    plafonne. Sans RuntimeMaxUse, journald s'autorise 10 % de la RAM.
+mkdir -p "$ROOTFS/etc/systemd/journald.conf.d"
+cat > "$ROOTFS/etc/systemd/journald.conf.d/osmo-live.conf" <<'EOF'
+# osmo_egprs live : la racine est en RAM, le journal ne doit pas la manger.
+[Journal]
+Storage=volatile
+RuntimeMaxUse=64M
+RuntimeKeepFree=256M
+EOF
+
+# 2. Logs Osmocom : rotation a la TAILLE, pas a la date - une pile bavarde
+#    remplit en une heure ce qu'une rotation quotidienne ne verrait jamais.
+#    copytruncate : les demons gardent leur descripteur ouvert ; sans lui la
+#    rotation leur laisse un fichier supprime, et l'espace n'est pas rendu.
+mkdir -p "$ROOTFS/etc/logrotate.d"
+cat > "$ROOTFS/etc/logrotate.d/osmocom" <<'EOF'
+/var/log/osmocom/*.log {
+    size 32M
+    rotate 3
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+# logrotate.timer ne passe qu'une fois par jour : trop tard pour un tmpfs.
+cat > "$ROOTFS/etc/systemd/system/osmo-logrotate.service" <<'EOF'
+[Unit]
+Description=osmo_egprs - rotation des journaux Osmocom (racine en RAM)
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate /etc/logrotate.d/osmocom --state /run/osmo-logrotate.state
+EOF
+cat > "$ROOTFS/etc/systemd/system/osmo-logrotate.timer" <<'EOF'
+[Unit]
+Description=osmo_egprs - rotation des journaux Osmocom toutes les 15 min
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+[Install]
+WantedBy=timers.target
+EOF
+chroot "$ROOTFS" systemctl enable osmo-logrotate.timer 2>/dev/null || true
+
+# 3. Captures pcap : purge de celles de plus d'une heure. La capture GSMTAP
+#    tourne en continu ; elle sert a regarder ce qui vient de se passer, pas a
+#    constituer un historique - qu'aucun live ne pourrait de toute facon garder.
+mkdir -p "$ROOTFS/etc/tmpfiles.d"
+cat > "$ROOTFS/etc/tmpfiles.d/osmo-captures.conf" <<'EOF'
+# osmo_egprs : les captures vivent en RAM, on ne les garde pas plus d'une heure.
+d /run/user/0/osmo-nitb/captures 0755 root root 1h
+EOF
+
+# ── Purge complete a chaque relance ─────────────────────────────────────────
+# Les caps ci-dessus empechent la derive PENDANT une session ; celui-ci repart
+# d'une racine propre A CHAQUE DEMARRAGE. Sur un live c'est sans perte : ces
+# fichiers ne survivraient pas au reboot de toute facon. Avec persistance, en
+# revanche, ils s'accumuleraient d'un boot a l'autre jusqu'a remplir le medium -
+# c'est precisement le cas ou la purge devient indispensable.
+#
+# Avant la pile (Before=osmo-*.service) : purger APRES le demarrage effacerait
+# les journaux de la session en cours, et le premier incident serait invisible.
+cat > "$ROOTFS/usr/local/sbin/osmo-purge.sh" <<'PURGEEOF'
+#!/bin/bash
+# osmo-purge.sh - repart d'une racine propre. Appele au boot par osmo-purge.service.
+# Ne touche NI aux configs (/etc/osmocom), NI aux bases (HLR) : seulement ce qui
+# se regenere - journaux, captures, fichiers de travail.
+set -u
+
+purge_dir() {   # $1=repertoire  $2=motif
+    [ -d "$1" ] || return 0
+    find "$1" -maxdepth 1 -type f -name "$2" -delete 2>/dev/null || true
+}
+
+# Journaux de la pile
+purge_dir /var/log/osmocom '*.log'
+purge_dir /var/log/osmocom '*.log.*'
+purge_dir /var/log/osmocom '*.gz'
+
+# Captures pcap (GSMTAP et autres)
+rm -rf /run/user/0/osmo-nitb/captures/* 2>/dev/null || true
+purge_dir /var/log/osmocom '*.pcap'
+find /tmp /var/tmp -maxdepth 2 -type f -name '*.pcap*' -delete 2>/dev/null || true
+
+# Fichiers de travail : I/Q FFT (plusieurs centaines de Mo piece)
+find /dev/shm -maxdepth 1 -type f \( -name '*.cfile' -o -name '*.raw' \) -delete 2>/dev/null || true
+
+# Repertoire d'execution du live, recree par la pile au demarrage
+rm -rf /run/user/0/osmo-nitb/logs/* 2>/dev/null || true
+
+# Journal systemd volatile
+command -v journalctl >/dev/null 2>&1 && journalctl --rotate --vacuum-time=1s >/dev/null 2>&1
+
+exit 0
+PURGEEOF
+chmod +x "$ROOTFS/usr/local/sbin/osmo-purge.sh"
+cat > "$ROOTFS/etc/systemd/system/osmo-purge.service" <<'EOF'
+[Unit]
+Description=osmo_egprs - purge des journaux, captures et fichiers de travail
+DefaultDependencies=no
+After=local-fs.target
+Before=osmo-stp.service osmo-interstp.service osmo-msc.service osmo-bsc.service
+Before=osmo-egprs-web.service shutdown.target
+Conflicts=shutdown.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/osmo-purge.sh
+[Install]
+WantedBy=multi-user.target
+EOF
+chroot "$ROOTFS" systemctl enable osmo-purge.service 2>/dev/null || true
 
 # SSH : autorise le login root par mot de passe + active le service au boot.
 if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
