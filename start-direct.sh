@@ -798,6 +798,100 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     fi
 fi
 
+# --- 7quinquies. Le wrapper tcpdump ------------------------------------------
+# La capture GSMTAP est lancee par run_modules/75-gsmtap.sh, dans qemu-src : un
+# autre depot, qu'on ne modifie pas. Elle ecrit un pcap NON BORNE, et la racine
+# du live etant un tmpfs, une capture un peu chargee finit par remplir la RAM.
+#
+# Le wrapper y substitue un anneau. Il est aussi pose par build-iso.sh, mais une
+# ISO deja gravee ne le connait pas, et un live sans persistance le perd a chaque
+# reboot : le reposer ICI, a chaque demarrage de la pile, est ce qui le rend
+# effectif sans reconstruire ni toucher a qemu-src.
+#
+# DEUX PIEGES, DEUX PARADES - c'est tout l'objet de ce script :
+#   -Z root : avec -C/-W, tcpdump cree les membres suivants de l'anneau APRES
+#             avoir lache ses privileges. Sans lui : "Permission denied", et
+#             AUCUNE capture - alors que sans -C il ouvrait le fichier avant.
+#   le lien : avec -C/-W, tcpdump numerote (capture.pcap0, .pcap1...) ; le nom
+#             exact demande n'existe jamais, et la barriere du module - un
+#             "test -s <nom exact>" - conclut a un echec sur une capture qui
+#             tourne. On maintient <nom exact> -> membre courant.
+#
+# OSMO_NO_PCAP_RING=1 saute l'installation.
+install_pcap_wrapper() {
+    local dst=/usr/local/bin/tcpdump tmp
+    [ "${OSMO_NO_PCAP_RING:-0}" = "1" ] && return 0
+    [ "$(id -u)" -eq 0 ] || return 0
+    command -v tcpdump >/dev/null 2>&1 || return 0
+
+    tmp="$(mktemp)" || return 0
+    cat > "$tmp" <<'PCAPWRAP'
+#!/bin/sh
+# tcpdump - wrapper osmo_egprs : impose un anneau aux captures sur fichier.
+# Pose par start-direct.sh et par build-iso.sh. Voir leurs commentaires.
+# Reglable : OSMO_PCAP_RING_MB (32), OSMO_PCAP_RING_FILES (5).
+REAL=/usr/bin/tcpdump
+[ -x "$REAL" ] || REAL=/usr/sbin/tcpdump
+
+has_w=0; has_ring=0; has_z=0; wfile=""; next_is_w=0
+for a in "$@"; do
+    if [ "$next_is_w" = 1 ]; then wfile="$a"; next_is_w=0; continue; fi
+    case "$a" in
+        -w)            has_w=1; next_is_w=1 ;;
+        -w?*)          has_w=1; wfile="${a#-w}" ;;
+        -C|-C*|-W|-W*) has_ring=1 ;;
+        -Z|-Z*)        has_z=1 ;;
+    esac
+done
+
+# Rien a borner, ou l'appelant a deja choisi son anneau : on s'efface.
+if [ "$has_w" != 1 ] || [ "$has_ring" = 1 ] || [ -z "$wfile" ]; then
+    exec "$REAL" "$@"
+fi
+
+# Le veilleur du lien. Lance AVANT l'exec : apres, ce processus EST tcpdump.
+# $$ survit a l'exec, donc il suit exactement sa vie et s'arrete avec lui.
+( ppid=$$
+  n=0
+  while [ "$n" -lt 300 ]; do
+      [ -e "${wfile}0" ] && break
+      kill -0 "$ppid" 2>/dev/null || exit 0
+      sleep 0.2; n=$((n + 1))
+  done
+  while kill -0 "$ppid" 2>/dev/null; do
+      newest=$(ls -t "${wfile}"[0-9]* 2>/dev/null | head -1)
+      if [ -n "$newest" ] && [ "$(readlink "$wfile" 2>/dev/null)" != "$newest" ]; then
+          ln -sfn "$newest" "$wfile"
+      fi
+      sleep 2
+  done ) >/dev/null 2>&1 &
+
+if [ "$has_z" = 1 ]; then
+    exec "$REAL" -C "${OSMO_PCAP_RING_MB:-32}" -W "${OSMO_PCAP_RING_FILES:-5}" "$@"
+fi
+exec "$REAL" -Z root -C "${OSMO_PCAP_RING_MB:-32}" -W "${OSMO_PCAP_RING_FILES:-5}" "$@"
+PCAPWRAP
+
+    # Le wrapper s'appelle "tcpdump" et vit dans /usr/local/bin, qui precede
+    # /usr/bin : il ne doit donc JAMAIS s'installer par-dessus le vrai binaire,
+    # sous peine de recursion infinie. On verifie ou pointe le vrai.
+    case "$(command -v tcpdump)" in
+        "$dst") ;;                       # deja le wrapper, on remplace
+        /usr/bin/tcpdump|/usr/sbin/tcpdump|/bin/tcpdump) ;;
+        *) rm -f "$tmp"; return 0 ;;     # emplacement inattendu : on s'abstient
+    esac
+
+    if cmp -s "$tmp" "$dst" 2>/dev/null; then
+        rm -f "$tmp"                     # deja a jour, rien a dire
+    else
+        install -m 0755 "$tmp" "$dst" 2>/dev/null \
+            && printf '  %spcap%s       anneau de capture arme (%s)\n' \
+                 "$C_DIM" "$C_Z" "$dst"
+        rm -f "$tmp"
+    fi
+}
+[ "$DRY" -eq 1 ] || install_pcap_wrapper
+
 # --- 8. lancement : exec run.sh -----------------------------------------------
 say_begin "Transmission a run.sh"
 if [ $DRY -eq 1 ]; then
