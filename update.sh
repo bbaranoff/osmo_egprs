@@ -1,5 +1,5 @@
 rm -r /opt/GSM/osmo_egprs
-git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
+cd /opt/GSM && git clone https://github.com/bbaranoff/osmo_egprs
 # ── animation : MT SMS entre deux téléphones ──
 printf '\033[?25l'
 ph='\033[1;33m☎\033[0m'
