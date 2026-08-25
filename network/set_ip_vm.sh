@@ -199,6 +199,20 @@ for a in ${STALE_ADDRS[@]+"${STALE_ADDRS[@]}"}; do
         echo -e "     (relancez la pile puis --force, ou --keep pour l'assumer)"
         continue
     fi
+    # Une adresse qu'une CONFIG nomme, meme si rien n'ecoute encore. C'est le
+    # cas au repos : la pile est arretee, aucun socket ouvert, et pourtant
+    # osmo-ggsn.cfg dit "gtp bind-ip 172.20.1.10". La retirer donne, au
+    # demarrage suivant, un service qui refuse de partir sur une adresse
+    # "introuvable localement" - et le lien avec ce script est loin.
+    if [ "$FORCE" != 1 ]; then
+        _ref="$(grep -rlF "$ip_only" /etc/osmocom /etc/asterisk 2>/dev/null | head -3)"
+        if [ -n "$_ref" ]; then
+            echo -e "  ${YELLOW}⚠${NC} ${a} CONSERVEE : nommee dans une configuration"
+            printf '     %s\n' $_ref
+            echo -e "     (corrigez la config - 127.0.0.1 convient en natif - puis --force)"
+            continue
+        fi
+    fi
     run ip addr del "$a" dev "$IFACE" 2>/dev/null \
         && echo -e "  ${GREEN}✓${NC} ${a} retiree" \
         || echo -e "  ${YELLOW}–${NC} ${a} deja absente"

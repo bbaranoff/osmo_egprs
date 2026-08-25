@@ -296,8 +296,29 @@ ENCRYPTION="a5 0"   # A5/1 par defaut dans l'ISO (chiffrement bout-en-bout valid
 # Concerne : osmo-ggsn (gtp bind-ip), osmo-sgsn (ggsn remote-ip), osmo-upf
 # (local-addr), osmo-bsc (gprs nsvc remote ip) et le log gsmtap, que l'on
 # ramene ainsi sur 127.0.0.1 ou tshark capte deja.
-HOST_IP="127.0.0.1"        # ip1 : __CONTAINER_IP__ - ggsn/sgsn/upf/bsc-nsvc
+# 127.0.0.2 et non .1 : c'est deja l'adresse que le bloc de patch plus bas
+# impose aux MEMES services (gtp local-ip, gsup remote-ip, listen 23000, HLR
+# remote-ip). Tant que __CONTAINER_IP__ valait 127.0.0.1, la substitution du
+# gabarit et le patch qui la suit divergeaient - le GGSN pouvait annoncer une
+# adresse et ecouter sur l'autre. C'est aussi ce qui remplace les 172.20.1.x
+# d'avant : une adresse de boucle locale existe toujours, une adresse de NIC
+# peut manquer au moment ou le service demarre.
+HOST_IP="127.0.0.2"        # ip1 : __CONTAINER_IP__ - ggsn/sgsn/upf/bsc-nsvc
 GATEWAY_IP="127.0.0.1"     # gw  : __GATEWAY_IP__  - log gsmtap + dns 0 du ggsn
+
+# ── Le segment prive de ce noeud : 192.168.<noeud+1>.x ──────────────────────
+# Meme plan que le cote docker (start.sh : op_private_*), pour qu'une VM et un
+# conteneur du meme rang se decrivent pareil. Le +1 laisse 192.168.1.0/24 au
+# LAN du banc - un noeud qui s'y poserait entrerait en collision avec les VM et
+# le hub SS7.
+#
+# Ces adresses REMPLACENT les 172.20.x heritees du plan docker. Elles ne
+# revendiquent rien (/32) : le but n'est pas de creer un segment - une VM n'a
+# pas de BTS derriere une carte - mais de donner un point d'attache stable aux
+# configurations qui nomment encore une adresse privee.
+ISO_PRIV_BASE=$(( ${ISO_NODE:-1} + 1 ))
+ISO_PRIV_GW="192.168.${ISO_PRIV_BASE}.1"
+ISO_PRIV_IP="192.168.${ISO_PRIV_BASE}.10"
 
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
@@ -915,9 +936,11 @@ DHCP=yes
 #
 # La route /16 disparait pour la meme raison : elle couvrait le plan docker
 # entier et primait sur toute route plus fine vers l'hote.
-Address=172.20.0.1/32
-Address=172.20.1.10/32
+Address=__PRIV_GW__/32
+Address=__PRIV_IP__/32
 EOF
+sed -i -e "s|__PRIV_GW__|${ISO_PRIV_GW}|" -e "s|__PRIV_IP__|${ISO_PRIV_IP}|" \
+       "$ROOTFS/etc/systemd/network/20-dhcp.network"
 # docker RETIRE de la liste : son service n'existe plus (ISO natif) et 'systemctl
 # enable' valide tous les units d'abord → un seul manquant faisait AVORTER l'enable
 # de systemd-networkd/resolved → enp3s0 sans IP au boot. On active chaque unit

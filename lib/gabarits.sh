@@ -31,10 +31,21 @@
 : "${ALSA_OUTPUT:=default}"
 : "${ALSA_INPUT:=default}"
 
+# Ces fonctions ont une JUMELLE dans start.sh : elles doivent dire la meme
+# chose. C'est CETTE copie que lit une machine qui reclone le depot a chaque
+# demarrage - donc celle qui compte sur une ISO. Tant qu'elle a garde l'ancien
+# plan prive (172.20.<op>.x), les configs regenerees au boot liaient
+# 172.20.1.10, une adresse que plus rien ne pose : osmo-ggsn et osmo-sgsn
+# refusaient de demarrer ("adresse introuvable localement") et osmo-pcu tombait
+# avec eux.
+#
+#   backbone  172.20.0.<10+op>   le segment partage avec l'inter-STP (.10)
+#   prive     192.168.<op+1>.x   un segment par operateur ; le +1 laisse
+#                                192.168.1.0/24 au LAN du banc.
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
-op_private_ip()   { echo "172.20.$1.10"; }
-op_private_gw()   { echo "172.20.$1.1"; }
-op_private_net()  { echo "172.20.$1.0/24"; }
+op_private_ip()   { echo "192.168.$(($1 + 1)).10"; }
+op_private_gw()   { echo "192.168.$(($1 + 1)).1"; }
+op_private_net()  { echo "192.168.$(($1 + 1)).0/24"; }
 op_netns()        { echo "osmo-op$1"; }
 op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
