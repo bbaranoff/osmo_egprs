@@ -1,0 +1,129 @@
+# =============================================================================
+# Dockerfile.stp — l'inter-STP SEUL : un routeur SS7, rien d'autre
+# =============================================================================
+#
+# L'image osmocom-run porte toute la maquette : HLR, MSC, BSC, PCU, BTS, trx,
+# Asterisk, QEMU Calypso, gr-gsm, PulseAudio, un venv Python. Le hub SS7 n'en
+# utilise RIEN. Il reçoit du M3UA sur 2908, consulte sa table de routage, et
+# renvoie le paquet vers le bon linkset. C'est tout ce qu'il fait, et c'est
+# tout ce que cette image contient.
+#
+# Ce qu'osmo-stp exige réellement, et rien de plus :
+#     libosmocore      — talloc, VTY, journalisation, boucle d'événements
+#     libosmo-netif    — la couche SCTP/stream
+#     libosmo-sigtran  — M3UA/SUA/SCCP… et le binaire osmo-stp lui-même
+#
+# osmo-stp n'a PAS de dépôt à lui : il est produit par libosmo-sigtran. C'est la
+# raison pour laquelle on ne voit pas d'« osmo-stp » dans la liste des sources.
+#
+# Versions alignées sur Dockerfile (la pile complète) : un hub compilé contre
+# une libosmo-sigtran plus récente que les nœuds négocierait des extensions
+# M3UA qu'eux ne connaissent pas — panne qui se lit « ASP DOWN », sans plus.
+#
+# Construction :   docker build -f Dockerfile.stp -t osmocom-stp .
+# Usage direct :   docker run --rm -p 2908:2908 -p 4239:4239 osmocom-stp
+# Config sur mesure :
+#     docker run --rm -v ./mon-hub.cfg:/etc/osmocom/osmo-stp-interop.cfg osmocom-stp
+# =============================================================================
+
+# ── Étage de compilation — jeté à la fin ─────────────────────────────────────
+FROM ubuntu:22.04 AS builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG LIBOSMOCORE_VERSION=1.12.1
+ARG LIBOSMO_NETIF_VERSION=1.7.0
+ARG LIBOSMO_SIGTRAN_VERSION=2.2.1
+ARG HUB_NODES=3
+ARG HUB_OPS=1
+
+# Dépendances de BUILD uniquement. Elles ne suivent pas dans l'image finale :
+# c'est l'intérêt du multi-étage, et la différence entre 60 Mo et 2 Go.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git autoconf automake libtool pkg-config \
+        libtalloc-dev libsctp-dev libmnl-dev libgnutls28-dev liburing-dev \
+        libpcsclite-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
+    LD_LIBRARY_PATH=/usr/local/lib
+
+WORKDIR /build
+
+# Ordre imposé : chaque bibliothèque se compile contre la précédente.
+# libosmocore vient de github (miroir officiel), les autres de gitea.osmocom.org
+# — même règle que Dockerfile, pour que les deux images voient le même code.
+RUN set -eux; \
+    for repo in \
+        "libosmocore:${LIBOSMOCORE_VERSION}:https://github.com/osmocom/libosmocore" \
+        "libosmo-netif:${LIBOSMO_NETIF_VERSION}:https://gitea.osmocom.org/osmocom/libosmo-netif" \
+        "libosmo-sigtran:${LIBOSMO_SIGTRAN_VERSION}:https://gitea.osmocom.org/osmocom/libosmo-sigtran" \
+    ; do \
+        name="${repo%%:*}"; rest="${repo#*:}"; \
+        version="${rest%%:*}"; url="${rest#*:}"; \
+        git clone "$url" "$name"; \
+        cd "/build/$name"; \
+        git checkout "$version"; \
+        autoreconf -fi; \
+        ./configure --prefix=/usr/local --disable-static; \
+        make -j"$(nproc)"; \
+        make install; \
+        ldconfig; \
+        cd /build; \
+    done
+
+# Le binaire doit exister ET être complet. Un `make install` qui réussit ne
+# garantit pas la clôture des dépendances : une .so absente ne se voit qu'au
+# premier lancement, dans une VM, loin d'ici. On échoue MAINTENANT.
+RUN set -eux; \
+    test -x /usr/local/bin/osmo-stp; \
+    if ldd /usr/local/bin/osmo-stp | grep 'not found'; then \
+        echo "Dépendances manquantes pour osmo-stp (ci-dessus)" >&2; exit 1; \
+    fi; \
+    ldd /usr/local/bin/osmo-stp
+
+# Config du hub, générée par le script du dépôt — une seule source de vérité
+# pour le plan de point codes (1.<noeud><op>.<role>), partagée avec l'ISO.
+COPY helpers/create_interop.sh /build/create_interop.sh
+RUN mkdir -p /etc/osmocom \
+    && bash /build/create_interop.sh --wan "${HUB_NODES}" "${HUB_OPS}" \
+         /etc/osmocom/osmo-stp-interop.cfg
+
+# ── Image finale — le STP et ses bibliothèques, point ────────────────────────
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+LABEL org.opencontainers.image.title="osmocom-stp" \
+      org.opencontainers.image.description="Inter-STP osmo_egprs — hub SS7/M3UA, PC 0.0.0"
+
+# Uniquement les bibliothèques PARTAGÉES contre lesquelles osmo-stp est lié.
+# Pas de compilateur, pas de git, pas de python, pas d'Asterisk, pas de tmux :
+# rien de tout cela n'intervient dans le routage d'un paquet M3UA.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libtalloc2 libsctp1 libmnl0 libgnutls30 liburing2 libpcsclite1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r osmocom \
+    && useradd -r -g osmocom -s /usr/sbin/nologin -d /var/lib/osmocom osmocom \
+    && mkdir -p /var/lib/osmocom /var/log/osmocom \
+    && chown osmocom:osmocom /var/lib/osmocom /var/log/osmocom
+
+COPY --from=builder /usr/local/bin/osmo-stp   /usr/local/bin/osmo-stp
+COPY --from=builder /usr/local/lib/           /usr/local/lib/
+COPY --from=builder /etc/osmocom/             /etc/osmocom/
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+# Même vérification que dans l'étage de build, mais sur l'image LIVRÉE : c'est
+# elle qui part dans l'ISO. `!` fait échouer la construction si une .so manque.
+RUN ldconfig && ! ldd /usr/local/bin/osmo-stp | grep 'not found'
+
+# 2908 : M3UA, ce que les nœuds viennent chercher — en SCTP, que EXPOSE ne sait
+# pas déclarer (tcp/udp seulement). La mention reste indicative : c'est le
+# `docker run -p` ou le réseau de l'hôte qui ouvre réellement le port.
+# 4239 : VTY. Le 2905 des nœuds n'a pas lieu d'être ici : le hub ne l'écoute pas.
+EXPOSE 2908/tcp 4239/tcp
+
+# Le hub tourne en root : SCTP sur un port < 1024 ne le demande pas, mais
+# poser une adresse sur l'interface (start-interstp.sh, hors conteneur) si.
+# Dans un conteneur, docker fournit l'adresse — d'où le user osmocom possible :
+#   docker run --user osmocom ...
+ENTRYPOINT ["/usr/local/bin/osmo-stp"]
+CMD ["-c", "/etc/osmocom/osmo-stp-interop.cfg"]

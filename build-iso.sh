@@ -111,6 +111,11 @@ mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 echo -e "${CYAN}${BOLD}══ osmo_egprs ISO builder (via build.sh + start.sh) ══${NC}"
 
 # ── Étape 1 : Exécuter build.sh pour préparer l'hôte et construire osmocom-nitb ──
+if [ "$ISO_ROLE" = "interstp" ]; then
+    echo -e "${GREEN}[1/9] Rôle inter-STP : build.sh SAUTÉ${NC}"
+    echo -e "  ${CYAN}Le hub route du M3UA. Ni HLR, ni MSC, ni BSC, ni radio, ni Asterisk :${NC}"
+    echo -e "  ${CYAN}rien de ce que construit build.sh ne le concerne.${NC}"
+else
 echo -e "${GREEN}[1/9] Exécution de build.sh...${NC}"
 if [ -f "$DIR/build.sh" ]; then
     bash "$DIR/build.sh" $NO_CACHE
@@ -119,6 +124,7 @@ else
     docker build $NO_CACHE -t osmocom-nitb "$DIR"
 fi
 echo -e "  ${GREEN}✓${NC} image osmocom-nitb prête"
+fi
 
 load_start_lib() {
     local src="$DIR/start.sh"
@@ -144,12 +150,23 @@ load_start_lib() {
 }
 
 # ── Étape 2 : Construire l'image osmocom-run via start.sh ─────────────────────
-echo -e "${GREEN}[2/9] Construction de l'image osmocom-run via start.sh...${NC}"
+# load_start_lib est nécessaire dans TOUS les cas : c'est lui qui apporte
+# apply_config_templates. C'est build_run_image — deux heures de compilation de
+# la pile complète — que le hub n'a aucune raison de payer.
 load_start_lib
-build_run_image
-echo -e "  ${GREEN}✓${NC} osmocom-run construite"
+if [ "$ISO_ROLE" = "interstp" ]; then
+    echo -e "${GREEN}[2/9] Construction de l'image ${CYAN}osmocom-stp${NC}${GREEN} (Dockerfile.stp)...${NC}"
+    echo -e "  ${CYAN}osmo-stp + libosmocore + libosmo-netif + libosmo-sigtran. Rien d'autre.${NC}"
+    docker build $NO_CACHE -f "$DIR/Dockerfile.stp" -t osmocom-stp "$DIR" \
+        || { echo -e "${RED}Échec de la construction d'osmocom-stp${NC}"; exit 1; }
+    echo -e "  ${GREEN}✓${NC} osmocom-stp construite ($(docker image inspect osmocom-stp --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0f Mo", $1/1048576}'))"
+else
+    echo -e "${GREEN}[2/9] Construction de l'image osmocom-run via start.sh...${NC}"
+    build_run_image
+    echo -e "  ${GREEN}✓${NC} osmocom-run construite"
+fi
 
-echo -e "${GREEN}[2b/9] Préparation d'une image osmocom-run (net-host)...${NC}"
+echo -e "${GREEN}[2b/9] Préparation de l'image source de l'ISO...${NC}"
 
 ISO_N_MS=2
 ISO_OP_ID=1         # operateur unique de l'ISO (PLMN 001-01)
@@ -253,11 +270,20 @@ ISO_SMS_SC="1999001${ISO_OP_ID}444"
 } > "$TEMP_CONFIG/osmocom/sms-routing.conf"
 echo -e "  ${GREEN}✓${NC} sms-routing.conf : ${CYAN}${ISO_N_MS}${NC} route(s) MS, operateur ${ISO_OP_ID} = ${CYAN}${HOST_IP}${NC}"
 
-ISO_RUN_IMAGE="osmocom-run-iso-net-host"
-TMP_CID="$(docker create osmocom-run /bin/sh)"
+if [ "$ISO_ROLE" = "interstp" ]; then
+    ISO_RUN_IMAGE="osmocom-stp-iso"
+    ISO_SRC_IMAGE="osmocom-stp"
+else
+    ISO_RUN_IMAGE="osmocom-run-iso-net-host"
+    ISO_SRC_IMAGE="osmocom-run"
+fi
+TMP_CID="$(docker create "$ISO_SRC_IMAGE" /bin/sh)"
 
 docker cp "$TEMP_CONFIG/osmocom/."  "$TMP_CID:/etc/osmocom/"  2>/dev/null || true
-docker cp "$TEMP_CONFIG/asterisk/." "$TMP_CID:/etc/asterisk/" 2>/dev/null || true
+# Le hub n'a pas d'Asterisk : lui pousser des configs SIP n'aurait pas de sens,
+# et l'image n'a même pas /etc/asterisk.
+[ "$ISO_ROLE" = "interstp" ] || \
+    docker cp "$TEMP_CONFIG/asterisk/." "$TMP_CID:/etc/asterisk/" 2>/dev/null || true
 
 docker commit "$TMP_CID" "$ISO_RUN_IMAGE" >/dev/null
 docker rm -f "$TMP_CID" >/dev/null 2>&1 || true
@@ -679,9 +705,11 @@ echo -e "${GREEN}[8b/9] Clôture de dépendances COMPLÈTE depuis ${CYAN}${ISO_R
 # /usr/local/bin (osmo), /opt/GSM (qemu, ipc-device, gr-gsm), /root/.env (venv
 # python : bindings gnuradio/gr-gsm + leurs deps boost/log4cpp/volk/fftw...).
 # => toutes les deps natives finissent dans l'ISO, plus de "import gsm" qui rate.
-docker run --rm --entrypoint bash "$ISO_RUN_IMAGE" -c '
+docker run --rm --entrypoint bash \
+    -e OSMO_LDD_ROOTS="$([ "$ISO_ROLE" = "interstp" ] && echo "/usr/local/bin /usr/local/lib" || echo "/usr/local/bin /opt/GSM /root/.env")" \
+    "$ISO_RUN_IMAGE" -c '
     set -e
-    find /usr/local/bin /opt/GSM /root/.env -type f \( -executable -o -name "*.so*" \) 2>/dev/null \
+    find ${OSMO_LDD_ROOTS:-/usr/local/bin /opt/GSM /root/.env} -type f \( -executable -o -name "*.so*" \) 2>/dev/null \
       | while read -r b; do ldd "$b" 2>/dev/null; done \
       | grep -oE "/[^ ]+\.so[^ ]*" | sort -u \
       | grep -vE "/(ld-linux[^/]*|ld|libc|libm|libpthread|libdl|librt|libresolv)\.so" \
@@ -855,7 +883,9 @@ Environment=CONTAINER_PREFIX=osmo-operator-
 [Install]
 WantedBy=multi-user.target
 EOF
-chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
+# Le hub n'a ni VTY d'opérateur à afficher ni radio à tracer : le tableau de
+# bord n'aurait rien à montrer. On ne l'active pas.
+[ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 
 # ── Audio : PulseAudio système (sink gsm_audio) au boot ────────────────────
 # Chaîne : osmo-gapk → ALSA gsm_out → sink null gsm_audio → monitor → loopback
@@ -931,7 +961,8 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-chroot "$ROOTFS" systemctl enable osmo-pulse 2>/dev/null||true
+# Idem pour l'audio : le hub ne porte aucun appel, il route de la signalisation.
+[ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-pulse 2>/dev/null||true
 
 # Modules noyau
 mkdir -p "$ROOTFS/etc/modules-load.d"
