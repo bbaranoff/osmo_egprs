@@ -2,10 +2,13 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # update.sh — met à jour les trois dépôts de la machine, à l'ouverture de session
 #
-# C'est CE fichier que l'ISO va chercher au démarrage : /usr/local/sbin/osmo-update.sh
-# télécharge .../osmo_egprs/refs/heads/main/update.sh et l'exécute. (tools/update.sh
-# est un lien vers ici — il y avait deux copies divergentes, chacune ne faisant
-# que la moitié du travail, et l'animation SMS écrite deux fois.)
+# C'est CE fichier, et lui seul, que l'ISO va chercher au démarrage :
+# /usr/local/sbin/osmo-update.sh télécharge .../osmo_egprs/refs/heads/main/update.sh
+# et l'exécute. Il a existé un tools/update.sh, seconde copie divergente : chacune
+# des deux ne faisait que la moitié du travail (l'une clonait osmo_egprs, l'autre
+# le dashboard) et l'animation SMS y était écrite deux fois. Il est supprimé —
+# les lignes de journal de build-iso.sh qui le nomment encore visent en réalité
+# ce fichier-ci.
 #
 # ── CE QU'IL FAIT ────────────────────────────────────────────────────────────
 # Il n'update rien lui-même : il POSE /usr/local/sbin/osmo-sync.sh et l'accroche
