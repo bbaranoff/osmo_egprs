@@ -1299,24 +1299,65 @@ EOF
 cat > "$ROOTFS/usr/local/bin/tcpdump" <<'TCPDUMPEOF'
 #!/bin/sh
 # tcpdump - wrapper osmo_egprs : impose un anneau aux captures sur fichier.
-# La racine du live est un tmpfs ; une capture non bornee finit par remplir la
-# RAM, et l'erreur tombe bien plus tard, sur une machine sans disque plein.
-# Reglable : OSMO_PCAP_RING_MB (defaut 32), OSMO_PCAP_RING_FILES (defaut 5).
+#
+# La racine du live est un tmpfs : une capture non bornee finit par remplir la
+# RAM, et l'erreur ("No space left on device") tombe des heures plus tard, sur
+# une machine qui n'a pourtant aucun disque plein.
+#
+# DEUX PIEGES, DEUX PARADES
+#  -Z root : avec -C/-W, tcpdump cree les membres suivants de l'anneau APRES
+#            avoir abandonne ses privileges (utilisateur "tcpdump"). Sans -Z il
+#            echoue des le premier : "Permission denied" - et aucune capture.
+#            Sans -C il ouvrait le fichier AVANT, d'ou un fonctionnement qui ne
+#            cassait qu'en ajoutant l'anneau.
+#  lien    : avec -C/-W, tcpdump n'ecrit pas le nom demande mais numerote les
+#            membres (capture.pcap0, .pcap1...). Le nom exact n'existe jamais,
+#            et l'appelant qui l'attend conclut a un echec. On maintient donc
+#            <nom exact> -> membre courant : la barriere le suit, qui ouvre le
+#            fichier lit la capture en cours, et rien n'a a etre reecrit.
+#
+# Reglable : OSMO_PCAP_RING_MB (32), OSMO_PCAP_RING_FILES (5).
 REAL=/usr/bin/tcpdump
 [ -x "$REAL" ] || REAL=/usr/sbin/tcpdump
 
-has_w=0; has_ring=0
+has_w=0; has_ring=0; has_z=0; wfile=""; next_is_w=0
 for a in "$@"; do
+    if [ "$next_is_w" = 1 ]; then wfile="$a"; next_is_w=0; continue; fi
     case "$a" in
-        -w|-w*)        has_w=1 ;;
+        -w)            has_w=1; next_is_w=1 ;;
+        -w?*)          has_w=1; wfile="${a#-w}" ;;
         -C|-C*|-W|-W*) has_ring=1 ;;
+        -Z|-Z*)        has_z=1 ;;
     esac
 done
 
-if [ "$has_w" = 1 ] && [ "$has_ring" = 0 ]; then
+# Rien a borner, ou l'appelant a deja choisi son anneau : on s'efface.
+if [ "$has_w" != 1 ] || [ "$has_ring" = 1 ] || [ -z "$wfile" ]; then
+    exec "$REAL" "$@"
+fi
+
+# Le veilleur du lien. Lance AVANT l'exec : apres, ce processus EST tcpdump.
+# $$ reste le meme a travers l'exec, donc il suit exactement sa vie et s'arrete
+# avec lui - aucun processus orphelin a nettoyer.
+( ppid=$$
+  n=0
+  while [ "$n" -lt 300 ]; do
+      [ -e "${wfile}0" ] && break
+      kill -0 "$ppid" 2>/dev/null || exit 0
+      sleep 0.2; n=$((n + 1))
+  done
+  while kill -0 "$ppid" 2>/dev/null; do
+      newest=$(ls -t "${wfile}"[0-9]* 2>/dev/null | head -1)
+      if [ -n "$newest" ] && [ "$(readlink "$wfile" 2>/dev/null)" != "$newest" ]; then
+          ln -sfn "$newest" "$wfile"
+      fi
+      sleep 2
+  done ) >/dev/null 2>&1 &
+
+if [ "$has_z" = 1 ]; then
     exec "$REAL" -C "${OSMO_PCAP_RING_MB:-32}" -W "${OSMO_PCAP_RING_FILES:-5}" "$@"
 fi
-exec "$REAL" "$@"
+exec "$REAL" -Z root -C "${OSMO_PCAP_RING_MB:-32}" -W "${OSMO_PCAP_RING_FILES:-5}" "$@"
 TCPDUMPEOF
 chmod +x "$ROOTFS/usr/local/bin/tcpdump"
 
