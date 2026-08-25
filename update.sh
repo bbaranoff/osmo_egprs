@@ -40,6 +40,7 @@ set -u
 
 SYNC=/usr/local/sbin/osmo-sync.sh
 PROFILE=/etc/profile.d/01-keyboard-setup.sh
+HOOK=/etc/profile.d/99-osmo-sync.sh
 RUN_NOW=0
 SYNC_ONLY=0
 ANIM=1
@@ -57,10 +58,33 @@ done
 
 [ "$(id -u)" -eq 0 ] || { echo "Root requis." >&2; exit 1; }
 
-command -v git >/dev/null 2>&1 || {
-    apt-get update -qq 2>/dev/null || true
-    apt-get install -y -qq git >/dev/null 2>&1 || apt install git -y
+# ── Outils dont dépendent les scripts posés ──────────────────────────────────
+#   git  la synchro des dépôts, évidemment.
+#   nc   le VTY. start-interstp.sh --status, checks/ss7_check.sh et
+#        checks/wan_ss7_check.sh interrogent les démons par « nc 127.0.0.1 4239 » :
+#        c'est la SEULE source de vérité sur qui est réellement attaché, un ASP
+#        pouvant avoir ouvert sa SCTP sans jamais passer ASP-ACTIVE. Sans nc, ces
+#        scripts ne se plaignent pas — ils affichent un diagnostic vide, ce qui
+#        se lit comme « rien n'est attaché » alors que tout va bien.
+#        netcat-openbsd : c'est ce que pose déjà le build, et son -q est celui
+#        qu'attendent les appels du dépôt.
+need_pkg() {   # $1=commande  $2..=paquets candidats, dans l'ordre
+    local cmd="$1"; shift
+    command -v "$cmd" >/dev/null 2>&1 && { echo "  ✓ ${cmd} déjà présent"; return 0; }
+    [ "${APT_REFRESHED:-0}" = "1" ] || { echo "  apt-get update"; apt-get update || true; APT_REFRESHED=1; }
+    local p
+    for p in "$@"; do
+        echo "  apt-get install ${p}"
+        apt-get install -y "$p" && command -v "$cmd" >/dev/null 2>&1 && {
+            echo "  ✓ ${cmd} (${p})"; return 0; }
+    done
+    echo "  ⚠ ${cmd} introuvable — paquets essayés : $*" >&2
+    return 1
 }
+
+APT_REFRESHED=0
+need_pkg git git
+need_pkg nc  netcat-openbsd netcat-traditional netcat
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /usr/local/sbin/osmo-sync.sh — animation puis synchro, écrit UNE fois
@@ -73,8 +97,9 @@ cat > "$SYNC" <<'SYNCEOF'
 # osmo-sync.sh — animation SMS, puis mise à jour des trois dépôts.
 # Posé par update.sh ; appelé à l'ouverture de session depuis
 # /etc/profile.d/01-keyboard-setup.sh, et exécutable à la main :
-#   sudo osmo-sync.sh            animation + les trois dépôts
-#   sudo osmo-sync.sh --quiet    sans animation
+#   sudo osmo-sync.sh            question, les trois dépôts en clair, puis l'animation
+#   sudo osmo-sync.sh --quiet    sans l'animation finale
+#   sudo osmo-sync.sh -y         sans poser la question
 #   sudo osmo-sync.sh qemu-src   un seul dépôt
 set -u
 
@@ -82,8 +107,43 @@ LOG=/var/log/osmo-update.log
 G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; C='\033[0;36m'; B='\033[1m'; N='\033[0m'
 
 ANIM=1
-[ "${1:-}" = "--quiet" ] && { ANIM=0; shift; }
+ASSUME_YES="${OSMO_SYNC_YES:-0}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --quiet)   ANIM=0 ;;
+        -y|--yes)  ASSUME_YES=1 ;;
+        *) break ;;
+    esac
+    shift
+done
 ONLY="${1:-}"
+
+# ── Le disclaimer ───────────────────────────────────────────────────────────
+# La mise à jour n'est pas anodine : osmo_egprs et osmo-egprs-web sont EFFACÉS
+# puis reclonés. Ce qu'on a bricolé sur place pendant la session précédente —
+# une config éditée à la main, un patch d'essai — disparaît. Quelqu'un au milieu
+# d'un banc doit pouvoir dire non.
+#
+# Délai : sans terminal (service, cron) on ne pose pas la question, on met à
+# jour — c'est le rôle du service. Avec terminal, 15 s sans réponse valent oui :
+# une machine qu'on démarre pour la laisser tourner ne doit pas rester bloquée
+# sur une question que personne ne lira.
+ask_update() {
+    [ "$ASSUME_YES" = "1" ] && return 0
+    [ -t 0 ] || return 0
+    local a
+    echo ""
+    printf "  ${B}Do you want to update?${N}  Mettre à jour les trois dépôts ?\n"
+    printf "  ${Y}%s${N} et ${Y}%s${N} seront ${Y}effacés puis reclonés${N} (modifs locales perdues).\n" \
+        /opt/GSM/osmo_egprs /opt/osmo-egprs-web
+    printf "  ${C}qemu-src${N} est mis à jour sans effacement.\n"
+    printf "  [O/n] (15 s sans réponse = oui) : "
+    read -r -t 15 a || { echo ""; a=""; }
+    case "${a:-o}" in
+        [nN]*) echo ""; printf "  ${Y}Mise à jour passée.${N}  Plus tard : ${C}sudo osmo-sync.sh${N}\n\n"; return 1 ;;
+        *) return 0 ;;
+    esac
+}
 
 # ── L'animation ─────────────────────────────────────────────────────────────
 # Sur un tty seulement : les séquences de curseur (\033[?25l) écrites dans un
@@ -133,11 +193,12 @@ sync_repo() {   # $1=nom  $2=url  $3=destination  $4=1 pour effacer et recloner
     if [ "$wipe" != "1" ] && [ -d "$dest/.git" ]; then
         br="$(git -C "$dest" symbolic-ref --quiet --short HEAD 2>/dev/null)"
         [ -n "$br" ] || br=main
-        if git -C "$dest" fetch --depth 1 --quiet origin "$br" 2>/dev/null \
-           || git -C "$dest" fetch --depth 1 --quiet origin main 2>/dev/null; then
-            git -C "$dest" reset --hard --quiet FETCH_HEAD \
-                && git -C "$dest" clean -qfd \
-                && printf "    ${G}✓${N} %s\n" "$(git -C "$dest" log -1 --format='%h %s' 2>/dev/null)" \
+        printf "    ${C}git fetch --depth 1 origin %s${N}\n" "$br"
+        if git -C "$dest" fetch --depth 1 --progress origin "$br" \
+           || git -C "$dest" fetch --depth 1 --progress origin main; then
+            git -C "$dest" reset --hard FETCH_HEAD \
+                && git -C "$dest" clean -fd \
+                && printf "    ${G}✓${N} %s\n" "$(git -C "$dest" log -1 --format='%h %s')" \
                 && return 0
         fi
         printf "    ${Y}⚠${N} fetch impossible — copie existante conservée\n"
@@ -146,7 +207,8 @@ sync_repo() {   # $1=nom  $2=url  $3=destination  $4=1 pour effacer et recloner
 
     mkdir -p "$(dirname "$dest")"
     tmp="$(mktemp -d "$(dirname "$dest")/.sync-XXXXXX" 2>/dev/null)" || tmp="$(mktemp -d)"
-    if git clone --depth 1 --single-branch --quiet "$url" "$tmp/repo" 2>/dev/null; then
+    printf "    ${C}git clone --depth 1 %s${N}\n" "$url"
+    if git clone --depth 1 --single-branch --progress "$url" "$tmp/repo"; then
         # L'annonce du rm est ici, et pas avant le clone : un clone qui échoue
         # n'efface rien, et un journal qui dit « rm » puis « inchangé » laisse
         # croire à une machine à moitié détruite.
@@ -154,7 +216,7 @@ sync_repo() {   # $1=nom  $2=url  $3=destination  $4=1 pour effacer et recloner
         rm -rf "$dest"
         mv "$tmp/repo" "$dest"
         rm -rf "$tmp"
-        printf "    ${G}✓${N} clone frais — %s\n" "$(git -C "$dest" log -1 --format='%h %s' 2>/dev/null)"
+        printf "    ${G}✓${N} clone frais — %s\n" "$(git -C "$dest" log -1 --format='%h %s')"
         return 0
     fi
     rm -rf "$tmp"
@@ -171,9 +233,12 @@ web_service() {
     [ -d /opt/osmo-egprs-web ] || return 0
 
     if command -v npm >/dev/null 2>&1 && [ -f /opt/osmo-egprs-web/package.json ]; then
-        (cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund >/dev/null 2>&1) \
-            && printf "    ${G}✓${N} npm install\n" \
-            || printf "    ${Y}⚠${N} npm install en échec — le dashboard peut ne pas démarrer\n"
+        printf "    ${C}npm install --omit=dev${N}\n"
+        if (cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund); then
+            printf "    ${G}✓${N} npm install\n"
+        else
+            printf "    ${Y}⚠${N} npm install en échec — le dashboard peut ne pas démarrer\n"
+        fi
     fi
 
     [ -f "$unit" ] || return 0
@@ -184,8 +249,9 @@ web_service() {
     else
         sed -i '/^\[Service\]/a Environment=CAP_IFACE=any' "$unit"
     fi
-    systemctl daemon-reload 2>/dev/null || true
-    if systemctl restart osmo-egprs-web.service 2>/dev/null; then
+    printf "    ${C}systemctl daemon-reload && systemctl restart osmo-egprs-web${N}\n"
+    systemctl daemon-reload || true
+    if systemctl restart osmo-egprs-web.service; then
         printf "    ${G}✓${N} osmo-egprs-web relancé (CAP_IFACE=any)\n"
     else
         printf "    ${Y}⚠${N} osmo-egprs-web n'a pas redémarré — journalctl -u osmo-egprs-web\n"
@@ -193,7 +259,7 @@ web_service() {
 }
 
 # ── Déroulé ─────────────────────────────────────────────────────────────────
-sms_anim
+ask_update || exit 0
 
 mkdir -p /opt/GSM "$(dirname "$LOG")" 2>/dev/null || true
 echo "===== osmo-sync $(date '+%F %T') =====" >> "$LOG" 2>/dev/null || true
@@ -217,8 +283,12 @@ case "$ONLY" in
 esac
 
 echo ""
+# L'animation ferme la marche : elle ne sert plus à faire patienter — tout ce qui
+# précède a défilé en clair — mais à dire que c'est fini, d'un coup d'oeil et de
+# l'autre bout de la pièce.
+sms_anim
 if [ "$rc" = "0" ]; then
-    printf "  ${G}✓ dépôts à jour${NC}\n"
+    printf "  ${G}✓ dépôts à jour${N}\n"
 else
     printf "  ${Y}⚠ au moins un dépôt n'a pas pu être mis à jour — la machine garde l'existant${N}\n"
 fi
@@ -230,51 +300,118 @@ chmod +x "$SYNC"
 echo "  ✓ ${SYNC}"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Accrochage au profil : après le clavier, avant la main
+# Accrochage à la session : un fichier À PART, pas une greffe sur le clavier
 # ══════════════════════════════════════════════════════════════════════════════
-# On tronque juste après la ligne Disclaimer, puis on ajoute — c'est l'idiome
-# déjà en place, et c'est lui qui rend l'opération rejouable : un second passage
-# ne peut pas empiler deux blocs. Le clavier est configuré au-dessus de cette
-# ligne, donc l'animation et la synchro tombent bien APRÈS le set du clavier.
+# POURQUOI PAS DANS 01-keyboard-setup.sh — c'est la raison pour laquelle on ne
+# voyait plus rien au reboot. Ce fichier commence par :
 #
-# La ligne appelle un script externe plutôt que d'inclure le code : le profil
-# est SOURCÉ par le shell, et un `exit` égaré dedans ferme la session de
-# l'utilisateur. Un appel externe ne peut pas faire ça.
+#     [ -f /var/lib/osmo-kb-done ] && return 0
+#
+# et sa dernière action est « touch /var/lib/osmo-kb-done ». Une fois le clavier
+# choisi, le script entier retourne à sa deuxième ligne — donc TOUT ce qu'on lui
+# ajoute à la fin, animation comprise, ne se joue qu'une seule fois dans la vie
+# de la machine. Premier démarrage : on voit le SMS. Deuxième : plus rien, et
+# rien n'indique pourquoi.
+#
+# Un fichier séparé n'a pas ce garde-fou. /etc/profile.d est sourcé dans l'ordre
+# alphabétique : 01-keyboard-setup.sh d'abord, 99-osmo-sync.sh ensuite —
+# l'animation reste donc bien APRÈS le choix du clavier, sans dépendre de lui.
+#
+# Au passage, on ne découpe plus 01-keyboard-setup.sh : l'ancienne méthode le
+# tronquait après la ligne « Disclaimer », ce qui lui faisait perdre ses deux
+# dernières lignes à chaque passage.
 if [ "$SYNC_ONLY" = "0" ]; then
-    if [ -f "$PROFILE" ]; then
+    # Nettoyage de l'ancienne greffe, si un passage précédent l'a posée : sinon
+    # l'animation reste écrite à deux endroits, et le premier boot la joue deux
+    # fois.
+    if [ -f "$PROFILE" ] && grep -q 'osmo-sync\|scanning ARFCN' "$PROFILE"; then
         tmp="$(mktemp)"
-        if grep -q 'Disclaimer' "$PROFILE"; then
-            awk '1; /Disclaimer/{exit}' "$PROFILE" > "$tmp"
-        else
-            # Pas de Disclaimer (profil déjà réécrit) : on repart du fichier
-            # amputé de tout bloc osmo-sync antérieur, sinon on en empile un
-            # deuxième à chaque passage.
-            awk '/^# ── osmo-sync ──/{exit} 1' "$PROFILE" > "$tmp"
-        fi
-        {
-            echo ''
-            echo '# ── osmo-sync ── (posé par update.sh)'
-            echo '# clavier configuré ci-dessus → animation SMS → mise à jour des 3 dépôts,'
-            echo '# logs sur CE terminal.'
-            echo '[ -x /usr/local/sbin/osmo-sync.sh ] && /usr/local/sbin/osmo-sync.sh'
-        } >> "$tmp"
-        # cat plutôt que mv : sur l'ISO ce fichier peut être un point de montage,
-        # et rename() y échoue.
+        awk '/^# ── osmo-sync ──/{exit} /^# ── animation : MT SMS/{exit} 1' "$PROFILE" > "$tmp"
         cat "$tmp" > "$PROFILE"; rm -f "$tmp"
-        chmod +x "$PROFILE"
-        echo "  ✓ ${PROFILE} — clavier → animation → dépôts"
-    else
-        echo "  ⚠ ${PROFILE} absent — synchro non accrochée à la session"
+        echo "  ✓ ${PROFILE} — ancienne greffe retirée"
     fi
+
+    # ── Une fois par DÉMARRAGE, pas par session ──────────────────────────────
+    # Le témoin vit dans /run, un tmpfs que le noyau recrée vide à chaque boot :
+    # la synchro se rejoue donc à chaque reboot, et une seule fois. Sans lui,
+    # ouvrir un second tty ou faire « su - » relancerait le rm et le clone des
+    # dépôts sous les pieds de ce qui tourne.
+    cat > "$HOOK" <<'HOOKEOF'
+# 99-osmo-sync.sh — posé par update.sh (dépôt osmo_egprs)
+# Sourcé APRÈS 01-keyboard-setup.sh (ordre alphabétique de /etc/profile.d) :
+# clavier → animation SMS → mise à jour des 3 dépôts, logs sur CE terminal.
+[ -n "${BASH_VERSION:-}" ] || return 0
+case $- in *i*) ;; *) return 0 ;; esac      # session interactive seulement
+[ "$(id -u)" -eq 0 ] || return 0
+[ -x /usr/local/sbin/osmo-sync.sh ] || return 0
+[ -e /run/osmo-sync.done ] && return 0      # /run : vidé à chaque démarrage
+: > /run/osmo-sync.done
+/usr/local/sbin/osmo-sync.sh
+HOOKEOF
+    chmod +x "$HOOK"
+    echo "  ✓ ${HOOK} — clavier → animation → dépôts, à chaque démarrage"
 fi
 
-[ "$ANIM" = "1" ] || sed -i 's|osmo-sync.sh$|osmo-sync.sh --quiet|' "$PROFILE" 2>/dev/null
+[ "$ANIM" = "1" ] || sed -i 's|osmo-sync\.sh$|osmo-sync.sh --quiet|' "$HOOK" 2>/dev/null
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Déclenchement sur la console — la course que le profil ne peut pas gagner
+# ══════════════════════════════════════════════════════════════════════════════
+# Sur l'ISO déjà gravée, deux unités démarrent en parallèle et une seule attend
+# le réseau :
+#
+#   osmo-update.service   After=network-online.target  ← nous, donc EN RETARD
+#   getty@tty1 (autologin) n'attend rien               ← le shell, donc EN AVANCE
+#
+# Le shell source /etc/profile — et son « for i in /etc/profile.d/*.sh » développe
+# le motif UNE fois, au début — bien avant que ce script n'ait posé quoi que ce
+# soit. Un fichier créé après coup n'entre pas dans une boucle déjà lancée : le
+# profil, greffé ou séparé, ne peut donc rien afficher au premier passage. Et
+# comme /etc revient du squashfs à chaque démarrage sur un live, ce n'est pas
+# « la première fois », c'est TOUTES les fois.
+#
+# D'où ce déclencheur, qui ne dépend d'aucun ordre de démarrage : on attend le
+# témoin que pose la fin de la configuration clavier, puis on écrit sur le tty où
+# l'utilisateur se trouve. L'enchaînement demandé tient sans toucher à l'ISO :
+#
+#     clavier fr → animation SMS → « Do you want to update? » → les 3 dépôts
+#
+# Détaché (setsid … &) : le service est un oneshot, le bloquer le temps du
+# clavier retarderait multi-user.target et tout ce qui en dépend.
+console_trigger() {
+    local waiter=/usr/local/sbin/osmo-sync-console.sh
+    cat > "$waiter" <<'WAITEOF'
+#!/bin/bash
+# Attend la fin du choix clavier, puis joue la synchro sur le tty de session.
+# Posé par update.sh ; lancé détaché depuis osmo-update.service.
+for _ in $(seq 1 300); do
+    [ -e /var/lib/osmo-kb-done ] && break
+    sleep 1
+done
+sleep 1
+[ -e /run/osmo-sync.done ] && exit 0
+: > /run/osmo-sync.done
+# tty1 est la console d'autologin de l'ISO ; /dev/console si elle manque.
+tty=/dev/tty1
+[ -w "$tty" ] && [ -r "$tty" ] || tty=/dev/console
+exec /usr/local/sbin/osmo-sync.sh <"$tty" >"$tty" 2>&1
+WAITEOF
+    chmod +x "$waiter"
+    setsid "$waiter" >/dev/null 2>&1 &
+    echo "  ✓ déclencheur console armé (attend la fin du choix clavier)"
+}
 
 if [ "$RUN_NOW" = "1" ]; then
     echo ""
     "$SYNC"
-else
+elif [ -t 1 ]; then
+    # Lancé à la main depuis un shell : l'utilisateur est là, il n'a pas besoin
+    # qu'on lui arme un déclencheur pour dans trente secondes.
     echo ""
-    echo "  La mise à jour se joue à l'ouverture de session."
     echo "  Tout de suite : sudo osmo-sync.sh"
+else
+    # Lancé par osmo-update.service : personne ne lit cette sortie, elle part
+    # dans /var/log/osmo-update.log. C'est le déclencheur qui portera la suite
+    # jusqu'à l'écran.
+    console_trigger
 fi
