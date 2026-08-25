@@ -52,6 +52,13 @@ ISO_NODE=""
 # segment quand les VM sont pontees.
 ISO_HUB_IP="192.168.1.49"
 ISO_SUBNET="192.168.56"
+# ── Table WAN par defaut : le banc ──────────────────────────────────────────
+# Format : <noeud>:<IP>:<indicatif>
+#   hub 192.168.1.49    noeud 1 .2    noeud 2 .175    noeud 3 .126
+# Elle sert quand --wan-nodes n'est pas donne. Sans defaut, une construction
+# sans terminal - la CI - s'arretait a l'etape 7b sur une question que personne
+# ne lisait : "pas de terminal : renseignez WAN_NODES / WAN_NODE_ID / WAN_OPS".
+ISO_WAN_NODES_DEFAULT="1:192.168.1.2:11 2:192.168.1.175:22 3:192.168.1.126:33"
 OUTPUT_SET=0
 for arg in "$@"; do case "$arg" in
     --output=*)     OUTPUT="${arg#*=}"; OUTPUT_SET=1 ;;
@@ -151,6 +158,35 @@ case "${ISO_ROLE:-operator}" in
     *) echo "--role inconnu : $ISO_ROLE (operator|interstp)" >&2; exit 2 ;;
 esac
 case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
+
+# ── La table WAN : arretee ICI, pas au milieu de la construction ────────────
+# --role=interstp implique le WAN (le hub doit savoir combien de noeuds il
+# dessert). L'etape 7b la demandait alors interactivement, une heure apres le
+# lancement : de quoi bloquer une construction que l'on croyait autonome, et
+# faire echouer la CI, qui n'a pas de terminal pour repondre.
+#
+# On la fige donc maintenant, avec la table du banc pour defaut. --wan-nodes
+# reste prioritaire et n'est pas touche.
+# Avec terminal on DEMANDE - un banc n'a pas toujours les adresses du notre.
+# Sans terminal (CI, cron) on prend le defaut : rester bloque sur une lecture
+# que personne ne verra ne ferait qu'echouer plus tard, et plus obscurement.
+if [ "$ISO_WAN" = "1" ] && [ -z "$ISO_WAN_NODES" ]; then
+    if [ -t 0 ]; then
+        echo -e "${CYAN}${BOLD}== Table WAN de l'image ==${NC}"
+        echo -e "  Format : ${CYAN}<noeud>:<IP>:<indicatif>${NC}, separes par des espaces."
+        echo -e "  Entree vide = le banc : ${CYAN}${ISO_WAN_NODES_DEFAULT}${NC}"
+        read -rp "  Noeuds : " _wan_in || _wan_in=""
+        ISO_WAN_NODES="${_wan_in:-$ISO_WAN_NODES_DEFAULT}"
+        if [ "$ISO_ROLE" = "interstp" ]; then
+            read -rp "  IP du hub [${ISO_HUB_IP}] : " _hub_in || _hub_in=""
+            ISO_HUB_IP="${_hub_in:-$ISO_HUB_IP}"
+        fi
+    else
+        ISO_WAN_NODES="$ISO_WAN_NODES_DEFAULT"
+        echo -e "  ${YELLOW}Pas de terminal : table WAN par defaut${NC}"
+    fi
+    echo -e "  ${GREEN}✓${NC} WAN : ${CYAN}${ISO_WAN_NODES}${NC}   hub ${CYAN}${ISO_HUB_IP}${NC}"
+fi
 
 # Propage --no-cache aux deux builds Docker : build.sh (image osmocom-nitb) et
 # build_run_image (image osmocom-run, via DOCKER_NO_CACHE).
