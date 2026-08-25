@@ -48,6 +48,18 @@ INTER_NET_GATEWAY="172.20.0.1"
 # Quel noeud du WAN heberge le hub SS7. UN SEUL doit le faire : deux hubs, c'est
 # deux reseaux SS7 separes qui s'ignorent, et rien ne le signale.
 WAN_HUB_NODE="${WAN_HUB_NODE:-1}"
+# --hub-ip : l'inter-STP designe par son ADRESSE, pas par un numero de noeud.
+# --hub-node oblige a le faire figurer dans la table WAN ; sur un banc ou le hub
+# est une machine a part - une VM dediee, sans operateur - cela forcait a
+# inventer un noeud pour lui, qui apparaissait ensuite dans les indicatifs et le
+# routage voix/SMS comme s'il portait des abonnes. Avec --hub-ip la table ne
+# contient que de vrais noeuds.
+WAN_HUB_IP="${WAN_HUB_IP:-}"
+# --node-per-op : chaque conteneur est un NOEUD, pas un operateur de la machine.
+# A n'utiliser que quand les conteneurs ont une adresse joignable de l'exterieur
+# (backbone route vers le LAN) : sinon les autres noeuds ne peuvent pas les
+# appeler, et un noeud injoignable vaut moins qu'un operateur bien range.
+WAN_NODE_PER_OP="${WAN_NODE_PER_OP:-0}"
 IMAGE_STP="${IMAGE_STP:-osmocom-stp}"
 INTER_STP_CONTAINER="osmo-inter-stp"
 INTER_STP_IP="172.20.0.10"
@@ -738,11 +750,67 @@ wan_mesh_configure() {
         wan_nodes_prompt || exit 1
     fi
 
+    # ── Ce que la table WAN ne dit pas, et qu'il faut pourtant savoir ───────
+    # Elle donne les noeuds et leurs adresses. Elle ne dit ni ou est le hub SS7,
+    # ni si les conteneurs de CETTE machine sont ses operateurs ou des noeuds a
+    # part entiere. Sans ces reponses, --wan partait sur ses defauts - hub
+    # local, conteneurs = operateurs - et sur un banc ou le hub est une VM
+    # dediee, cela donnait un second hub inutile et des ASP attaches au mauvais.
+    wan_menu_complements
+
     WAN_ENABLED="false"          # exclusif du WAN legacy
     WAN_LOCAL_IP="$(wan_local_ip)"
     echo ""
     wan_nodes_summary
+    if [ -n "${WAN_HUB_IP:-}" ]; then
+        echo -e "  inter-STP : ${CYAN}${WAN_HUB_IP}${NC}  (hors table : ce n'est pas un noeud)"
+    else
+        echo -e "  inter-STP : porte par le noeud ${CYAN}${WAN_HUB_NODE}${NC}"
+    fi
+    [ "${WAN_NODE_PER_OP:-0}" = "1" ] \
+        && echo -e "  conteneurs: ${CYAN}un noeud chacun${NC}, a partir du noeud ${CYAN}${WAN_NODE_ID}${NC}"
     echo ""
+}
+
+# ── Les questions WAN que la table ne porte pas ──────────────────────────────
+# Chacune se saute des que l'option correspondante a ete donnee en ligne de
+# commande : une invocation scriptee reste muette, une invocation a la main est
+# guidee. Sans terminal (CI, cron), on garde les defauts plutot que d'attendre
+# une reponse que personne ne donnera.
+wan_menu_complements() {
+    command -v whiptail >/dev/null 2>&1 || return 0
+    [ -t 0 ] || return 0
+
+    if [ -z "${WAN_HUB_IP:-}" ] && [ "${WAN_HUB_NODE_GIVEN:-0}" != "1" ]; then
+        local _c
+        _c=$(wt_menu "Inter-STP" "Ou se trouve le hub SS7 (PC 0.0.0) ?" \
+            "ip"    "sur une machine dediee, hors table (une VM par exemple)" \
+            "ici"   "sur CETTE machine - un conteneur inter-STP sera lance" \
+            "noeud" "sur un autre noeud de la table WAN") || return 0
+        case "$_c" in
+            ip)
+                local _ip
+                _ip=$(wt_input "Inter-STP" "Adresse du hub (ex: 192.168.1.49) :" "${WAN_HUB_IP:-}") || return 0
+                if [ -n "$_ip" ]; then WAN_HUB_IP="$_ip"
+                else wt_msg "Adresse vide : le hub restera local."; fi ;;
+            noeud)
+                local _n
+                _n=$(wt_input "Inter-STP" "Numero du noeud qui porte le hub :" "${WAN_HUB_NODE:-1}") || return 0
+                [ -n "$_n" ] && WAN_HUB_NODE="$_n" ;;
+            *)  WAN_HUB_NODE="$WAN_NODE_ID" ;;
+        esac
+    fi
+
+    if [ "${WAN_NODE_PER_OP_GIVEN:-0}" != "1" ]; then
+        if wt_yesno "Conteneurs" \
+"Chaque conteneur doit-il etre un NOEUD a part entiere ?
+
+Oui : conteneur 1 -> noeud ${WAN_NODE_ID}, conteneur 2 -> noeud $((WAN_NODE_ID + 1))...
+      (leurs adresses backbone doivent etre joignables des autres noeuds)
+Non : ce sont les operateurs du noeud ${WAN_NODE_ID}."; then
+            WAN_NODE_PER_OP=1
+        fi
+    fi
 }
 
 # Applique la table (Asterisk, iptables, SMS) une fois les containers debout.
@@ -752,9 +820,22 @@ wan_mesh_apply() {
     if [ ! -f "$script_path" ]; then
         echo -e "${RED}[WAN] network/setup-wan-mesh.sh introuvable${NC}"; return 1
     fi
-    bash "$script_path" --docker \
-        --nodes "$(wan_nodes_spec)" --id "$WAN_NODE_ID" --ops "$n_operators" \
-        || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue${NC}"
+    if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
+        # Chaque conteneur est un noeud : le maillage se calcule DE SON POINT DE
+        # VUE (ses pairs, son indicatif). Un seul passage avec l'id de la
+        # machine donnerait a tous le meme indicatif, et les appels entre
+        # conteneurs repartiraient vers eux-memes.
+        local _n
+        for _n in $(seq 1 "$n_operators"); do
+            bash "$script_path" --docker \
+                --nodes "$(wan_nodes_spec)" --id "$(( WAN_NODE_ID + _n - 1 ))" --ops 1 \
+                || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue (noeud $(( WAN_NODE_ID + _n - 1 )))${NC}"
+        done
+    else
+        bash "$script_path" --docker \
+            --nodes "$(wan_nodes_spec)" --id "$WAN_NODE_ID" --ops "$n_operators" \
+            || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue${NC}"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -894,10 +975,16 @@ start_bridge_mode() {
     #   ce noeud heberge le hub  → les conteneurs le joignent en interne (172.20.0.10)
     #   un autre noeud l'heberge → ils sortent sur le WAN, vers SON adresse
     WAN_STP_TARGET="$INTER_STP_IP"
-    if [ "${WAN_MESH:-0}" = "1" ] && [ "${WAN_NODE_ID}" != "${WAN_HUB_NODE}" ]; then
-        WAN_STP_TARGET="${WAN_IP[$WAN_HUB_NODE]:-}"
+    HUB_IS_LOCAL=1
+    if [ -n "${WAN_HUB_IP:-}" ]; then
+        # Hub designe par son adresse : il n'est pas un noeud, et rien ne se
+        # lance ici. C'est le cas d'une VM inter-STP dediee.
+        WAN_STP_TARGET="$WAN_HUB_IP"; HUB_IS_LOCAL=0
+    elif [ "${WAN_MESH:-0}" = "1" ] && [ "${WAN_NODE_ID}" != "${WAN_HUB_NODE}" ]; then
+        WAN_STP_TARGET="${WAN_IP[$WAN_HUB_NODE]:-}"; HUB_IS_LOCAL=0
         if [ -z "$WAN_STP_TARGET" ]; then
             echo -e "${RED}[SS7] le noeud ${WAN_HUB_NODE} (hub) n'est pas dans la table WAN${NC}" >&2
+            echo -e "${RED}      (ou designez-le par son adresse : --hub-ip ADRESSE)${NC}" >&2
             exit 1
         fi
     fi
@@ -921,7 +1008,7 @@ start_bridge_mode() {
     fi
 
     # ── Inter-STP ────────────────────────────────────────────────────────────
-    if [ "${WAN_MESH:-0}" != "1" ] || [ "${WAN_NODE_ID}" = "${WAN_HUB_NODE}" ]; then
+    if [ "$HUB_IS_LOCAL" = "1" ]; then
         start_inter_stp "$n_operators"
         wait_inter_stp_ready "$n_operators"
     else
@@ -946,6 +1033,22 @@ start_bridge_mode() {
     local total_subs; total_subs=$(( $(wc -l < "$all_subscribers_file") - 1 ))
     echo -e "${GREEN}Abonnes total : ${total_subs}${NC}"
     echo ""
+
+    # ── Table rase sur la serie d'operateurs ────────────────────────────────
+    # Le "docker rm -f" plus bas ne vise que le conteneur de MEME NOM. Un
+    # reliquat d'un lancement precedent - trois operateurs hier, deux
+    # aujourd'hui, ou une serie interrompue en cours de route - garde ses
+    # publications de ports et fait echouer la creation du suivant :
+    #     Bind for 0.0.0.0:5082 failed: port is already allocated
+    # Le message nomme le port, jamais le conteneur qui le tient : on cherche
+    # longtemps. Cette fonction RECREE toute la serie, on efface donc d'abord.
+    local _stale
+    _stale="$(docker ps -aq --filter "name=^osmo-operator-" 2>/dev/null)"
+    if [ -n "$_stale" ]; then
+        echo -e "  ${CYAN}Nettoyage : $(echo "$_stale" | wc -l) conteneur(s) operateur d'un lancement precedent${NC}"
+        # shellcheck disable=SC2086
+        docker rm -f $_stale >/dev/null 2>&1 || true
+    fi
 
     # ── Demarrage sequentiel des operateurs ──────────────────────────────────
     for i in $(seq 1 "$n_operators"); do
@@ -981,10 +1084,30 @@ start_bridge_mode() {
         # hub des adresses SS7 identiques - routage faux, et silencieux.
         # Seul RCTX_INTER est surcharge : c'est le seul routing context que le
         # hub voit. Ceux du MSC et du BSC restent internes au conteneur.
+        #
+        # UN NOEUD PAR CONTENEUR (--node-per-op)
+        # Par defaut, la machine EST le noeud et ses conteneurs en sont les
+        # operateurs : 1.<noeud><op>.<role>. C'est juste quand une machine
+        # heberge un operateur complet.
+        #
+        # Mais des que les conteneurs sont joignables chacun a SON adresse
+        # (172.20.0.11, .12... routees depuis le LAN), ce ne sont plus des
+        # operateurs d'un meme site : ce sont des noeuds a part entiere, au meme
+        # titre qu'une VM. Les traiter en operateurs obligeait alors a inscrire
+        # la MACHINE dans la table WAN - une entree qui ne correspond a aucun
+        # equipement, et qui recevait pourtant un indicatif et des routes.
+        #
+        # Avec --node-per-op, le conteneur i devient le noeud (base + i - 1),
+        # porte l'operateur 1 de ce noeud, et son point code suit : 1.<n>1.<role>.
+        local _node_i="$WAN_NODE_ID" _op_i="$i"
+        if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
+            _node_i=$(( WAN_NODE_ID + i - 1 ))
+            _op_i=1
+        fi
         local _pc_mid="$i" _rctx_inter=""
         if [ "${WAN_MESH:-0}" = "1" ]; then
-            _pc_mid="${WAN_NODE_ID}${i}"
-            _rctx_inter=$(( WAN_NODE_ID * 1000 + i * 100 + 50 ))
+            _pc_mid="${_node_i}${_op_i}"
+            _rctx_inter=$(( _node_i * 1000 + _op_i * 100 + 50 ))
         fi
         RCTX_INTER_OVERRIDE="$_rctx_inter" \
         apply_config_templates "$tmpdir" \
@@ -1237,6 +1360,9 @@ start_bridge_mode() {
         # lieu de dependre de ce que start.sh a ecrit dans les configs.
         local _node_args=""
         if [ "${WAN_MESH:-0}" = "1" ]; then
+            # --node-per-op : le conteneur 1 est le noeud de base lui-meme,
+            # donc WAN_NODE_ID convient ici. Les suivants recoivent le leur
+            # dans la boucle de demarrage (voir _node_i).
             _node_args="--node ${WAN_NODE_ID} --op 1 --hub-ip ${WAN_STP_TARGET}"
         fi
 
@@ -1441,6 +1567,12 @@ Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
                           autres sont des VM sur un segment host-only.
   --vbox-node N           numero de noeud porte par cette machine (defaut 1)
   --hub-node N            noeud qui heberge l'inter-STP, le hub SS7 (defaut 1).
+  --hub-ip ADRESSE        inter-STP a une adresse a lui, hors table WAN. Le hub
+                          n'est alors PAS un noeud : aucun indicatif, aucun
+                          abonne, et rien n'est lance localement.
+  --node-per-op           chaque conteneur est un NOEUD (base = --wan-id) et non
+                          un operateur de la machine : conteneur 1 -> noeud N,
+                          conteneur 2 -> noeud N+1... Point codes 1.<n>1.<role>.
                           UN SEUL noeud du WAN doit le porter.
   --build-stp             construit l'image legere osmocom-stp (Dockerfile.stp)
                           pour le hub. Sans elle, le hub tourne sur l'image
@@ -1467,7 +1599,10 @@ while [ $# -gt 0 ]; do
         --wan-conf)     WAN_CONF_FILE="${2:-}"; shift ;;
         --wan-conf=*)   WAN_CONF_FILE="${1#*=}" ;;
         --build-stp)      BUILD_STP=1 ;;
-        --hub-node)       WAN_HUB_NODE="${2:-1}"; shift ;;
+        --hub-node)       WAN_HUB_NODE="${2:-1}"; WAN_HUB_NODE_GIVEN=1; shift ;;
+        --hub-ip)         WAN_HUB_IP="${2:-}"; shift ;;
+        --node-per-op)    WAN_NODE_PER_OP=1; WAN_NODE_PER_OP_GIVEN=1 ;;
+        --hub-ip=*)       WAN_HUB_IP="${1#*=}" ;;
         --hub-node=*)     WAN_HUB_NODE="${1#*=}" ;;
         --virtualbox)     WAN_MESH=1; VBOX_INTERCO=1 ;;
         --virtualbox=*)   WAN_MESH=1; VBOX_INTERCO=1; VBOX_NODES="${1#*=}" ;;

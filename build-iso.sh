@@ -897,14 +897,26 @@ cat > "$ROOTFS/etc/systemd/network/20-dhcp.network" <<'EOF'
 Name=en* eth*
 [Network]
 DHCP=yes
-# IP fixes assignees au NIC par defaut (en plus du DHCP) : gw / ip1 / ip2
-Address=172.20.0.1/24
-Address=172.20.0.11/24
-Address=172.20.1.10/24
-# Couverture de tout le plan docker 172.20.0.0/16 (route connectee, PAS de route par defaut)
-[Route]
-Destination=172.20.0.0/16
-Scope=link
+# ── Adresses heritees du plan docker, en /32 ────────────────────────────────
+# Elles servent aux configs de l'image qui nomment encore 172.20.x (passerelle
+# du backbone, cible gsmtap...) : sans elles, un demon qui s'y lie ne demarre
+# pas. On les garde donc - mais sans revendiquer de reseau.
+#
+# POURQUOI /32 ET PLUS /24
+# Un /24 fait croire a la machine que TOUT 172.20.0.0/24 est sur son lien. Elle
+# l'ARP alors sur le LAN au lieu de le router. Sur un banc mixte VM + docker,
+# les conteneurs de l'hote deviennent injoignables : "ip route add
+# 172.20.0.0/24 via <hote>" est refuse d'un "File exists", et le trafic part
+# dans le vide. Le /32 garde l'adresse locale sans fermer la porte au routage.
+#
+# 172.20.0.11 est RETIREE : c'est l'adresse du PREMIER CONTENEUR operateur. Une
+# VM qui la porte se repond a elle-meme et ne joint jamais le conteneur - la
+# panne la plus deroutante du lot, puisque tout repond en local.
+#
+# La route /16 disparait pour la meme raison : elle couvrait le plan docker
+# entier et primait sur toute route plus fine vers l'hote.
+Address=172.20.0.1/32
+Address=172.20.1.10/32
 EOF
 # docker RETIRE de la liste : son service n'existe plus (ISO natif) et 'systemctl
 # enable' valide tous les units d'abord → un seul manquant faisait AVORTER l'enable

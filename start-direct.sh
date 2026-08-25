@@ -664,6 +664,50 @@ case "$ACTION" in
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --check-paths
         ;;
 esac
+# --- 7bis-menu. Ce qui manque, demande UNE fois, avec le cache en defaut ------
+# Les trois valeurs qui decident de l'identite SS7 - numero de noeud, operateur,
+# adresse du hub - se deduisent la plupart du temps : environnement transmis par
+# start.sh, /etc/osmo-role fige dans l'image, table WAN. Quand la deduction ne
+# donne rien, la pile demarrait quand meme et gardait les point codes du
+# gabarit : 1.1.2 partout, ASP vers 127.0.0.1, interco morte sans un mot.
+#
+# On demande donc - mais seulement ce qui manque, et en proposant ce que le
+# cache sait deja. Sans terminal, rien n'est demande : les defauts s'appliquent,
+# une ISO qui demarre seule ne peut pas rester bloquee sur une question.
+ask_node_identity() {
+    [ -t 0 ] || return 0
+    [ "$DRY" -eq 1 ] && return 0
+
+    local cached_node cached_src cached_hub
+    IFS='|' read -r cached_node cached_src <<< "$(detect_node_id)"
+    cached_hub="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' /etc/osmo-role 2>/dev/null)"
+    [ -n "$cached_hub" ] || cached_hub="192.168.1.49"
+
+    if command -v whiptail >/dev/null 2>&1; then
+        [ -n "$NODE_ID" ] || NODE_ID="$(whiptail --title "Identite du noeud" \
+            --inputbox "Numero de ce noeud (1-9)${cached_src:+   [$cached_src]}\nVide = ne pas toucher a l'identite SS7." \
+            11 66 "${cached_node:-}" 3>&1 1>&2 2>&3)" || NODE_ID=""
+        if [ -n "$NODE_ID" ] && [ -z "$HUB_IP" ]; then
+            HUB_IP="$(whiptail --title "Inter-STP" \
+                --inputbox "Adresse du hub SS7 (PC 0.0.0)\nVide = laisser le remote-ip deja present." \
+                11 66 "$cached_hub" 3>&1 1>&2 2>&3)" || HUB_IP=""
+        fi
+    else
+        if [ -z "$NODE_ID" ]; then
+            printf '  Numero de ce noeud (1-9)%s [%s] : ' \
+                "${cached_src:+ - $cached_src}" "${cached_node:-aucun}"
+            read -r NODE_ID || NODE_ID=""
+            [ -n "$NODE_ID" ] || NODE_ID="${cached_node:-}"
+        fi
+        if [ -n "$NODE_ID" ] && [ -z "$HUB_IP" ]; then
+            printf '  Adresse de l inter-STP [%s] : ' "$cached_hub"
+            read -r HUB_IP || HUB_IP=""
+            [ -n "$HUB_IP" ] || HUB_IP="$cached_hub"
+        fi
+    fi
+}
+ask_node_identity
+
 # --- 7ter. Identite de noeud (--node) -------------------------------------------
 # AVANT le WAN et avant run.sh : les point codes sont lus par osmo-stp, osmo-msc
 # et osmo-bsc a leur demarrage. Les changer apres ne servirait a rien.
