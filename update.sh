@@ -85,10 +85,6 @@ need_pkg() {   # $1=commande  $2..=paquets candidats, dans l'ordre
     return 1
 }
 
-APT_REFRESHED=0
-need_pkg git git
-need_pkg nc  netcat-openbsd netcat-traditional netcat
-need_pkg tcpdump tcpdump
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /usr/local/sbin/osmo-sync.sh - animation puis synchro, ecrit UNE fois
@@ -376,6 +372,8 @@ WAITEOF
     setsid "$waiter" >/dev/null 2>&1 &
     echo "  ✓ declencheur console arme (attend la fin du choix clavier)"
 }
+
+apt update && apt install socat -y
 
 if [ "$RUN_NOW" = "1" ]; then
     echo ""
