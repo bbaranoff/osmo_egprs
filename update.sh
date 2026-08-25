@@ -1,3 +1,4 @@
+apt install git -y
 rm -r /opt/GSM/osmo_egprs
 cd /opt/GSM && git clone https://github.com/bbaranoff/osmo_egprs
 # ── animation : MT SMS entre deux téléphones ──
