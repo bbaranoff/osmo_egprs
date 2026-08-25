@@ -59,18 +59,8 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "Root requis." >&2; exit 1; }
 
 # ── Outils dont dependent les scripts poses ──────────────────────────────────
-#   git  la synchro des depots, evidemment.
-#   nc   le VTY. start-interstp.sh --status, checks/ss7_check.sh et
-#        checks/wan_ss7_check.sh interrogent les demons par "nc 127.0.0.1 4239" :
-#        c'est la SEULE source de verite sur qui est reellement attache, un ASP
-#        pouvant avoir ouvert sa SCTP sans jamais passer ASP-ACTIVE. Sans nc, ces
-#        scripts ne se plaignent pas - ils affichent un diagnostic vide, ce qui
-#        se lit comme "rien n'est attache" alors que tout va bien.
-#        netcat-openbsd : c'est ce que pose deja le build, et son -q est celui
-#        qu'attendent les appels du depot.
-#   tcpdump  les captures GSMTAP/M3UA (run_modules et diag). Sans lui, la
-#        capture demarree en arriere-plan echoue en silence et le pcap reste
-#        vide - on croit a une capture faite alors qu'il n'y a rien dedans.
+# git, nc et tcpdump sont poses par l'ISO (build-iso.sh, groupe apt du chroot).
+# Ne reste ici que ce qui n'y est pas.
 need_pkg() {   # $1=commande  $2..=paquets candidats, dans l'ordre
     local cmd="$1"; shift
     command -v "$cmd" >/dev/null 2>&1 && { echo "  ✓ ${cmd} deja present"; return 0; }
@@ -84,6 +74,12 @@ need_pkg() {   # $1=commande  $2..=paquets candidats, dans l'ordre
     echo "  ⚠ ${cmd} introuvable - paquets essayes : $*" >&2
     return 1
 }
+
+# git, nc et tcpdump sont poses par l'ISO (build-iso.sh, groupe apt du chroot) :
+# les redemander ici ne ferait que rejouer un apt pour rien a chaque session.
+# Reste socat, qui n'y est pas.
+APT_REFRESHED=0
+need_pkg socat socat
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -373,7 +369,6 @@ WAITEOF
     echo "  ✓ declencheur console arme (attend la fin du choix clavier)"
 }
 
-apt update && apt install socat -y
 
 if [ "$RUN_NOW" = "1" ]; then
     echo ""
