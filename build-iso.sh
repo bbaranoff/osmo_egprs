@@ -14,9 +14,24 @@ LABEL="OSMO_EGPRS_V2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 NO_CACHE=""
+# ── WAN : jamais par défaut. Avec --wan, l'ISO EST un noeud du WAN ───────────
+# La table est figée dans /etc/osmo-wan.conf de l'image ; au démarrage
+# start-direct.sh la voit (WAN_AUTO=1) et l'applique sans qu'on repasse --wan.
+#
+# UNE SEULE ISO pour les N machines : chacune se reconnaît à son IP dans la
+# table (wan_nodes_detect_self). --wan-id ne sert qu'à forcer un noeud quand
+# l'IP ne suffit pas (DHCP non fixé, NAT).
+ISO_WAN=0
+ISO_WAN_NODES=""
+ISO_WAN_ID=""
+ISO_WAN_OPS=1
 for arg in "$@"; do case "$arg" in
-    --output=*)  OUTPUT="${arg#*=}" ;;
-    --no-cache)  NO_CACHE="--no-cache" ;;
+    --output=*)     OUTPUT="${arg#*=}" ;;
+    --no-cache)     NO_CACHE="--no-cache" ;;
+    --wan)          ISO_WAN=1 ;;
+    --wan-nodes=*)  ISO_WAN=1; ISO_WAN_NODES="${arg#*=}" ;;
+    --wan-id=*)     ISO_WAN=1; ISO_WAN_ID="${arg#*=}" ;;
+    --wan-ops=*)    ISO_WAN=1; ISO_WAN_OPS="${arg#*=}" ;;
 esac; done
 case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
 
@@ -426,9 +441,15 @@ echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
 # [2026-08-14] `lib` ajouté : scripts/audio-chain.sh source lib/audio.sh.
 # Sans ce répertoire l'ISO embarquait un wrapper qui ne pouvait pas se sourcer.
-mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont}
+# [2026-08-25] `network` et `tools` AJOUTES a la liste. Sans eux, les `cp
+# "$DIR/network/..." "$P/network/..."` de la boucle suivante echouaient — le
+# repertoire cible n'existait pas — et comme ils sont dans une chaine `&&`,
+# l'echec ne disait rien : l'ISO partait SANS aucun script WAN, et le seul
+# symptome etait un « introuvable » au moment d'en avoir besoin.
+mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont,network,tools}
 for f in start.sh start-direct.sh build.sh network/loopback.sh tools/vty-menu.sh tools/vty-connect.exp \
-         network/firewall-wan.sh network/setup-wan-interop.sh network/setup-wan-sms.sh; do
+         network/firewall-wan.sh network/setup-wan-interop.sh network/setup-wan-sms.sh \
+         network/wan-nodes.sh network/setup-wan-mesh.sh; do
     [ -f "$DIR/$f" ] && cp "$DIR/$f" "$P/$f" && chmod +x "$P/$f"
 done
 ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
@@ -455,6 +476,32 @@ if [ -f "$DIR/start-direct.sh" ]; then
 else
     echo -e "  ${RED}✗${NC} start-direct.sh introuvable — l'ISO n'aura pas de lanceur" >&2
     exit 1
+fi
+
+# ── WAN : table des noeuds figée dans l'image ────────────────────────────────
+if [ "$ISO_WAN" = "1" ]; then
+    echo -e "${GREEN}[7b/9] WAN — table des noeuds embarquée...${NC}"
+    # shellcheck source=network/wan-nodes.sh
+    . "$DIR/network/wan-nodes.sh"
+    WAN_OPS="$ISO_WAN_OPS"
+    if [ -n "$ISO_WAN_NODES" ]; then
+        wan_nodes_parse "$ISO_WAN_NODES" || exit 1
+        WAN_NODE_ID="${ISO_WAN_ID:-0}"
+    else
+        # Construction interactive : mêmes questions que ./start.sh --wan.
+        # Le numéro du noeud demandé ici n'est qu'un défaut : chaque machine
+        # qui démarre l'ISO se re-reconnaît à son IP.
+        WAN_NODE_ID="${ISO_WAN_ID:-0}"
+        wan_nodes_prompt || exit 1
+    fi
+    wan_nodes_validate || exit 1
+    WAN_AUTO=1 WAN_CONF_FILE="$ROOTFS/etc/osmo-wan.conf" wan_nodes_save
+    wan_nodes_summary
+    echo -e "  ${GREEN}✓${NC} /etc/osmo-wan.conf figé dans l'ISO (WAN_AUTO=1)"
+    echo -e "  ${CYAN}Au boot :${NC} start-direct.sh applique le WAN tout seul ;"
+    echo -e "  ${CYAN}sans --wan à la construction, l'ISO n'a AUCUN WAN.${NC}"
+else
+    echo -e "  ${CYAN}[7b/9] WAN non embarqué (--wan absent) — ISO autonome${NC}"
 fi
 
 # ── Étape 8 : (SUPPRIMÉ) — ISO NATIF, plus de Docker au runtime ───────────

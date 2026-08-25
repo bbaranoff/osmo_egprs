@@ -1,0 +1,572 @@
+#!/bin/bash
+# ══════════════════════════════════════════════════════════════════════════════
+# network/setup-wan-mesh.sh — WAN à N noeuds, routé par INDICATIF
+#
+# Généralise network/setup-wan-interop.sh (qui ne connaît que 2 serveurs) :
+# ici la topologie est une TABLE de noeuds (network/wan-nodes.sh), chacun avec
+# son indicatif, et TOUT est généré en un seul passage — donc relançable et
+# valable pour 2 noeuds comme pour 12.
+#
+#   Composer <indicatif_cible><numéro>  →  ce numéro, sur le noeud cible.
+#   L'indicatif est retiré à la SORTIE : le noeud d'arrivée reçoit le numéro nu,
+#   celui que son HLR et son dialplan connaissent déjà.
+#
+# Ce que ce script configure, sur CE noeud :
+#   • iptables : entrée SIP/RTP/SMS depuis chaque pair (DNAT docker, REDIRECT natif)
+#   • firewall : ouverture des mêmes ports (network/firewall-wan.sh, idempotent)
+#   • Asterisk : rtp.conf, trunks PJSIP vers chaque (noeud, opérateur) distant,
+#                dialplan [wan_out]/[wan_in] + entrées par indicatif
+#   • SMS      : sms-routing.conf — un opérateur distant par (noeud, opérateur),
+#                avec strip de l'indicatif (cf. scripts/sms-interop-relay.py)
+#
+# Usage :
+#   sudo network/setup-wan-mesh.sh --nodes "1:1.2.3.4:33 2:5.6.7.8:44" --id 1 [--ops 2]
+#   sudo network/setup-wan-mesh.sh --config /etc/osmo-wan.conf
+#   options : --native | --docker (défaut : auto)  --no-restart  --dry-run
+#
+# À lancer sur CHAQUE noeud, avec la MÊME table et son propre --id.
+# ══════════════════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=network/wan-nodes.sh
+. "$SCRIPT_DIR/wan-nodes.sh"
+
+MODE=""            # docker | native
+NO_RESTART=0
+CONFIG_ONLY=0
+DRY=0
+CONF=""
+CHAIN="OSMO_WAN_MESH"
+
+SIP_WAN_BASE=5080
+RTP_WAN_BASE=20000
+RTP_PER_OP=500
+SMS_RELAY_BASE=7890
+CONTAINER_PREFIX="osmo-operator-"
+# Préfixe de racine, mode natif seulement : permet de viser un arbre de test
+# (NATIVE_ROOT=/tmp/essai) au lieu du /etc de la machine. Vide en production.
+NATIVE_ROOT="${NATIVE_ROOT:-}"
+
+wan_sip_port()  { echo $(( SIP_WAN_BASE + ($1 - 1) * 2 )); }
+wan_rtp_start() { echo $(( RTP_WAN_BASE + ($1 - 1) * RTP_PER_OP )); }
+wan_rtp_end()   { echo $(( RTP_WAN_BASE + $1 * RTP_PER_OP - 1 )); }
+wan_sms_port()  { echo $(( SMS_RELAY_BASE + $1 - 1 )); }
+op_backbone_ip(){ echo "172.20.0.$((10 + $1))"; }
+op_container()  { echo "${CONTAINER_PREFIX}$1"; }
+
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --nodes)   WAN_NODES="${2:-}"; shift ;;
+        --nodes=*) WAN_NODES="${1#*=}" ;;
+        --id)      WAN_NODE_ID="${2:-}"; shift ;;
+        --id=*)    WAN_NODE_ID="${1#*=}" ;;
+        --ops)     WAN_OPS="${2:-}"; shift ;;
+        --ops=*)   WAN_OPS="${1#*=}" ;;
+        --config)  CONF="${2:-}"; shift ;;
+        --config=*) CONF="${1#*=}" ;;
+        --native)  MODE="native" ;;
+        --docker)  MODE="docker" ;;
+        --no-restart) NO_RESTART=1 ;;
+        --config-only) CONFIG_ONLY=1; NO_RESTART=1 ;;
+        --dry-run) DRY=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo -e "${RED}option inconnue : $1${NC}" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+# ── Table des noeuds ─────────────────────────────────────────────────────────
+# --config sert à la fois de source et de destination : on ne le lit que s'il
+# existe déjà, et --nodes reste prioritaire (on décrit une nouvelle topologie).
+if [ -n "${WAN_NODES:-}" ]; then
+    wan_nodes_parse "$WAN_NODES" || exit 1
+elif [ -n "$CONF" ]; then
+    wan_nodes_load "$CONF" || { echo -e "${RED}config WAN illisible : $CONF${NC}" >&2; exit 1; }
+elif [ -n "${WAN_NODES:-}" ]; then
+    wan_nodes_parse "$WAN_NODES" || exit 1
+elif wan_nodes_load "$WAN_CONF_FILE" 2>/dev/null; then
+    :
+else
+    echo -e "${RED}Aucune table de noeuds : --nodes, --config ou $WAN_CONF_FILE${NC}" >&2
+    exit 1
+fi
+
+# --id explicite > config > auto-détection par IP locale.
+if [ "${WAN_NODE_ID:-0}" = "0" ] || [ -z "${WAN_NODE_ID:-}" ]; then
+    wan_nodes_detect_self || {
+        echo -e "${RED}Impossible de déterminer le noeud local : passez --id N${NC}" >&2; exit 1; }
+    echo -e "  ${CYAN}Noeud local détecté par son IP : ${WAN_NODE_ID}${NC}"
+fi
+wan_nodes_validate || exit 1
+
+# ── Mode ─────────────────────────────────────────────────────────────────────
+# L'ISO n'a pas de docker ; l'hôte du lab en a un ET des containers osmo-operator-*.
+# On ne se fie donc pas à la présence du binaire mais à celle des containers.
+if [ -z "$MODE" ]; then
+    if command -v docker >/dev/null 2>&1 && \
+       docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_PREFIX}1$"; then
+        MODE="docker"
+    else
+        MODE="native"
+    fi
+fi
+
+if [ "$MODE" = "native" ]; then
+    OP_IDS=( "${NATIVE_OP_ID:-${OPERATOR_ID:-1}}" )
+else
+    [ "${WAN_OPS:-1}" -ge 1 ] || WAN_OPS=1
+    OP_IDS=(); for i in $(seq 1 "$WAN_OPS"); do OP_IDS+=("$i"); done
+fi
+N_OPS="${#OP_IDS[@]}"
+
+LOCAL_IP="$(wan_local_ip)"
+LOCAL_IND="$(wan_local_ind)"
+
+echo -e "${CYAN}${BOLD}"
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║   WAN mesh — routage par indicatif entre N noeuds osmo_egprs     ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+echo -e "  Mode        : ${CYAN}${MODE}${NC}   Opérateurs locaux : ${CYAN}${N_OPS}${NC} (${OP_IDS[*]})"
+wan_nodes_summary
+echo ""
+
+[ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis (iptables + configs).${NC}" >&2; exit 1; }
+
+REMOTES=()
+for id in "${WAN_NODE_LIST[@]}"; do [ "$id" = "$WAN_NODE_ID" ] || REMOTES+=("$id"); done
+[ "${#REMOTES[@]}" -ge 1 ] || { echo -e "${RED}Aucun pair distant.${NC}" >&2; exit 1; }
+
+run() { if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $*"; else "$@"; fi; }
+
+# ── Accès aux fichiers de conf, docker ou natif ──────────────────────────────
+# On tire le fichier sur l'hôte, on le transforme avec awk/sed LOCALEMENT, on le
+# repousse. C'est ce qui permet au même code de servir les deux modes — et ça
+# évite les sed multi-niveaux échappés dans un `docker exec bash -c` (l'endroit
+# où network/setup-wan-interop.sh est le plus fragile).
+ast_pull() {  # $1=op  $2=chemin  → stdout
+    if [ "$MODE" = "docker" ]; then docker exec "$(op_container "$1")" cat "$2" 2>/dev/null || true
+    else cat "${NATIVE_ROOT}$2" 2>/dev/null || true; fi
+}
+ast_push() {  # $1=op  $2=chemin  ← stdin
+    if [ "$DRY" -eq 1 ]; then cat >/dev/null; echo "  [dry-run] écriture $2 (op $1)"; return 0; fi
+    if [ "$MODE" = "docker" ]; then docker exec -i "$(op_container "$1")" bash -c "cat > '$2'"
+    else mkdir -p "$(dirname "${NATIVE_ROOT}$2")"; cat > "${NATIVE_ROOT}$2"; fi
+}
+ast_cli() {   # $1=op  $2=commande CLI asterisk
+    if [ "$MODE" = "docker" ]; then docker exec "$(op_container "$1")" asterisk -rx "$2" 2>/dev/null || true
+    else asterisk -rx "$2" 2>/dev/null || true; fi
+}
+
+BEGIN_MARK="; ─── OSMO WAN MESH BEGIN ───"
+END_MARK="; ─── OSMO WAN MESH END ───"
+SMS_BEGIN="# ─── OSMO WAN MESH BEGIN ───"
+SMS_END="# ─── OSMO WAN MESH END ───"
+
+# Retire nos blocs ET l'ancien bloc « WAN INTEROP » (généré par
+# setup-wan-interop.sh, toujours ajouté en fin de fichier) : les deux décrivent
+# le même trafic, les laisser cohabiter ferait dépendre le routage de l'ordre
+# des patterns.
+strip_generated() { sed -e '/OSMO WAN MESH BEGIN/,/OSMO WAN MESH END/d' -e '/; ══.*WAN INTEROP/,$d'; }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [1/6] Vérification des cibles
+# ══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[1/6] Vérification des cibles Asterisk...${NC}"
+for i in "${OP_IDS[@]}"; do
+    if [ "$MODE" = "docker" ]; then
+        docker ps --format '{{.Names}}' | grep -q "^$(op_container "$i")$" \
+            || { echo -e "  ${RED}✗ $(op_container "$i") absent — lancez start.sh d'abord${NC}"; exit 1; }
+        echo -e "  ${GREEN}✓${NC} $(op_container "$i")"
+    else
+        [ -d "${NATIVE_ROOT}/etc/asterisk" ] || { echo -e "  ${RED}✗ ${NATIVE_ROOT}/etc/asterisk absent${NC}"; exit 1; }
+        echo -e "  ${GREEN}✓${NC} /etc/asterisk (natif, opérateur ${i})"
+    fi
+done
+echo ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [2/6] iptables — entrée depuis chaque pair
+# ══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[2/6] iptables — ouverture entrante depuis ${#REMOTES[@]} pair(s)...${NC}"
+if [ "$CONFIG_ONLY" -eq 1 ]; then
+    echo -e "  ${YELLOW}--config-only : ni iptables ni firewall. Les ports WAN resteront fermés${NC}"
+    echo -e "  ${YELLOW}tant que ce script n'aura pas été relancé sans --config-only.${NC}"
+else
+run sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+
+if [ "$DRY" -eq 0 ]; then
+    iptables -t nat -D PREROUTING -j "$CHAIN" 2>/dev/null || true
+    iptables -t nat -F "$CHAIN" 2>/dev/null || true
+    iptables -t nat -X "$CHAIN" 2>/dev/null || true
+    iptables -t nat -N "$CHAIN"
+fi
+
+for r in "${REMOTES[@]}"; do
+    rip="${WAN_IP[$r]}"
+    for i in "${OP_IDS[@]}"; do
+        sip=$(wan_sip_port "$i"); rs=$(wan_rtp_start "$i"); re=$(wan_rtp_end "$i")
+        sms=$(wan_sms_port "$i")
+        if [ "$MODE" = "docker" ]; then
+            bb=$(op_backbone_ip "$i")
+            run iptables -t nat -A "$CHAIN" -s "$rip" -p udp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
+            run iptables -t nat -A "$CHAIN" -s "$rip" -p tcp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
+            run iptables -t nat -A "$CHAIN" -s "$rip" -p udp --dport "${rs}:${re}" -j DNAT --to-destination "$bb"
+            run iptables -t nat -A "$CHAIN" -s "$rip" -p tcp --dport "$sms" -j DNAT --to-destination "${bb}:${SMS_RELAY_BASE}"
+        else
+            # Natif : Asterisk et le relais écoutent déjà sur l'hôte. Seule la
+            # translation de port WAN → port de service est nécessaire ; le RTP
+            # arrive directement dans la plage posée par rtp.conf.
+            run iptables -t nat -A "$CHAIN" -s "$rip" -p udp --dport "$sip" -j REDIRECT --to-ports 5060
+            run iptables -t nat -A "$CHAIN" -s "$rip" -p tcp --dport "$sip" -j REDIRECT --to-ports 5060
+            [ "$sms" = "$SMS_RELAY_BASE" ] || \
+                run iptables -t nat -A "$CHAIN" -s "$rip" -p tcp --dport "$sms" -j REDIRECT --to-ports "$SMS_RELAY_BASE"
+        fi
+    done
+    echo -e "  ${CYAN}node ${r}${NC} ${rip} → SIP/RTP/SMS acceptés"
+done
+
+if [ "$DRY" -eq 0 ]; then
+    iptables -t nat -I PREROUTING -j "$CHAIN"
+    if [ "$MODE" = "docker" ] && ! iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null; then
+        iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -j MASQUERADE
+    fi
+fi
+
+# Firewall INPUT — sans ça le DNAT redirige un trafic que l'INPUT jette.
+for r in "${REMOTES[@]}"; do
+    if [ -f "$SCRIPT_DIR/firewall-wan.sh" ]; then
+        run bash "$SCRIPT_DIR/firewall-wan.sh" "${WAN_IP[$r]}" "$N_OPS" >/dev/null 2>&1 \
+            && echo -e "  ${GREEN}✓${NC} firewall ouvert pour ${WAN_IP[$r]}" \
+            || echo -e "  ${YELLOW}⚠${NC} firewall-wan.sh a échoué pour ${WAN_IP[$r]}"
+    fi
+done
+fi
+echo ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [3/6] rtp.conf — plage RTP WAN par opérateur
+# ══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[3/6] rtp.conf...${NC}"
+for i in "${OP_IDS[@]}"; do
+    rs=$(wan_rtp_start "$i"); re=$(wan_rtp_end "$i")
+    printf '[general]\nrtpstart=%s\nrtpend=%s\nstrictrtp=no\nicesupport=no\n' "$rs" "$re" \
+        | ast_push "$i" /etc/asterisk/rtp.conf
+    echo -e "  ${CYAN}Op${i}${NC} RTP ${rs}-${re}"
+done
+echo ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [4/6] PJSIP — un trunk par (noeud distant, opérateur distant)
+# ══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[4/6] PJSIP — trunks WAN...${NC}"
+
+for i in "${OP_IDS[@]}"; do
+    pj="$(mktemp)"; ast_pull "$i" /etc/asterisk/pjsip.conf | strip_generated > "$pj"
+
+    # external_media_address : l'IP que le SDP annonce à l'autre bout. Elle DOIT
+    # être l'IP publique de CE noeud. Le gabarit configs/pjsip.conf en pose déjà
+    # une (l'IP docker/hôte) : on l'ÉCRASE, on ne se contente pas de l'ajouter
+    # quand elle manque — sinon le WAN annonce une adresse privée et l'audio
+    # part dans le vide alors que la signalisation, elle, passe. C'est ce que
+    # fait network/setup-wan-interop.sh (« if ! grep -q external_media_address »),
+    # et ça se voit seulement à l'oreille : appel décroché, silence.
+    awk -v ip="$LOCAL_IP" '
+        /^\[/ { if (intr && !done) { emit(); done=1 } ; intr = ($0 == "[transport-udp]") ; print ; next }
+        intr && /^external_(media|signaling)_address=/ { next }
+        intr && /^local_net=/ { seen_net=1 ; print ; next }
+        intr && /^[[:space:]]*$/ && !done { emit(); done=1; intr=0; print; next }
+        { print }
+        END { if (intr && !done) emit() }
+        function emit() {
+            print "external_media_address=" ip
+            print "external_signaling_address=" ip
+            if (!seen_net) { print "local_net=172.20.0.0/16"; print "local_net=127.0.0.0/8" }
+        }
+    ' "$pj" > "${pj}.new" && mv "${pj}.new" "$pj"
+
+    {
+        echo "$BEGIN_MARK"
+        echo "; Trunks WAN — générés par network/setup-wan-mesh.sh"
+        echo "; Noeud local ${WAN_NODE_ID} (${LOCAL_IP}, indicatif ${LOCAL_IND})"
+        for r in "${REMOTES[@]}"; do
+            rip="${WAN_IP[$r]}"; rind="${WAN_IND[$r]}"
+            for j in $(seq 1 "$N_OPS"); do
+                rsip=$(wan_sip_port "$j")
+                cat <<EOF
+
+; ── node ${r} (indicatif ${rind}) · opérateur ${j} · ${rip}:${rsip} ──
+[wan-id-n${r}op${j}]
+type=identify
+endpoint=wan_n${r}_op${j}
+match=${rip}$( [ "$MODE" = "docker" ] && printf '\nmatch=172.20.0.1' )
+
+[wan_n${r}_op${j}]
+type=endpoint
+transport=transport-udp
+context=wan_in
+disallow=all
+allow=gsm
+allow=ulaw
+aors=wan_n${r}_op${j}
+media_encryption=no
+direct_media=no
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+ice_support=no
+
+[wan_n${r}_op${j}]
+type=aor
+contact=sip:${rip}:${rsip}
+qualify_frequency=30
+qualify_timeout=5.0
+EOF
+            done
+        done
+        echo "$END_MARK"
+    } >> "$pj"
+
+    ast_push "$i" /etc/asterisk/pjsip.conf < "$pj"
+    rm -f "$pj"
+    echo -e "  ${CYAN}Op${i}${NC} $(( ${#REMOTES[@]} * N_OPS )) trunk(s) WAN"
+done
+echo ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [5/6] Dialplan — [wan_out] par indicatif, [wan_in], entrées gsm_in/internal
+# ══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[5/6] Dialplan — routage par indicatif...${NC}"
+
+for i in "${OP_IDS[@]}"; do
+    ext="$(mktemp)"; ast_pull "$i" /etc/asterisk/extensions.conf | strip_generated > "$ext"
+
+    # Softphones : tout endpoint avec « callerid=... <NNN> » devient joignable
+    # par le WAN, sans coder aucun numéro en dur.
+    softphones=$(ast_pull "$i" /etc/asterisk/pjsip.conf | awk '
+        /^\[/                 { s=$0; gsub(/[][]/,"",s); ep=s }
+        /callerid=.*<[0-9]+>/ { n=$0; sub(/.*</,"",n); sub(/>.*/,"",n); print n":"ep }')
+
+    body="$(mktemp)"
+    {
+        echo "$BEGIN_MARK"
+        echo "; Dialplan WAN — network/setup-wan-mesh.sh"
+        echo "; Composer <indicatif><numéro> ; l'indicatif est retiré à la sortie."
+        for r in "${REMOTES[@]}"; do
+            printf ';   %-4s → node %s (%s)\n' "${WAN_IND[$r]}" "$r" "${WAN_IP[$r]}"
+        done
+        echo ""
+        echo "[wan_out]"
+        for r in "${REMOTES[@]}"; do
+            rind="${WAN_IND[$r]}"; off="${#rind}"
+            echo ""
+            echo "; ── node ${r} — indicatif ${rind} (strip ${off}) ───────────────────"
+            for j in $(seq 1 "$N_OPS"); do
+                for pat in "XXXX" "XXXXX"; do
+                    cat <<EOF
+exten => _${rind}${j}${pat},1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → ${WAN_IP[$r]} ===)
+ same => n,Dial(PJSIP/\${EXTEN:${off}}@wan_n${r}_op${j},,rT)
+ same => n,NoOp(WAN \${DIALSTATUS})
+ same => n,Congestion()
+ same => n,Hangup()
+EOF
+                done
+            done
+            for sp in $softphones; do
+                sp_num="${sp%%:*}"
+                cat <<EOF
+exten => ${rind}${sp_num},1,NoOp(=== WAN OUT node${r} softphone ${sp_num} ===)
+ same => n,Dial(PJSIP/${sp_num}@wan_n${r}_op${i},,rT)
+ same => n,Congestion()
+ same => n,Hangup()
+EOF
+            done
+        done
+        cat <<EOF
+
+; Indicatif local (${LOCAL_IND}) composé depuis ce noeud : c'est chez nous.
+; On retire l'indicatif et on repart dans le routage local plutôt que de
+; sortir sur le WAN pour revenir — un aller-retour qui, lui, ne raccroche pas.
+exten => _${LOCAL_IND}X.,1,NoOp(=== WAN: indicatif local, routage interne \${EXTEN} ===)
+ same => n,Goto(gsm_in,\${EXTEN:${#LOCAL_IND}},1)
+
+exten => _X.,1,NoOp(=== WAN OUT: indicatif inconnu \${EXTEN} ===)
+ same => n,Congestion()
+ same => n,Hangup()
+
+; ── [wan_in] — ce qui ARRIVE des autres noeuds ────────────────────────────
+; Le noeud émetteur a déjà retiré l'indicatif : on reçoit le numéro nu.
+[wan_in]
+EOF
+        for j in "${OP_IDS[@]}"; do
+            for pat in "XXXX" "XXXXX"; do
+                cat <<EOF
+exten => _${j}${pat},1,NoOp(=== WAN IN → GSM Op${j}: \${EXTEN} ===)
+ same => n,Set(CALLERID(all)=<\${CALLERID(num)}>)
+ same => n,Gosub(sub-record,s,1(\${EXTEN}))
+ same => n,Dial(PJSIP/\${EXTEN}@gsm_msc,,rT)
+ same => n,Congestion()
+ same => n,Hangup()
+EOF
+            done
+        done
+        for sp in $softphones; do
+            sp_num="${sp%%:*}"; sp_ep="${sp#*:}"
+            cat <<EOF
+exten => ${sp_num},1,NoOp(=== WAN IN → ${sp_ep} (${sp_num}) ===)
+ same => n,Gosub(sub-record,s,1(${sp_num}))
+ same => n,Dial(PJSIP/${sp_ep},,rT)
+ same => n,Congestion()
+ same => n,Hangup()
+EOF
+        done
+        cat <<EOF
+
+; Un pair qui n'aurait pas retiré notre indicatif : on le retire ici.
+exten => _${LOCAL_IND}X.,1,NoOp(=== WAN IN: indicatif local encore présent ===)
+ same => n,Goto(wan_in,\${EXTEN:${#LOCAL_IND}},1)
+
+; Autre opérateur de CE noeud : on repasse par le routage inter-opérateur local.
+exten => _X.,1,NoOp(=== WAN IN → routage local \${EXTEN} ===)
+ same => n,Gosub(sub-record,s,1(\${EXTEN}))
+ same => n,Goto(interop_out,\${EXTEN},1)
+
+exten => 600,1,NoOp(=== WAN ECHO TEST ===)
+ same => n,Answer()
+ same => n,Playback(demo-echotest)
+ same => n,Echo()
+ same => n,Playback(demo-echodone)
+ same => n,Hangup()
+EOF
+        echo "$END_MARK"
+    } > "$body"
+
+    # Entrées : un préfixe par indicatif distant, injecté dans [gsm_in] (appels
+    # venus du GSM) et [internal] (softphones SIP).
+    entry="$(mktemp)"
+    {
+        echo "$BEGIN_MARK"
+        for r in "${REMOTES[@]}"; do
+            printf 'exten => _%s.,1,NoOp(=== indicatif %s → node %s ===)\n' "${WAN_IND[$r]}" "${WAN_IND[$r]}" "$r"
+            printf ' same => n,Goto(wan_out,${EXTEN},1)\n'
+        done
+        # Notre PROPRE indicatif composé en entier : il doit aboutir ici, pas
+        # tomber dans le vide. wan_out le retire et rend la main au routage local.
+        printf 'exten => _%s.,1,NoOp(=== indicatif local %s ===)\n' "$LOCAL_IND" "$LOCAL_IND"
+        printf ' same => n,Goto(wan_out,${EXTEN},1)\n'
+        echo "$END_MARK"
+    } > "$entry"
+
+    awk -v bf="$entry" '
+        { print }
+        $0 == "[gsm_in]" || $0 == "[internal]" {
+            while ((getline l < bf) > 0) print l
+            close(bf)
+        }
+    ' "$ext" > "${ext}.new" && mv "${ext}.new" "$ext"
+
+    cat "$body" >> "$ext"
+    ast_push "$i" /etc/asterisk/extensions.conf < "$ext"
+    rm -f "$ext" "$body" "$entry"
+    _inds=""; for r in "${REMOTES[@]}"; do _inds="${_inds}${_inds:+ }${WAN_IND[$r]}→node${r}"; done
+    echo -e "  ${CYAN}Op${i}${NC} wan_out/wan_in · ${_inds}"
+done
+echo ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [6/6] SMS — sms-routing.conf : un opérateur distant par (noeud, opérateur)
+# ══════════════════════════════════════════════════════════════════════════════
+# Le relais (scripts/sms-interop-relay.py) route par LONGEST-PREFIX sur le
+# MSISDN composé. On lui donne donc les préfixes <indicatif><op>, la cible
+# ip:port du relais distant, et le nombre de chiffres d'indicatif à RETIRER
+# avant l'envoi : le HLR distant ne connaît que le numéro nu.
+echo -e "${GREEN}[6/6] Routage SMS WAN...${NC}"
+for i in "${OP_IDS[@]}"; do
+    conf="$(mktemp)"
+    ast_pull "$i" /etc/osmocom/sms-routing.conf \
+        | sed '/OSMO WAN MESH BEGIN/,/OSMO WAN MESH END/d' \
+        | sed '/# ── WAN ROUTES/,/# ── FIN WAN/d' > "$conf"
+    if [ ! -s "$conf" ]; then
+        echo -e "  ${YELLOW}⚠${NC} Op${i} : sms-routing.conf absent — SMS WAN non configuré"
+        rm -f "$conf"; continue
+    fi
+    {
+        echo ""
+        echo "$SMS_BEGIN"
+        echo "# Noeuds WAN distants. Clé = <w><node><op>, valeur = ip:port du relais."
+        echo "[operators]"
+        for r in "${REMOTES[@]}"; do
+            for j in $(seq 1 "$N_OPS"); do
+                printf 'w%s%s = %s:%s\n' "$r" "$j" "${WAN_IP[$r]}" "$(wan_sms_port "$j")"
+            done
+        done
+        echo ""
+        echo "# <indicatif><op> → noeud distant ; strip = chiffres d'indicatif à retirer."
+        echo "[routes]"
+        for r in "${REMOTES[@]}"; do
+            for j in $(seq 1 "$N_OPS"); do
+                printf '%s%s = w%s%s strip=%s\n' "${WAN_IND[$r]}" "$j" "$r" "$j" "${#WAN_IND[$r]}"
+            done
+        done
+        echo "$SMS_END"
+    } >> "$conf"
+    ast_push "$i" /etc/osmocom/sms-routing.conf < "$conf"
+    rm -f "$conf"
+    echo -e "  ${CYAN}Op${i}${NC} $(( ${#REMOTES[@]} * N_OPS )) route(s) SMS WAN"
+done
+echo ""
+
+# ── Redémarrage Asterisk ─────────────────────────────────────────────────────
+# Le transport PJSIP a changé : un « reload » ne suffit pas. En natif au moment
+# du bootstrap Asterisk n'est pas encore lancé — on ne redémarre alors rien, la
+# conf sera lue à son démarrage.
+if [ "$NO_RESTART" -eq 1 ]; then
+    echo -e "${YELLOW}--no-restart : Asterisk gardera l'ancienne conf jusqu'à son prochain démarrage.${NC}"
+elif [ "$DRY" -eq 1 ]; then
+    echo "  [dry-run] redémarrage Asterisk"
+else
+    for i in "${OP_IDS[@]}"; do
+        if [ "$MODE" = "docker" ]; then
+            docker exec "$(op_container "$i")" bash -c "
+                asterisk -rx 'core stop now' 2>/dev/null || pkill asterisk 2>/dev/null || true
+                sleep 2; pkill -9 asterisk 2>/dev/null || true; sleep 1
+                asterisk -f & disown" 2>/dev/null || true
+            echo -e "  ${CYAN}Op${i}${NC} Asterisk redémarré"
+        else
+            if asterisk -rx 'core show uptime' 2>/dev/null | grep -qi uptime; then
+                asterisk -rx 'core restart now' >/dev/null 2>&1 || true
+                echo -e "  ${CYAN}Op${i}${NC} Asterisk redémarré"
+            else
+                echo -e "  ${CYAN}Op${i}${NC} Asterisk non lancé — conf prête pour son démarrage"
+            fi
+        fi
+    done
+fi
+
+# ── Sauvegarde + résumé ──────────────────────────────────────────────────────
+if [ "$DRY" -eq 0 ]; then
+    WAN_AUTO="${WAN_AUTO:-1}" wan_nodes_save "${CONF:-$WAN_CONF_FILE}"
+fi
+
+echo ""
+echo -e "${GREEN}${BOLD}WAN mesh appliqué.${NC}"
+echo ""
+echo -e "  ${BOLD}Depuis ce noeud (${WAN_NODE_ID}, indicatif ${LOCAL_IND}) :${NC}"
+for r in "${REMOTES[@]}"; do
+    echo -e "    ${CYAN}${WAN_IND[$r]}${NC}10001  → MS 10001 op1 du noeud ${r} (${WAN_IP[$r]})"
+done
+echo ""
+echo -e "  ${BOLD}Ports WAN (identiques sur chaque noeud) :${NC}"
+for i in "${OP_IDS[@]}"; do
+    echo -e "    Op${i}: SIP ${CYAN}$(wan_sip_port "$i")${NC}/udp  RTP ${CYAN}$(wan_rtp_start "$i")-$(wan_rtp_end "$i")${NC}/udp  SMS ${CYAN}$(wan_sms_port "$i")${NC}/tcp"
+done
+echo ""
+echo -e "  Table sauvegardée : ${CYAN}${CONF:-$WAN_CONF_FILE}${NC}"
+echo -e "  Diagnostic SS7/WAN : ${CYAN}checks/wan_ss7_check.sh${NC}"
+echo ""

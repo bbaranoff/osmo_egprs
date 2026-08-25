@@ -40,6 +40,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
+# WAN : jamais par défaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
+# pose une ISO construite avec --wan) le monte avant de passer la main à run.sh.
+WAN_MESH=0
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -61,7 +64,17 @@ Usage : ./start-direct.sh [options] [mode]
     --force             relance même les modules déjà démarrés
     --verbose           montre la sortie des modules
     --check-paths       vérifie les dépendances déclarées
+    --wan               monte le WAN à N noeuds (1 à 9) AVANT run.sh et demande :
+                          nombre de noeuds, IP de chaque noeud, indicatif de
+                          chaque noeud, numéro du noeud construit par ce lancement
+    --wan-nodes "1:IP:IND …"   même chose sans question (scriptable)
+    --wan-id N          numéro du noeud local (sinon déduit des IP locales)
+    --wan-conf FICHIER  table à lire/écrire (défaut /etc/osmo-wan.conf)
     -h, --help          cette aide
+
+  Sans --wan : aucun WAN. Avec --wan le profil reste faketrx-qemu (hybride,
+  1 faketrx + 1 QEMU Calypso), qui est déjà le défaut de ce script.
+  Composer <indicatif><numéro> joint ce numéro sur le noeud correspondant.
 Toute variable CALYPSO_* passée en préfixe est transmise à run.sh / QEMU :
   CALYPSO_MODE=native ./start-direct.sh
 USAGE
@@ -80,6 +93,14 @@ while [ $# -gt 0 ]; do
         --force)       FORCE=1 ;;
         --verbose)     VERBOSE=1 ;;
         --check-paths) ACTION=checkpaths ;;
+        --wan)         WAN_MESH=1 ;;
+        --wan=*)       WAN_MESH=1; WAN_NODES="${1#*=}" ;;
+        --wan-nodes)   WAN_MESH=1; WAN_NODES="${2:-}"; shift ;;
+        --wan-nodes=*) WAN_MESH=1; WAN_NODES="${1#*=}" ;;
+        --wan-id)      WAN_MESH=1; WAN_NODE_ID="${2:-}"; shift ;;
+        --wan-id=*)    WAN_MESH=1; WAN_NODE_ID="${1#*=}" ;;
+        --wan-conf)    WAN_CONF_FILE="${2:-}"; shift ;;
+        --wan-conf=*)  WAN_CONF_FILE="${1#*=}" ;;
         -h|--help)     usage; exit 0 ;;
         faketrx-qemu|faketrx|qemu|virtphy|noproc|core|hybrid|hw)
             PROFILE="$1"
@@ -492,6 +513,66 @@ case "$ACTION" in
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --check-paths
         ;;
 esac
+# --- 7bis. WAN à N noeuds ------------------------------------------------------
+# ICI et pas après : ce processus va devenir run.sh (exec), il n'y a pas d'après.
+# Asterisk n'est pas encore lancé — setup-wan-mesh.sh le voit, écrit la conf et
+# ne redémarre rien ; run.sh démarrera Asterisk avec le WAN déjà en place.
+#
+# Sûr vis-à-vis des gabarits : en natif rien ne réinstalle /etc/asterisk au
+# démarrage (install_configs_native n'a aucun appelant, run_modules/08-gabarits.sh
+# n'existe pas), donc le bloc WAN écrit ici survit à run.sh. Si un module de
+# gabarits revient un jour, il faudra rejouer le WAN APRÈS lui.
+if [ -r "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" ] && [ "$WAN_MESH" -eq 0 ]; then
+    # Table figée dans l'image (ISO construite avec --wan) : WAN_AUTO=1 dit
+    # « ce système EST un noeud », on n'oblige pas à retaper l'option.
+    if grep -q '^WAN_AUTO=1' "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null; then
+        WAN_MESH=1
+        printf '  %sWAN%s        table figée dans %s (WAN_AUTO=1)\n' \
+            "$C_DIM" "$C_Z" "${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
+    fi
+fi
+
+if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
+    WAN_LIB="$HERE/network/wan-nodes.sh"
+    WAN_MESH_SH="$HERE/network/setup-wan-mesh.sh"
+    if [ ! -r "$WAN_LIB" ] || [ ! -r "$WAN_MESH_SH" ]; then
+        say_end " KO " "$C_KO" "WAN" "network/wan-nodes.sh ou setup-wan-mesh.sh absent"
+        exit 1
+    fi
+    # shellcheck source=network/wan-nodes.sh
+    . "$WAN_LIB"
+    if [ -n "${WAN_NODES:-}" ]; then
+        wan_nodes_parse "$WAN_NODES" || exit 1
+        [ "${WAN_NODE_ID:-0}" != "0" ] || wan_nodes_detect_self || {
+            printf '  %sWAN%s : aucune IP locale dans la table — passez --wan-id N\n' "$C_KO" "$C_Z"
+            exit 1; }
+    else
+        wan_nodes_load "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null || true
+        # Une ISO diffusée sur N machines porte la MÊME table : chaque machine
+        # se reconnaît à son IP plutôt que d'exiger une image par noeud.
+        wan_nodes_detect_self 2>/dev/null || true
+        if [ "${WAN_NODE_COUNT:-0}" -lt 1 ] || [ "${WAN_NODE_ID:-0}" = "0" ]; then
+            wan_nodes_prompt || exit 1
+        fi
+    fi
+    wan_nodes_validate || exit 1
+    printf '\n'
+    wan_nodes_summary
+    printf '\n'
+    if [ "$DRY" -eq 1 ]; then
+        printf '  [dry-run] %s --native --id %s\n' "$WAN_MESH_SH" "$WAN_NODE_ID"
+    else
+        say_begin "WAN — application de la table"
+        if WAN_AUTO=1 bash "$WAN_MESH_SH" --native --id "$WAN_NODE_ID" \
+                --nodes "$(wan_nodes_spec)" --ops 1 \
+                --config "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" > "${LOG_DIR:-/tmp}/wan-mesh.log" 2>&1; then
+            say_end " OK " "$C_OK" "WAN — noeud $WAN_NODE_ID, indicatif $(wan_local_ind)"
+        else
+            say_end " KO " "$C_KO" "WAN" "voir ${LOG_DIR:-/tmp}/wan-mesh.log"
+        fi
+    fi
+fi
+
 # --- 8. lancement : exec run.sh -----------------------------------------------
 say_begin "Transmission à run.sh"
 if [ $DRY -eq 1 ]; then

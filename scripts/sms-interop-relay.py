@@ -210,9 +210,24 @@ class RoutingTable:
                     val = val.split('#')[0].strip()
 
                     if section == 'operators':
+                        # « ip » ou « ip:port ». Le port explicite sert au WAN :
+                        # sur un noeud distant, un seul port public par
+                        # opérateur peut atteindre le relais du bon container.
                         self.operators[key] = val
                     elif section == 'routes':
-                        self.routes.append((key, val))
+                        # « op_id » ou « op_id strip=N ». strip = nombre de
+                        # chiffres d'INDICATIF a retirer avant de transmettre :
+                        # le HLR du noeud d'arrivee ne connait que le numero nu.
+                        parts = val.split()
+                        op_id = parts[0] if parts else val
+                        strip = 0
+                        for extra in parts[1:]:
+                            if extra.startswith('strip='):
+                                try:
+                                    strip = int(extra.split('=', 1)[1])
+                                except ValueError:
+                                    strip = 0
+                        self.routes.append((key, op_id, strip))
                     elif section == 'local':
                         if key == 'operator_id': self.local_operator_id = val
                     elif section == 'relay':
@@ -229,17 +244,40 @@ class RoutingTable:
 
     def lookup(self, msisdn: str) -> Optional[str]:
         clean = msisdn.lstrip('+')
-        for prefix, op_id in self.routes:
+        for prefix, op_id, _strip in self.routes:
             if clean.startswith(prefix):
                 return op_id
         return None
+
+    def lookup_strip(self, msisdn: str) -> int:
+        """Chiffres d'indicatif a retirer pour cette destination (0 = aucun)."""
+        clean = msisdn.lstrip('+')
+        for prefix, _op_id, strip in self.routes:
+            if clean.startswith(prefix):
+                return strip
+        return 0
 
     def is_local(self, msisdn: str) -> bool:
         op = self.lookup(msisdn)
         return op == self.local_operator_id or op is None
 
     def get_operator_ip(self, op_id: str) -> Optional[str]:
-        return self.operators.get(op_id)
+        """IP seule (compatibilite : le port se lit avec get_operator_target)."""
+        target = self.operators.get(op_id)
+        return target.split(':', 1)[0] if target else None
+
+    def get_operator_target(self, op_id: str) -> Optional[Tuple[str, int]]:
+        """(ip, port) — port par defaut RELAY_TCP_PORT si non precise."""
+        target = self.operators.get(op_id)
+        if not target:
+            return None
+        if ':' in target:
+            host, _, port = target.partition(':')
+            try:
+                return host, int(port)
+            except ValueError:
+                return host, RELAY_TCP_PORT
+        return target, RELAY_TCP_PORT
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -646,12 +684,21 @@ class MOLogWatcher(threading.Thread):
             self._deliver_local(entry, dest)
             return
 
-        target_ip = self.routing.get_operator_ip(target_op)
-        if not target_ip:
+        target = self.routing.get_operator_target(target_op)
+        if not target:
             logging.error(f"No IP for operator {target_op}")
             return
+        target_ip, target_port = target
 
-        logging.info(f"Interop route: {dest} → Op{target_op} ({target_ip})")
+        # Indicatif WAN : on le retire ICI, cote emetteur. Le noeud d'arrivee
+        # recoit le numero nu, celui que son HLR connait ; sans ce retrait il
+        # cherche « 3310001 » et repond « MSISDN not found in HLR ».
+        strip = self.routing.lookup_strip(dest)
+        dest_out = dest.lstrip('+')[strip:] if strip else dest
+        if strip:
+            logging.info(f"WAN strip {strip}: {dest} → {dest_out}")
+
+        logging.info(f"Interop route: {dest} → Op{target_op} ({target_ip}:{target_port})")
 
         message_text = extract_text_via_sms_decode(entry.tpdu_hex)
         if not message_text:
@@ -662,8 +709,8 @@ class MOLogWatcher(threading.Thread):
 
         success = send_interop_mt(
             target_ip=target_ip,
-            target_port=RELAY_TCP_PORT,
-            dest_msisdn=dest,
+            target_port=target_port,
+            dest_msisdn=dest_out,
             from_number=sender,
             message_text=message_text,
             sc_address=self.sc_address,

@@ -61,6 +61,21 @@ SMS_ROUTING_DIR=""
 # ══════════════════════════════════════════════════════════════════════════════
 # WAN Interop
 # ══════════════════════════════════════════════════════════════════════════════
+# Deux WAN coexistent ici, et ils ne font PAS la même chose :
+#
+#   WAN_ENABLED (legacy, --pas d'option, question whiptail) : DEUX serveurs,
+#     préfixe unique 66, network/setup-wan-interop.sh. Conservé tel quel.
+#
+#   WAN_MESH (option --wan) : N noeuds (1 à 9), UN INDICATIF PAR NOEUD,
+#     network/setup-wan-mesh.sh. C'est le seul qui tienne au-delà de deux
+#     serveurs — le legacy réécrit son bloc de conf à chaque appel, donc
+#     l'enchaîner sur trois pairs ne laisse que le dernier.
+#
+# Les deux sont EXCLUSIFS et aucun n'est actif par défaut.
+WAN_MESH=0
+# shellcheck source=network/wan-nodes.sh
+. "$(dirname "$0")/network/wan-nodes.sh"
+
 WAN_ENABLED="false"
 WAN_LOCAL_IP=""
 WAN_REMOTE_IP=""
@@ -72,6 +87,9 @@ WAN_RTP_PER_OP=500
 PHY_MODE="faketrx"   # faketrx | virtphy
 # Choix passés au start-direct.sh DANS le conteneur via le handoff (NO_MENU=1),
 # pour éviter les menus whiptail laggy en docker exec -ti. Fixés sur l'HÔTE.
+# Retenu AVANT le défaut : « l'appelant a-t-il imposé le mode ? ». C'est ce qui
+# permet à --wan de basculer en hybride sans écraser un HANDOFF_MODE=... explicite.
+HANDOFF_MODE_FROM_ENV="${HANDOFF_MODE:+1}"
 HANDOFF_MODE="${HANDOFF_MODE:-qemu}"               # qemu | faketrx-qemu (combiné)
 HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 
@@ -90,6 +108,11 @@ op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
 wan_sip_port()    { echo $(( WAN_SIP_BASE + ($1 - 1) * 2 )); }
 wan_rtp_start()   { echo $(( WAN_RTP_BASE + ($1 - 1) * WAN_RTP_PER_OP )); }
 wan_rtp_end()     { echo $(( WAN_RTP_BASE + $1 * WAN_RTP_PER_OP - 1 )); }
+
+wan_sms_port()    { echo $(( 7890 + $1 - 1 )); }
+# Un WAN est actif — legacy OU mesh. Sert partout où la question est « faut-il
+# ouvrir les ports WAN », indépendamment du mécanisme choisi.
+wan_active()      { [ "$WAN_ENABLED" = "true" ] || [ "${WAN_MESH:-0}" = "1" ]; }
 
 # Linphone helpers — port SIP/RTP exposé sur le host
 linphone_sip_port()  { echo $(( 5060 + ($1 - 1) )); }
@@ -598,6 +621,49 @@ setup_wan_interop() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# WAN mesh (--wan)
+# ══════════════════════════════════════════════════════════════════════════════
+# Renseigne la table des noeuds : sans interaction si WAN_NODES est déjà posé
+# (option --wan-nodes ou variable d'environnement), par questions sinon.
+wan_mesh_configure() {
+    local n_operators=$1
+    WAN_OPS="$n_operators"
+
+    if [ -n "${WAN_NODES:-}" ]; then
+        wan_nodes_parse "$WAN_NODES" || exit 1
+        if [ "${WAN_NODE_ID:-0}" = "0" ]; then
+            wan_nodes_detect_self || {
+                echo -e "${RED}[WAN] aucune IP locale ne correspond à la table : passez --wan-id N${NC}" >&2
+                exit 1; }
+        fi
+        wan_nodes_validate || exit 1
+    else
+        # Une table déjà posée sur cette machine sert de valeurs par défaut :
+        # relancer le lab ne redemande donc pas tout, il propose l'existant.
+        wan_nodes_load "$WAN_CONF_FILE" 2>/dev/null || true
+        wan_nodes_prompt || exit 1
+    fi
+
+    WAN_ENABLED="false"          # exclusif du WAN legacy
+    WAN_LOCAL_IP="$(wan_local_ip)"
+    echo ""
+    wan_nodes_summary
+    echo ""
+}
+
+# Applique la table (Asterisk, iptables, SMS) une fois les containers debout.
+wan_mesh_apply() {
+    local n_operators=$1
+    local script_path="$(dirname "$0")/network/setup-wan-mesh.sh"
+    if [ ! -f "$script_path" ]; then
+        echo -e "${RED}[WAN] network/setup-wan-mesh.sh introuvable${NC}"; return 1
+    fi
+    bash "$script_path" --docker \
+        --nodes "$(wan_nodes_spec)" --id "$WAN_NODE_ID" --ops "$n_operators" \
+        || echo -e "${RED}[WAN] setup-wan-mesh.sh a échoué${NC}"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PoC QEMU — entrée par défaut du premier menu
 # ══════════════════════════════════════════════════════════════════════════════
 start_qemu_poc() {
@@ -618,6 +684,9 @@ start_bridge_mode() {
         n_operators=1
         OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=2
         WAN_ENABLED="false"
+        # --wan reste valable en PoC QEMU : un noeud = un opérateur, c'est
+        # exactement la maquette « N machines qui s'appellent ».
+        [ "${WAN_MESH:-0}" = "1" ] && wan_mesh_configure 1
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
         ENCRYPTION="a5 0"
         echo -e "  ${CYAN}[PoC QEMU] 1 opérateur · no-process + qemu-src/run.sh · A5/1${NC}"
@@ -673,8 +742,10 @@ start_bridge_mode() {
             fi
         fi
 
-        # ── WAN Interop ──────────────────────────────────────────────────────
-        if wt_yesno "WAN Interop" "Activer WAN vers un serveur distant ?"; then
+        # ── WAN ──────────────────────────────────────────────────────────────
+        if [ "${WAN_MESH:-0}" = "1" ]; then
+            wan_mesh_configure "$n_operators"
+        elif wt_yesno "WAN Interop" "Activer WAN vers un serveur distant (2 serveurs, préfixe 66) ?"; then
             WAN_ENABLED="true"
             local auto_ip=""
             auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
@@ -700,7 +771,16 @@ start_bridge_mode() {
         # ── RAN / Encryption ─────────────────────────────────────────────────
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
         ENCRYPTION="${ENCRYPTION:-a5 0}"
-        choose_ran_host
+        if [ "${WAN_MESH:-0}" = "1" ] && [ -z "$HANDOFF_MODE_FROM_ENV" ]; then
+            # Un noeud de WAN est une maquette complète : il lui faut une radio
+            # des DEUX types pour que l'appel inter-noeud soit vraiment porté de
+            # bout en bout. D'où l'hybride par défaut — un faketrx + un QEMU
+            # Calypso — au lieu du menu. HANDOFF_MODE=... en préfixe le change.
+            HANDOFF_MODE="faketrx-qemu"; HANDOFF_QEMU_CHOICE="faketrx-qemu"
+            echo -e "  ${GREEN}[RAN] WAN → hybride par défaut : ${CYAN}1 faketrx + 1 QEMU Calypso${NC}"
+        else
+            choose_ran_host
+        fi
     fi
 
     # ── Détection IP hôte ────────────────────────────────────────────────────
@@ -816,14 +896,24 @@ start_bridge_mode() {
         port_args="-p ${lsip_port}:5060/udp -p ${lrtp_s}-${lrtp_e}:${lrtp_s}-${lrtp_e}/udp"
         echo -e "  Linphone   : ${CYAN}${HOST_IP}:${lsip_port}${NC}  RTP ${lrtp_s}-${lrtp_e}"
 
-        # WAN en plus si activé
-        if [ "$WAN_ENABLED" = "true" ]; then
-            local sip_port rtp_start rtp_end
+        # WAN en plus si activé (legacy ou mesh)
+        if wan_active; then
+            local sip_port rtp_start rtp_end sms_port
             sip_port=$(wan_sip_port "$i")
             rtp_start=$(wan_rtp_start "$i")
             rtp_end=$(wan_rtp_end "$i")
-            port_args="${port_args} -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
+            port_args="${port_args} -p ${sip_port}:5060/udp -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
             echo -e "  WAN        : SIP ${sip_port} RTP ${rtp_start}-${rtp_end}"
+            if [ "${WAN_MESH:-0}" = "1" ]; then
+                # Un port SMS PAR opérateur : le relais distant doit joindre le
+                # container du BON opérateur, or son injection MT passe par le
+                # HLR local à son container. Un port unique livrerait tous les
+                # SMS au premier opérateur, qui ne connaît pas les abonnés des
+                # autres — « MSISDN not found in HLR », sans autre trace.
+                sms_port=$(wan_sms_port "$i")
+                port_args="${port_args} -p ${sms_port}:7890/tcp"
+                echo -e "  WAN SMS    : ${sms_port} → relay 7890"
+            fi
         fi
 
         docker rm -f "$container_name" 2>/dev/null || true
@@ -934,7 +1024,9 @@ start_bridge_mode() {
     fi
 
     # ── WAN ────────────────────────────────────────────────────────────────────
-    if [ "$WAN_ENABLED" = "true" ]; then
+    if [ "${WAN_MESH:-0}" = "1" ]; then
+        wan_mesh_apply "$n_operators"
+    elif [ "$WAN_ENABLED" = "true" ]; then
         setup_wan_interop "$n_operators" "$WAN_N_REMOTE"
     fi
 
@@ -959,7 +1051,14 @@ start_bridge_mode() {
     done
     echo -e "    linphone_A / tester → 100  |  linphone_B / testerB → 200"
 
-    if [ "$WAN_ENABLED" = "true" ]; then
+    if [ "${WAN_MESH:-0}" = "1" ]; then
+        echo ""
+        echo -e "  ${BOLD}WAN mesh :${NC} noeud ${CYAN}${WAN_NODE_ID}${NC}/${WAN_NODE_COUNT} — indicatif ${CYAN}$(wan_local_ind)${NC}"
+        for _r in "${WAN_NODE_LIST[@]}"; do
+            [ "$_r" = "$WAN_NODE_ID" ] && continue
+            echo -e "    ${CYAN}${WAN_IND[$_r]}${NC}10001 → MS 10001 op1 du noeud ${_r} (${WAN_IP[$_r]})"
+        done
+    elif [ "$WAN_ENABLED" = "true" ]; then
         echo ""
         echo -e "  ${BOLD}WAN :${NC} ${CYAN}${WAN_LOCAL_IP}${NC} (${n_operators} ops) ↔ ${CYAN}${WAN_REMOTE_IP}${NC} (${WAN_N_REMOTE} ops)  prefix=${WAN_PREFIX}"
     fi
@@ -974,7 +1073,10 @@ start_bridge_mode() {
         echo -e "  ${CYAN}[*] mode=${HANDOFF_MODE} pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hôte, NO_MENU)${NC}"
 
         local _wan_env=""
-        if [ "$WAN_ENABLED" = "true" ]; then
+        if [ "${WAN_MESH:-0}" = "1" ]; then
+            _wan_env="WAN_NODES='$(wan_nodes_spec)' WAN_NODE_ID='${WAN_NODE_ID}' WAN_OPS='${n_operators}'"
+            echo -e "  ${CYAN}[*] WAN mesh transmis au conteneur (noeud ${WAN_NODE_ID}, indicatif $(wan_local_ind))${NC}"
+        elif [ "$WAN_ENABLED" = "true" ]; then
             _wan_env="WAN_REMOTE_IP='${WAN_REMOTE_IP}' WAN_PREFIX='${WAN_PREFIX}' WAN_N_REMOTE='${WAN_N_REMOTE:-$n_operators}'"
             echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (préfixe ${WAN_PREFIX})${NC}"
         fi
@@ -1080,9 +1182,11 @@ stop_all() {
     echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
     docker ps -a --filter "name=egprs"  --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
-    iptables -t nat -D PREROUTING -j OSMO_WAN_INTEROP 2>/dev/null || true
-    iptables -t nat -F OSMO_WAN_INTEROP 2>/dev/null || true
-    iptables -t nat -X OSMO_WAN_INTEROP 2>/dev/null || true
+    for _chain in OSMO_WAN_INTEROP OSMO_WAN_MESH; do
+        iptables -t nat -D PREROUTING -j "$_chain" 2>/dev/null || true
+        iptables -t nat -F "$_chain" 2>/dev/null || true
+        iptables -t nat -X "$_chain" 2>/dev/null || true
+    done
     echo -e "${GREEN}Arrêté.${NC}"
     disable_user_loopback
 }
@@ -1147,6 +1251,50 @@ choose_network_mode() {
 # ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
+# ── Options longues, extraites AVANT le mode positionnel ──────────────────────
+# start.sh a toujours pris son mode en $1 (qemu|virtual|hw|stop) et son build en
+# quick|normal. On garde ça intact : la pré-passe ne retire que les --wan* et
+# rend la main avec les positionnels d'origine.
+usage_wan() {
+    cat <<'USAGE'
+Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
+
+  --wan                   active le WAN à N noeuds (1 à 9) et pose les questions :
+                            • nombre de noeuds
+                            • IP publique de chaque noeud
+                            • indicatif de chaque noeud (préfixe d'appel)
+                            • numéro du noeud construit par CE lancement
+  --wan-nodes "1:IP:IND …"  même chose sans question (scriptable)
+  --wan-id N              numéro du noeud local (sinon déduit des IP locales)
+  --wan-conf FICHIER      table à lire/écrire (défaut /etc/osmo-wan.conf)
+
+  Sans --wan, rien ne change : aucun WAN n'est monté.
+  Avec --wan, la radio passe en HYBRIDE par défaut (1 faketrx + 1 QEMU Calypso).
+
+  Composer <indicatif><numéro> joint ce numéro sur le noeud correspondant.
+    ex. noeud 1 = indicatif 11, noeud 2 = 22 → depuis 2, « 1110001 » appelle
+    le MS 10001 de l'opérateur 1 du noeud 1.
+USAGE
+}
+
+_pos_args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --wan)          WAN_MESH=1 ;;
+        --wan=*)        WAN_MESH=1; WAN_NODES="${1#*=}" ;;
+        --wan-nodes)    WAN_MESH=1; WAN_NODES="${2:-}"; shift ;;
+        --wan-nodes=*)  WAN_MESH=1; WAN_NODES="${1#*=}" ;;
+        --wan-id)       WAN_MESH=1; WAN_NODE_ID="${2:-}"; shift ;;
+        --wan-id=*)     WAN_MESH=1; WAN_NODE_ID="${1#*=}" ;;
+        --wan-conf)     WAN_CONF_FILE="${2:-}"; shift ;;
+        --wan-conf=*)   WAN_CONF_FILE="${1#*=}" ;;
+        -h|--help)      usage_wan; exit 0 ;;
+        *)              _pos_args+=("$1") ;;
+    esac
+    shift
+done
+set -- ${_pos_args[@]+"${_pos_args[@]}"}
+
 banner
 [ "${1:-}" = "stop" ] && { stop_all; exit 0; }
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis${NC}"; exit 1; }
@@ -1166,7 +1314,13 @@ case "${1:-}" in
     virtual) NETWORK_MODE="bridge" ;;
     hw)      NETWORK_MODE="host" ;;
     "")
-        if [ "${OSMO_MULTI:-0}" = "1" ]; then
+        if [ "${WAN_MESH:-0}" = "1" ]; then
+            # --wan sans mode : on ne redemande pas « que lancer ? ». Un WAN se
+            # monte sur des opérateurs, donc mode virtuel, et le menu de build
+            # reste posé (quick/normal) s'il n'a pas été tranché en ligne.
+            NETWORK_MODE="bridge"
+            [ "${QUICK_EXPLICIT:-0}" = "1" ] || { check_whiptail; choose_build_mode; }
+        elif [ "${OSMO_MULTI:-0}" = "1" ]; then
             NETWORK_MODE="bridge"
         elif [ "${OSMO_MENU:-1}" = "0" ]; then
             NETWORK_MODE="qemu"
