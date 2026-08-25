@@ -87,7 +87,7 @@ need_pkg() {   # $1=commande  $2..=paquets candidats, dans l'ordre
 
 APT_REFRESHED=0
 need_pkg git git
-need_pkg nc  netcat-openbsd netcat-traditional netcat
+need_pkg nc  netcat-openbsd netcat-traditional netcat socat
 need_pkg tcpdump tcpdump
 
 # ══════════════════════════════════════════════════════════════════════════════
