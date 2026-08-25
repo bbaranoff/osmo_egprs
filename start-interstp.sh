@@ -32,6 +32,8 @@
 #   --ip ADRESSE  adresse du hub ; posée sur l'interface si elle manque
 #   --iface NOM   interface où poser l'adresse (défaut : détectée)
 #   --port N      port M3UA (défaut 2908)
+#   --menu        pose les questions même si une table existe déjà
+#   --ips "a b c" les IP des nœuds opérateurs, dans l'ordre (sans question)
 #   --no-ip       ne touche pas à la configuration réseau
 #   --foreground  reste au premier plan (journal à l'écran)
 # =============================================================================
@@ -48,6 +50,8 @@ PIDFILE="/run/osmo-interstp.pid"
 
 NODES=""
 OPS=1
+MENU=0
+IPS=""
 HUB_IP="192.168.56.1"
 IFACE=""
 PORT=2908
@@ -67,6 +71,9 @@ while [ $# -gt 0 ]; do
         --iface=*)    IFACE="${1#*=}" ;;
         --port)       PORT="${2:-2908}"; shift ;;
         --port=*)     PORT="${1#*=}" ;;
+        --menu)       MENU=1 ;;
+        --ips)        IPS="${2:-}"; shift ;;
+        --ips=*)      IPS="${1#*=}" ;;
         --no-ip)      SET_IP=0 ;;
         --foreground) FOREGROUND=1 ;;
         --status)     ACTION=status ;;
@@ -135,19 +142,83 @@ banner
 command -v osmo-stp >/dev/null 2>&1 || {
     echo -e "${RED}osmo-stp introuvable.${NC} Ce nœud doit porter la pile Osmocom." >&2; exit 1; }
 
-# ── Combien de nœuds ? La table du WAN fait foi si elle existe ───────────────
-if [ -z "$NODES" ]; then
-    if [ -r "/etc/osmo-wan.conf" ]; then
-        # shellcheck disable=SC1091
-        . /etc/osmo-wan.conf
-        NODES="${WAN_NODE_COUNT:-}"
-        OPS="${WAN_OPS:-$OPS}"
-        [ -n "$NODES" ] && echo -e "  Table WAN lue dans ${CYAN}/etc/osmo-wan.conf${NC} : ${NODES} nœud(s)"
+# ══════════════════════════════════════════════════════════════════════════════
+# Qui sont les nœuds ? — le menu
+# ══════════════════════════════════════════════════════════════════════════════
+# Le hub n'a pas besoin des IP pour ROUTER : il écoute, les ASP viennent à lui
+# (accept-asp-connections dynamic-permitted) et c'est le point code qui décide
+# du reste. Il en a besoin pour trois choses concrètes :
+#   • ouvrir son pare-feu à ces adresses et à elles seules ;
+#   • écrire /etc/osmo-wan.conf, la table que liront les nœuds et le diagnostic ;
+#   • dire, dans --status, QUI devrait être attaché — sans cette liste, un nœud
+#     absent est indiscernable d'un nœud qui n'existe pas.
+# shellcheck source=network/wan-nodes.sh
+. "$HERE/network/wan-nodes.sh"
+
+ask_ips() {
+    local n i ip def
+    echo -e "${BOLD}Configuration du hub SS7${NC}"
+    echo -e "  Saisissez les adresses des nœuds opérateurs, dans l'ordre."
+    echo ""
+    n=$(_wan_ask "Inter-STP" "Nombre de nœuds opérateurs (1-9) :" "${NODES:-3}") || exit 1
+    [[ "$n" =~ ^[1-9]$ ]] || { echo -e "${RED}Nombre invalide : $n${NC}" >&2; exit 2; }
+
+    WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=()
+    for i in $(seq 1 "$n"); do
+        # Défaut aligné sur le plan du banc : nœud N à .1N sur le segment du hub.
+        def="${HUB_IP%.*}.$((10 + i))"
+        ip=$(_wan_ask "Nœud $i/$n" "IP du nœud opérateur $i :" "$def") || exit 1
+        [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo -e "${RED}'$ip' n'est pas une IPv4${NC}" >&2; exit 2; }
+        WAN_IP[$i]="$ip"; WAN_IND[$i]="$(wan_default_ind "$i")"; WAN_NODE_LIST+=("$i")
+    done
+    WAN_NODE_COUNT="$n"; NODES="$n"
+    # Le hub ne porte aucun opérateur : il n'est pas un nœud de la table. On note
+    # 0, que wan_nodes_validate accepte, plutôt qu'un numéro qui le ferait
+    # ressembler à un nœud et lui volerait un point code.
+    WAN_NODE_ID=0
+    WAN_OPS="$OPS"
+}
+
+if [ -n "$IPS" ]; then
+    # Forme scriptable : --ips "10.0.0.11 10.0.0.12 10.0.0.13"
+    WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=(); i=0
+    for ip in $IPS; do
+        i=$((i+1))
+        WAN_IP[$i]="$ip"; WAN_IND[$i]="$(wan_default_ind "$i")"; WAN_NODE_LIST+=("$i")
+    done
+    WAN_NODE_COUNT="$i"; NODES="$i"; WAN_NODE_ID=0; WAN_OPS="$OPS"
+elif [ "$MENU" = "1" ] || { [ -z "$NODES" ] && [ ! -r "$WAN_CONF_FILE" ]; }; then
+    if [ -t 0 ]; then
+        ask_ips
+    else
+        echo -e "${YELLOW}Pas de terminal et pas de table : on part sur 3 nœuds sans adresses.${NC}"
+        NODES=3
     fi
-    [ -z "$NODES" ] && NODES=3
+elif [ -z "$NODES" ] && [ -r "$WAN_CONF_FILE" ]; then
+    wan_nodes_load "$WAN_CONF_FILE" 2>/dev/null || true
+    NODES="${WAN_NODE_COUNT:-3}"
+    OPS="${WAN_OPS:-$OPS}"
+    echo -e "  Table lue dans ${CYAN}${WAN_CONF_FILE}${NC} : ${NODES} nœud(s)"
+    echo -e "  ${CYAN}--menu${NC} pour la ressaisir."
 fi
+
 [[ "$NODES" =~ ^[1-9]$ ]] || { echo -e "${RED}--nodes : 1 à 9${NC}" >&2; exit 2; }
 [[ "$OPS"   =~ ^[1-9]$ ]] || { echo -e "${RED}--ops : 1 à 9${NC}" >&2; exit 2; }
+
+# Table connue : on la persiste et on ouvre le pare-feu pour ces adresses.
+if [ "${#WAN_NODE_LIST[@]}" -gt 0 ] && [ -n "${WAN_IP[1]:-}" ]; then
+    echo ""
+    wan_nodes_summary 2>/dev/null || true
+    WAN_AUTO=0 wan_nodes_save "$WAN_CONF_FILE" \
+        && echo -e "  ${GREEN}✓${NC} table écrite dans ${CYAN}${WAN_CONF_FILE}${NC}"
+    if [ -x "$HERE/network/firewall-wan.sh" ] || [ -r "$HERE/network/firewall-wan.sh" ]; then
+        for i in "${WAN_NODE_LIST[@]}"; do
+            bash "$HERE/network/firewall-wan.sh" "${WAN_IP[$i]}" "$OPS" >/dev/null 2>&1 || true
+        done
+        echo -e "  ${GREEN}✓${NC} pare-feu ouvert pour ${#WAN_NODE_LIST[@]} nœud(s)"
+    fi
+fi
 
 # ── L'adresse du hub ─────────────────────────────────────────────────────────
 # Elle est écrite en dur dans la config de CHAQUE nœud : si elle manque au

@@ -14,8 +14,19 @@
 #   - SIP connector (4255) : état (si présent)
 #   - Services : SMS relay, MNCC socket, Asterisk
 #
+# DOUBLE MODE — docker ou natif
+#   docker : chaque opérateur est un conteneur osmo-operator-N ; on l'interroge
+#            par « docker exec » ; l'inter-STP est le conteneur osmo-inter-stp.
+#   natif  : ISO, VM ou machine nue ; un seul opérateur, les démons tournent
+#            ici, les VTY sont sur 127.0.0.1 (mêmes ports), les configs dans
+#            /etc/osmocom.
+# Le mode est DÉTECTÉ (checks/_mode.sh) et affiché en tête de sortie : un
+# diagnostic qui ne dit pas dans quel monde il a regardé est inexploitable.
+# --docker / --native forcent, quand la détection ne peut pas trancher (hôte
+# qui a docker installé mais fait tourner le lab en natif, par exemple).
+#
 # Usage :
-#   sudo ./global_check.sh [--verbose] [--quick] [--op N]
+#   sudo ./global_check.sh [--verbose] [--quick] [--op=N] [--docker|--native]
 
 set -u
 
@@ -27,18 +38,39 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# ── Bibliothèque de mode (docker | natif) ─────────────────────────────────────
+# Chemin RELATIF au script : le dépôt vit en /home/…/osmo_egprs pendant le
+# développement et en /opt/osmo_egprs sur l'ISO ; un chemin absolu casserait
+# l'un des deux. Le second candidat couvre le cas d'un appel par lien
+# symbolique, où dirname ne pointe pas sur checks/.
+_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _c in "$_here/_mode.sh" /opt/osmo_egprs/checks/_mode.sh; do
+    [ -r "$_c" ] && { . "$_c"; break; }
+done
+command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 VERBOSE=0
 QUICK=0
 SPECIFIC_OP=""
+MODE_FORCED=0
+
+# OSMO_MODE posé dans l'environnement est déjà une forme de forçage
+# (« OSMO_MODE=native ./checks/global_check.sh ») : on le signale comme tel.
+case "${OSMO_MODE:-}" in docker|native) MODE_FORCED=1 ;; esac
 
 for arg in "$@"; do
     case "$arg" in
         --verbose|-v) VERBOSE=1 ;;
         --quick|-q)   QUICK=1 ;;
         --op=*)       SPECIFIC_OP="${arg#*=}" ;;
+        # osmo_mode_force rend 2 si l'argument n'est pas un mode : ici il en est
+        # toujours un, le « || true » ne sert qu'à survivre à un futur set -e.
+        --docker|--native|--mode=*) osmo_mode_force "$arg" && MODE_FORCED=1 || true ;;
     esac
 done
+
+MODE="$(osmo_mode)"
 
 PASS=0
 FAIL=0
@@ -63,101 +95,100 @@ section() {
 }
 
 # ── Fonction VTY ──────────────────────────────────────────────────────────────
+# Même signature qu'avant — premier argument : l'ÉTIQUETTE du nœud
+# (osmo-operator-N), que osmo_vty traduit en « docker exec » ou en exécution
+# locale selon le mode. Les temporisations reproduisent à l'identique celles de
+# l'ancienne implémentation (0.5 / 2 / nc -q1) : les changer changerait la
+# QUANTITÉ de sortie capturée, donc les « grep -c » qui la comptent plus bas.
 vty_cmd() {
-    local container="$1"
+    local node="$1"
     local port="$2"
     local cmd="$3"
     local timeout="${4:-2}"
 
-    # Test de connectivité rapide
-    if ! docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/${port}" 2>/dev/null; then
-        return 1
-    fi
-
-    # Construire le script VTY
-    local vty_script
-    vty_script="enable
-${cmd}
-end
-"
-
-    # Envoyer via nc ou telnet
     local raw_output
-    raw_output=$(docker exec "$container" bash -c "
-        VTY_SCRIPT=\$(cat << 'VTYEOF'
-${vty_script}
-VTYEOF
-)
-        if command -v nc >/dev/null 2>&1; then
-            ( sleep 0.5; printf '%s' \"\$VTY_SCRIPT\"; sleep ${timeout} ) \
-                | nc -q1 127.0.0.1 ${port} 2>/dev/null || true
-        else
-            ( sleep 0.5; printf '%s' \"\$VTY_SCRIPT\"; sleep ${timeout} ) \
-                | telnet 127.0.0.1 ${port} 2>/dev/null || true
-        fi
-    " 2>/dev/null || true)
+    raw_output=$(OSMO_VTY_OPEN=0.5 OSMO_VTY_READ="$timeout" OSMO_VTY_Q=1 \
+                 osmo_vty "$node" "$port" enable "$cmd" end) || return 1
 
-    # Filtrer les lignes de bannière/prompt
-    local clean_output
-    clean_output=$(echo "$raw_output" \
-        | grep -vE \
-            "^(Trying|Connected|Escape|Welcome|OsmoSTP|OsmoHLR|OsmoMSC|\
-OsmoBSC|OsmoBTS|OsmoMGW|OsmoPCU|OsmoSGSN|OsmoGGSN|OsmoSIP|\
-VTY server|Use.*help|Press.*tab|[A-Za-z0-9_-]+[#>] |\
-Enter password|% Unknown|% Command incomplete|% Error|\
-Connection closed|Free Software lives)" \
-        | sed 's/\r//' \
-        | grep -v '^[[:space:]]*$' || true)
-
-    echo "$clean_output"
+    # Filtrage identique à l'ancien (motif et ordre des filtres) ; « Free
+    # Software lives » en supplément, comme avant.
+    printf '%s\n' "$raw_output" | osmo_vty_clean 'Free Software lives'
     return 0
 }
 
 # ── Vérification rapide de disponibilité VTY ──────────────────────────────────
+# En natif, osmo_vty_up sonde d'abord avec ss (passif, n'ouvre pas de session
+# VTY) et ne retombe sur la connexion TCP que si ss ne voit rien.
 vty_available() {
-    local container="$1"
-    local port="$2"
-    if docker exec "$container" bash -c "echo >/dev/tcp/127.0.0.1/${port}" 2>/dev/null; then
-        return 0
-    else
-        return 1
-    fi
+    osmo_vty_up "$1" "$2"
 }
 
-# ── Détection containers ──────────────────────────────────────────────────────
+# ── Détection des opérateurs ──────────────────────────────────────────────────
+# docker : les conteneurs osmo-operator-N en cours.
+# natif  : $OSMO_OP_IDS, sinon les netns osmo-opN, sinon N_OPERATORS de
+#          globals.conf, sinon 1 — il n'existe pas d'inventaire en natif.
 if [ -n "$SPECIFIC_OP" ]; then
-    OP_CONTAINERS=("osmo-operator-${SPECIFIC_OP}")
-    # Vérifier que le container existe
-    if ! docker ps --format '{{.Names}}' | grep -q "osmo-operator-${SPECIFIC_OP}"; then
-        echo -e "${RED}Container osmo-operator-${SPECIFIC_OP} non trouvé${NC}"
+    # osmo_op_exists est ANCRÉ, contrairement à l'ancien « docker ps | grep
+    # osmo-operator-N » : « --op=1 » acceptait aussi osmo-operator-10.
+    if ! osmo_op_exists "$SPECIFIC_OP"; then
+        echo -e "${RED}Opérateur ${SPECIFIC_OP} non trouvé (mode ${MODE})${NC}"
         exit 1
     fi
+    OP_IDS=("$SPECIFIC_OP")
 else
-    mapfile -t OP_CONTAINERS < <(
-        docker ps --format '{{.Names}}' \
-            | grep -E '^osmo-operator-[0-9]+$' \
-            | sort -t '-' -k 3 -n
-    )
+    mapfile -t OP_IDS < <(osmo_ops)
 fi
 
-N_OPS=${#OP_CONTAINERS[@]}
+N_OPS=${#OP_IDS[@]}
+
+# Une ligne de l'encadré, remplie à la largeur exacte (58 colonnes). Le texte
+# passé ici reste en ASCII : sous une locale C, ${#t} compterait les octets
+# d'un caractère accentué et le cadre se décalerait.
+box_line() {
+    # Deux instructions, pas une : dans « local t="$1" pad=$(( ... ${#t} )) »
+    # l'arithmétique est développée AVANT l'affectation de t, ce qui donne
+    # « variable sans liaison » sous set -u.
+    local t="$1"
+    local pad=$(( 58 - 5 - ${#t} ))
+    [ "$pad" -lt 0 ] && pad=0
+    printf "${CYAN}║     %s%*s║${NC}\n" "$t" "$pad" ""
+}
 
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║     Global Health Check — $(date '+%Y-%m-%d %H:%M:%S')            ║${NC}"
 echo -e "${CYAN}║     ${N_OPS} opérateur(s) à vérifier                              ║${NC}"
+# Le mode fait partie du diagnostic : sans lui, un « service DOWN » ne dit pas
+# s'il a été cherché dans un conteneur ou sur cette machine.
+if [ "$MODE_FORCED" -eq 1 ]; then
+    box_line "mode : ${MODE} (force)"
+else
+    box_line "mode : ${MODE} (detecte)"
+fi
+if [ "$MODE" = native ]; then
+    box_line "natif : demons locaux, VTY sur 127.0.0.1"
+else
+    box_line "docker : conteneurs osmo-operator-N"
+fi
 echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 
 if [ "$N_OPS" -eq 0 ]; then
-    echo -e "${RED}Aucun opérateur trouvé${NC}"
+    # En natif osmo_ops rend toujours au moins « 1 » : ce cas est donc celui de
+    # docker sans conteneur en cours. On le dit, plutôt que de laisser croire à
+    # une panne des services.
+    echo -e "${RED}Aucun opérateur trouvé (mode ${MODE})${NC}"
+    [ "$MODE" = docker ] && echo -e "     ${CYAN}aucun conteneur osmo-operator-N en cours — sudo ./start.sh${NC}"
     exit 1
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Pour chaque opérateur
 # ══════════════════════════════════════════════════════════════════════════════
-for container in "${OP_CONTAINERS[@]}"; do
-    op_id="${container##*-}"
+for op_id in "${OP_IDS[@]}"; do
+    # osmo_node rend « osmo-operator-N » dans les DEUX modes : en docker c'est
+    # le nom du conteneur, en natif un nom d'affichage. La bannière et les
+    # champs « container= » que relit operator_summary.sh sont préservés.
+    container="$(osmo_node "$op_id")"
     banner "OPÉRATEUR ${op_id} (${container})"
 
     # =========================================================================
@@ -200,10 +231,17 @@ for container in "${OP_CONTAINERS[@]}"; do
             fail "Routes : ${n_prohib} PROHIB détectés"
         fi
 
-        # Route par défaut vers inter-STP
+        # Route par défaut vers inter-STP.
+        # L'inter-STP est un conteneur en docker (osmo-inter-stp, 172.20.0.10).
+        # En natif il n'existe que si CETTE machine tient ce rôle, ou s'il est
+        # sur une autre machine du WAN : dans ce cas l'absence de route
+        # catch-all n'est pas une anomalie, c'est la topologie. On l'ignore
+        # explicitement au lieu de fabriquer un avertissement.
         has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0.*avail' || true)
         if [ "$has_default" -gt 0 ]; then
             ok "Route par défaut → inter-STP : présente"
+        elif osmo_is_native && ! osmo_hub >/dev/null 2>&1; then
+            skip "Route par défaut → inter-STP — ignoré (natif) : $(osmo_hub_hint)"
         else
             warn "Route par défaut → inter-STP : absente"
         fi
@@ -482,27 +520,29 @@ for container in "${OP_CONTAINERS[@]}"; do
     # =========================================================================
     section "Services"
 
-    # MNCC socket
-    if docker exec "$container" test -S /tmp/msc_mncc 2>/dev/null; then
+    # MNCC socket — osmo_sock interroge ss AVANT « test -S » : sous PrivateTmp
+    # (unit systemd de l'ISO) le socket existe sans être visible par test -S, et
+    # un « voix impossible » mensonger en découlerait.
+    if osmo_sock "$container" /tmp/msc_mncc; then
         ok "MNCC socket présent (MSC ↔ SIP connector)"
     else
         fail "MNCC socket absent — voix impossible"
     fi
 
-    # SMS relay
-    sms_port=$(docker exec "$container" ss -tlnp 2>/dev/null | grep -c ':7890' || true)
-    if [ "$sms_port" -gt 0 ]; then
+    # SMS relay — awk sur le port exact, et non « grep -c :7890 » qui aurait
+    # aussi accepté 17890.
+    if osmo_port "$container" 7890 tcp; then
         ok "SMS relay : écoute sur port 7890"
     else
         warn "SMS relay : non détecté"
     fi
 
     # Asterisk
-    if docker exec "$container" pgrep asterisk >/dev/null 2>&1; then
+    if osmo_running "$container" asterisk; then
         ok "Asterisk : en cours d'exécution"
-        
+
         # Vérification rapide Asterisk
-        ast_out=$(docker exec "$container" asterisk -rx "core show channels" 2>/dev/null || true)
+        ast_out=$(osmo_ast "$container" "core show channels" || true)
         channels=$(echo "$ast_out" | grep -c "active channels" || true)
         info "Asterisk : ${channels} canaux actifs"
     else
@@ -512,8 +552,16 @@ for container in "${OP_CONTAINERS[@]}"; do
     # Vérification des processus clés
     section "Processus"
 
+    # En natif, osmo_running essaie systemctl PUIS pgrep -x PUIS pgrep -f : les
+    # démons sont des units sur l'ISO mais des processus détachés quand systemd
+    # est absent, et /proc/PID/comm est tronqué à 15 caractères (« pgrep -x
+    # osmo-sip-connector » ne trouve jamais rien).
+    if [ "$MODE" = native ] && [ "$N_OPS" -gt 1 ]; then
+        info "natif multi-opérateur : ip netns exec n'isole pas les PID, ces états portent sur la machine"
+    fi
+
     for proc in osmo-stp osmo-hlr osmo-msc osmo-bsc osmo-bts-trx osmo-mgw osmo-sip-connector; do
-        if docker exec "$container" pgrep "$proc" >/dev/null 2>&1; then
+        if osmo_running "$container" "$proc"; then
             ok "$proc : en cours"
         else
             # Certains processus peuvent ne pas être présents selon configuration
@@ -534,6 +582,7 @@ echo -e "$(printf '═%.0s' {1..70})"
 
 TOTAL=$((PASS + FAIL + WARN + SKIP))
 
+echo -e "  ${CYAN}mode   : ${MODE}${NC}  (${N_OPS} opérateur(s))"
 echo -e "  ${GREEN}✓ PASS : ${PASS}${NC}"
 echo -e "  ${RED}✗ FAIL : ${FAIL}${NC}"
 echo -e "  ${YELLOW}⚠ WARN : ${WARN}${NC}"

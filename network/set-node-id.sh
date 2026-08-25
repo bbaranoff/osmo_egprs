@@ -34,10 +34,18 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# wan_detect_local_ip vit ici : c'est la même règle de choix d'adresse que celle
+# qu'appliquent start.sh et start-direct.sh. La dupliquer, c'est se garantir
+# qu'un jour les deux ne désigneront plus la même carte.
+# shellcheck source=network/wan-nodes.sh
+. "$SCRIPT_DIR/wan-nodes.sh"
+
 NODE=""
 OP=1
 HUB_IP=""
 MODE=""            # docker | native — l'adressage n'est pas le même
+LOCAL_IP=""        # adresse source de l'ASP ; « auto » = détectée
 CONF_DIR="${CONF_DIR:-/etc/osmocom}"
 SHOW=0
 LOCAL_PLAN=0
@@ -49,6 +57,8 @@ while [ $# -gt 0 ]; do
         --node=*)   NODE="${1#*=}" ;;
         --op)       OP="${2:-1}"; shift ;;
         --op=*)     OP="${1#*=}" ;;
+        --local-ip)   LOCAL_IP="${2:-}"; shift ;;
+        --local-ip=*) LOCAL_IP="${1#*=}" ;;
         --hub-ip)   HUB_IP="${2:-}"; shift ;;
         --hub-ip=*) HUB_IP="${1#*=}" ;;
         --conf-dir)   CONF_DIR="${2:-}"; shift ;;
@@ -78,14 +88,16 @@ own_pc() { awk '/^cs7 instance/{c=1} c && /^ *point-code /{print $2; exit}' "$1"
 
 show_state() {
     local f n
-    printf '  %-16s %-10s %-12s %s\n' FICHIER "POINT CODE" "ROUTING-KEY" "ASP INTER-STP"
+    printf '  %-16s %-10s %-12s %-16s %s\n' FICHIER "POINT CODE" "ROUTING-KEY" "ASP INTER-STP" "SOURCE"
     for f in "$STP" "$MSC" "$BSC"; do
         [ -r "$f" ] || { printf '  %-16s %s\n' "$(basename "$f")" "absent"; continue; }
         local pc rk asp
         pc="$(own_pc "$f")"
         rk="$(awk '/^ *routing-key /{print $2; exit}' "$f")"
         asp="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$f")"
-        printf '  %-16s %-10s %-12s %s\n' "$(basename "$f")" "${pc:-–}" "${rk:-–}" "${asp:-–}"
+        local src
+        src="$(awk '/asp asp-to-inter/{f=1} f&&/local-ip/{print $2; exit}' "$f")"
+        printf '  %-16s %-10s %-12s %-16s %s\n' "$(basename "$f")" "${pc:-–}" "${rk:-–}" "${asp:-–}" "${src:-–}"
     done
 }
 
@@ -142,18 +154,47 @@ if [ -z "$HUB_IP" ]; then
     esac
 fi
 
-# En docker on NE touche PAS au local-ip : le conteneur a son adresse avant que
-# le démon ne démarre, et une source explicite évite que SCTP annonce plusieurs
-# adresses (multi-homing) à un pair qui n'en attend qu'une.
-# En natif c'est l'inverse : l'adresse vient du DHCP, s'y lier trop tôt échoue.
-if [ "$MODE" = "docker" ]; then SET_LOCAL_IP=0; else SET_LOCAL_IP=1; fi
+# ── Adresse SOURCE de l'ASP vers le hub ─────────────────────────────────────
+# En docker on n'y touche pas : le conteneur a son adresse avant que le démon ne
+# démarre, et une source explicite évite que SCTP annonce plusieurs adresses
+# (multi-homing) à un pair qui n'en attend qu'une.
+#
+# En VM, on INJECTE l'adresse réellement détectée sur le segment VirtualBox
+# plutôt que 0.0.0.0. La différence n'est pas cosmétique : avec 0.0.0.0, SCTP
+# annonce TOUTES les adresses locales dans son INIT — y compris le NAT 10.0.2.15
+# et les alias 172.20.x que l'ISO pose. Le hub tente alors de joindre des
+# adresses qui, vues de lui, ne mènent nulle part. Une adresse unique et juste
+# vaut mieux qu'un multi-homing dont trois branches sur quatre sont mortes.
+#
+# On retombe sur 0.0.0.0 si aucune adresse n'est détectable — s'y lier vaut
+# mieux que de se lier à une adresse absente, qui empêche osmo-stp de démarrer.
+SET_LOCAL_IP=0
+ASP_LOCAL_IP=""
+if [ "$MODE" != "docker" ]; then
+    SET_LOCAL_IP=1
+    case "$LOCAL_IP" in
+        "" | auto)
+            if ! command -v wan_detect_local_ip >/dev/null 2>&1; then
+                echo -e "${RED}wan_detect_local_ip introuvable — network/wan-nodes.sh non chargé${NC}" >&2
+                exit 1
+            fi
+            ASP_LOCAL_IP="$(wan_detect_local_ip || true)"
+            if [ -n "$ASP_LOCAL_IP" ]; then
+                LOCAL_IP_SRC="détectée sur le segment"
+            else
+                ASP_LOCAL_IP="0.0.0.0"
+                LOCAL_IP_SRC="aucune adresse détectée — repli"
+            fi ;;
+        *)  ASP_LOCAL_IP="$LOCAL_IP"; LOCAL_IP_SRC="imposée par --local-ip" ;;
+    esac
+fi
 
 echo -e "${BOLD}Nœud ${NODE} — opérateur ${OP}${NC}   (mode ${CYAN}${MODE}${NC})"
 echo -e "  STP ${CYAN}${PC_STP}${NC}   MSC ${CYAN}${PC_MSC}${NC}   BSC ${CYAN}${PC_BSC}${NC}"
 echo -e "  routing-key : stp ${RCTX_STP} · msc ${RCTX_MSC} · bsc ${RCTX_BSC} · inter ${RCTX_INTER}"
 [ "$LOCAL_PLAN" = "1" ] \
     && echo -e "  ${YELLOW}plan LOCAL : cette machine ne peut pas partager un hub avec une autre${NC}" \
-    || echo -e "  ASP inter-STP → ${CYAN}${HUB_IP}${NC}$([ "$SET_LOCAL_IP" = "1" ] && echo "  (source 0.0.0.0)" || echo "  (source inchangée)")"
+    || echo -e "  ASP inter-STP → ${CYAN}${HUB_IP}${NC}$([ "$SET_LOCAL_IP" = "1" ] && echo "  depuis ${CYAN}${ASP_LOCAL_IP}${NC} (${LOCAL_IP_SRC})" || echo "  (source inchangée)")"
 echo ""
 
 # ── Réécriture ──────────────────────────────────────────────────────────────
@@ -165,7 +206,7 @@ rewrite() {  # $1=fichier  $2=own  $3=peer  $4=rctx  $5=1 si bloc asp inter-STP
     local f="$1" own="$2" peer="$3" rctx="$4" do_asp="$5"
     local tmp; tmp="$(mktemp)"
     awk -v own="$own" -v peer="$peer" -v rctx="$rctx" -v do_asp="$do_asp" -v hub="$HUB_IP" \
-        -v set_local="$SET_LOCAL_IP" '
+        -v set_local="$SET_LOCAL_IP" -v localip="${ASP_LOCAL_IP:-0.0.0.0}" '
         /^cs7 instance/            { in_cs7=1 }
         /^ *sccp-address /         { sccp=1 }
         /^ *(as|asp|listen|route-table|network-indicator|xua) / { sccp=0 }
@@ -179,7 +220,7 @@ rewrite() {  # $1=fichier  $2=own  $3=peer  $4=rctx  $5=1 si bloc asp inter-STP
         # partir la connexion de la boucle locale vers une adresse de segment —
         # elle n aboutirait jamais, et le seul symptome serait un ASP DOWN.
         # 0.0.0.0 : le noyau choisit la source selon la route.
-        in_asp && do_asp && set_local && /^ *local-ip / { sub(/local-ip.*/, "local-ip 0.0.0.0"); print; next }
+        in_asp && do_asp && set_local && /^ *local-ip / { sub(/local-ip.*/, "local-ip " localip); print; next }
         in_asp && do_asp && /^ *shutdown[ \t]*$/ { sub(/shutdown/, "no shutdown"); print; next }
 
         /^ *point-code / {

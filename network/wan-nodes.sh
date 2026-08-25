@@ -153,6 +153,58 @@ wan_nodes_detect_self() {
     return 1
 }
 
+# ── L'ADRESSE DE CE NŒUD SUR LE SEGMENT WAN ─────────────────────────────────
+# « La première IP globale » est un mauvais critère sur une VM du banc : il y en
+# a au moins trois, et deux sont des pièges.
+#   • le NAT VirtualBox — toujours 10.0.2.x — sort vers Internet mais ne voit
+#     aucun pair : un ASP lié dessus n'atteint jamais le hub ;
+#   • les alias 172.20.0.1 / 172.20.0.11 / 172.20.1.10 que l'ISO pose elle-même
+#     sur le NIC (build-iso.sh, 20-dhcp.network) — ils appartiennent au plan
+#     docker et n'existent sur aucun segment.
+# La bonne adresse est celle de la carte « pont » VirtualBox. On la cherche dans
+# cet ordre, du plus sûr au plus déduit.
+wan_detect_local_ip() {
+    local addrs a
+
+    addrs="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
+    [ -n "$addrs" ] || return 1
+
+    # 1. La table fait foi — à condition que l'adresse soit réellement montée.
+    #    Une table qui annonce une adresse absente est une table périmée, pas
+    #    une source d'autorité.
+    if [ "${WAN_NODE_ID:-0}" != "0" ] && [ -n "${WAN_IP[${WAN_NODE_ID}]:-}" ]; then
+        for a in $addrs; do
+            [ "$a" = "${WAN_IP[$WAN_NODE_ID]}" ] && { printf '%s' "$a"; return 0; }
+        done
+    fi
+
+    # 2. La plage host-only de VirtualBox (192.168.56.0/21), la seule qu'il
+    #    autorise sans /etc/vbox/networks.conf. C'est le segment du banc.
+    for a in $addrs; do
+        case "$a" in
+            192.168.5[6-9].*|192.168.6[0-3].*) printf '%s' "$a"; return 0 ;;
+        esac
+    done
+
+    # 3. Toute autre adresse en 192.168.x : c'est la carte « pont » (accès par
+    #    pont / bridged adapter), celle qui met la VM sur le même réseau que
+    #    l'hôte. C'est l'adresse par laquelle les pairs la joignent.
+    for a in $addrs; do
+        case "$a" in 192.168.*) printf '%s' "$a"; return 0 ;; esac
+    done
+
+    # 4. À défaut, la première adresse qui ne soit ni le NAT VirtualBox, ni un
+    #    alias du plan docker, ni la boucle locale.
+    for a in $addrs; do
+        case "$a" in
+            10.0.2.*|172.20.*|127.*|169.254.*) ;;
+            *) printf '%s' "$a"; return 0 ;;
+        esac
+    done
+
+    return 1
+}
+
 wan_local_ip()  { printf '%s' "${WAN_IP[${WAN_NODE_ID}]:-}"; }
 wan_local_ind() { printf '%s' "${WAN_IND[${WAN_NODE_ID}]:-}"; }
 
