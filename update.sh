@@ -1,6 +1,3 @@
-#!/usr/bin/env bash
-cat >> /tmp/kb.new <<'ANIM'
-
 # ── animation : MT SMS entre deux téléphones ──
 printf '\033[?25l'
 ph='\033[1;33m☎\033[0m'
@@ -15,9 +12,4 @@ for ((p=0; p<=20; p++)); do
 done
 printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered — MT end-to-end Message : Bastien phone home\033[0m\n' "$ph" '' "$ph"
 printf '\033[?25h'
-ANIM
-# 3) réécrire dans le même inode
-cat /tmp/kb.new > "$KB"
-else
-    echo "01-keyboard-setup.sh absent ou vide — animation non posée (machine hors ISO)"
-fi
+cd /opt/GSM/osmo_egprs && git pull
