@@ -158,10 +158,19 @@ echo -e "  hote docker : ${CYAN}${VIA}${NC}"
 # Deux signes le trahissent, et un seul suffit :
 #   - --via est une adresse locale ;
 #   - un bridge porte deja le reseau des conteneurs.
+#
+# Attention a ne pas confondre les deux facons de "porter" ce reseau :
+#   un BRIDGE docker (br-xxxx, docker0)  -> c'est l'hote, on s'arrete ;
+#   une carte ordinaire (enp0s3...)      -> ce sont justement les alias perimes
+#                                           de l'ISO, et c'est notre travail.
+# Un premier jet refusait les deux et bloquait donc sur la VM qu'il devait
+# reparer.
 _self=0
 ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 \
     | grep -qx "$VIA" && _self=1
-_bridge="$(ip -4 -o route show "$DOCKER_NET" 2>/dev/null | awk '/proto kernel/{print $3; exit}')"
+_dev="$(ip -4 -o route show "$DOCKER_NET" 2>/dev/null | awk '/proto kernel/{print $3; exit}')"
+_bridge=""
+case "$_dev" in br-*|docker*|virbr*) _bridge="$_dev" ;; esac
 if [ "$_self" = 1 ] || [ -n "$_bridge" ]; then
     echo ""
     echo -e "  ${RED}✗ Cette machine EST l'hote docker - rien a faire ici.${NC}" >&2
