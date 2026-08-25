@@ -4,10 +4,57 @@
 INST_REGISTER deps "Dépendances système (apt)"
 INST_DEPS[deps]="prereqs"
 
+# [2026-08-25] L'extraction reconnaissait « RUN apt-get update && apt-get
+# install » EN DUR. Le Dockerfile installe désormais via apt-fast : le motif ne
+# capturait plus que le bloc d'amorçage (aria2, curl, et les bouts de la
+# commande qui installe apt-fast lui-même), et l'installation native repartait
+# avec 29 jetons de charabia au lieu des paquets. Elle échouait sur des noms
+# comme « && » ou une URL, sans que rien ne désigne le Dockerfile comme cause.
+#
+# Deux durcissements plutôt qu'un simple élargissement du motif :
+#   1. apt-get ET apt-fast sont acceptés, dans n'importe quel ordre update/install ;
+#   2. on ne garde que ce qui RESSEMBLE à un nom de paquet. Un bloc apt peut
+#      contenir des `&&`, des URL, des accolades — les laisser passer, c'est
+#      transformer une erreur de format en erreur d'apt, illisible.
+# Le filtre est la vraie protection : il survit au prochain changement de forme.
 _deps_list() {
-    awk '/^RUN apt-get update && apt-get install/,/[^\\]$/' "$INST_TREE/Dockerfile" 2>/dev/null \
-      | sed -e 's/^RUN apt-get update && apt-get install -y --no-install-recommends//' \
-            -e 's/\\$//' -e 's/#.*//' | tr -s ' \n' ' '
+    # Un paquet, c'est ce qui suit « install -y --no-install-recommends » et
+    # PRÉCÈDE le premier opérateur shell. Filtrer sur la forme des mots ne
+    # suffit pas : le bloc d'amorçage contient « chmod », « printf », « rm »,
+    # qui ressemblent tous à des noms de paquets. On coupe donc à `&&`, `||`,
+    # `{` ou une URL, et on ne garde que ce qu'il y a avant.
+    awk '
+        /^RUN apt-(get|fast) update && apt-(get|fast) install/ {
+            inblk = 1
+            line = $0
+            sub(/^RUN.*--no-install-recommends/, "", line)
+            emit(line)
+            next
+        }
+        inblk { emit($0) }
+
+        function emit(l,   n, a, i, cont) {
+            # Le commentaire en PREMIER. Les lignes « # … » au milieu de la
+            # liste nont pas de barre de continuation : Docker les retire avant
+            # le shell. Les traiter comme une fin de bloc coupait la liste au
+            # premier commentaire — soit trois paquets sur soixante-dix.
+            # (Pas dapostrophe dans ce bloc : il vit entre quotes simples.)
+            sub(/#.*/, "", l)
+            if (l ~ /^[ \t]*$/) return          # commentaire pur : transparent
+
+            cont = (l ~ /\\[ \t]*$/)
+            if (l ~ /&&|\|\||[{}]|https?:/) {   # on sort de la liste de paquets
+                sub(/(&&|\|\||\{).*/, "", l)
+                inblk = 0
+            } else if (!cont) {
+                inblk = 0                        # dernière ligne du bloc
+            }
+            sub(/\\[ \t]*$/, "", l)
+            n = split(l, a, /[ \t]+/)
+            for (i = 1; i <= n; i++)
+                if (a[i] ~ /^[a-z0-9][a-z0-9.+*-]*$/) print a[i]
+        }
+    ' "$INST_TREE/Dockerfile" 2>/dev/null | sort -u | tr '\n' ' '
 }
 
 inst_deps_check() {

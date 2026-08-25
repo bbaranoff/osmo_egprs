@@ -62,7 +62,7 @@ MCC|001|0|Mobile Country Code (3 chiffres)
 MNC|01|0|Mobile Network Code (2 chiffres)
 OP_NAME|OsmoQEMU|0|Nom court et long du réseau
 #SECTION|Sécurité et carte SIM
-ENCRYPTION|a5 0|0|Chiffrement : « a5 0 » (aucun), « a5 1 », « a5 0 1 3 »…
+ENCRYPTION|a5 1|0|Chiffrement : « a5 1 » (défaut), « a5 0 » (aucun), « a5 0 1 3 »…
 SIM_ALGO|comp128|0|Algorithme d'authentification (comp128, xor…)
 KI||1|Ki de la SIM, 16 octets hexa espacés
 IMSI||1|IMSI du mobile

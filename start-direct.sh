@@ -80,7 +80,10 @@ Usage : ./start-direct.sh [options] [mode]
     --wan-nodes "1:IP:IND …"   même chose sans question (scriptable)
     --wan-id N          numéro du noeud local (sinon déduit des IP locales)
     --wan-conf FICHIER  table à lire/écrire (défaut /etc/osmo-wan.conf)
-    --node N            numéro de CE nœud, 1 à 9. Réécrit son identité SS7
+    --node N            numéro de CE nœud, 1 à 9. DÉDUIT AUTOMATIQUEMENT s'il
+                        est omis : environnement, puis /etc/osmo-role, puis la
+                        table WAN comparée aux adresses locales. Cette option
+                        ne sert qu'à forcer. Réécrit son identité SS7
                         (point codes 1.<nœud><op>.<rôle>, routing contexts) et
                         pointe son ASP sur l'inter-STP. Une seule ISO suffit
                         alors pour les neuf nœuds — le numéro se choisit ici.
@@ -174,6 +177,62 @@ detect_runtime_env() {
     esac
 }
 RUNTIME_ENV="${RUNTIME_ENV:-$(detect_runtime_env)}"
+
+# --- quel nœud sommes-nous ? --------------------------------------------------
+# Le numéro de nœud décide des point codes, du routing context et de l'indicatif.
+# Le taper à chaque lancement est une occasion de se tromper — et une erreur ici
+# ne se voit pas : la pile démarre, elle présente simplement au hub l'adresse SS7
+# d'un autre nœud. On le déduit donc, et on DIT d'où vient la réponse.
+#
+# Ordre, du plus explicite au plus déduit. Le premier qui répond gagne :
+#   1. --node passé en ligne de commande
+#   2. l'environnement — c'est ainsi que start.sh le transmet au conteneur
+#   3. /etc/osmo-role, figé dans l'image par build-iso.sh --node N
+#   4. la table WAN : l'adresse de ce nœud y figure, et nous l'avons
+#   5. rien — on ne touche alors PAS à l'identité SS7, plutôt que d'en inventer une
+# Renvoie « numéro|origine ». Pas deux variables : la fonction est appelée dans
+# une substitution de commande, donc dans un SOUS-SHELL — toute variable qu'elle
+# poserait y resterait, et l'appelant n'afficherait « ? » qu'après coup.
+detect_node_id() {
+    local n
+
+    n="${WAN_NODE_ID:-${OSMO_WAN_NODE:-}}"
+    if [[ "$n" =~ ^[1-9]$ ]]; then echo "${n}|environnement"; return 0; fi
+
+    if [ -r /etc/osmo-role ]; then
+        n="$(awk -F= '/^OSMO_WAN_NODE=/{print $2}' /etc/osmo-role 2>/dev/null | tr -d ' \r')"
+        if [[ "$n" =~ ^[1-9]$ ]]; then echo "${n}|/etc/osmo-role"; return 0; fi
+    fi
+
+    # La table WAN et nos propres adresses : c'est la source la plus fiable en VM,
+    # où une seule ISO sert les neuf nœuds et où seule l'IP les distingue.
+    local conf="${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
+    if [ -r "$conf" ] && [ -r "$HERE/network/wan-nodes.sh" ]; then
+        n="$(
+            # Sous-shell : wan-nodes.sh pose des variables et des tableaux qu'on
+            # ne veut pas voir déborder dans le lanceur.
+            set +u
+            . "$HERE/network/wan-nodes.sh" 2>/dev/null || exit 0
+            WAN_NODE_ID=0
+            wan_nodes_load "$conf" 2>/dev/null || exit 0
+            wan_nodes_detect_self 2>/dev/null || exit 0
+            printf '%s' "$WAN_NODE_ID"
+        )"
+        if [[ "$n" =~ ^[1-9]$ ]]; then echo "${n}|table WAN (IP locale)"; return 0; fi
+    fi
+
+    return 1
+}
+
+NODE_ID_SRC=""
+if [ -n "$NODE_ID" ]; then
+    NODE_ID_SRC="option --node"
+else
+    _detected="$(detect_node_id || true)"
+    NODE_ID="${_detected%%|*}"
+    [ -n "$NODE_ID" ] && NODE_ID_SRC="${_detected#*|}"
+    unset _detected
+fi
 # Pour les scripts qui ne connaissent que deux mondes : docker, ou tout le reste.
 case "$RUNTIME_ENV" in docker) NODE_MODE=docker ;; *) NODE_MODE=native ;; esac
 
@@ -238,7 +297,25 @@ fi
 # Repli si load.env est absent. Les journaux restent sous RUN_DIR (tmpfs) :
 # le défilement tmux en dépend — cf. environment/paths.env.
 : "${LOG_DIR:=$RUN_DIR/logs}"
-: "${ENCRYPTION:=a5 0}"
+# A5/1 par défaut : c'est le chiffrement que la maquette valide de bout en bout
+# (Calypso ↔ BTS), et ce que start.sh impose déjà dans son hand-off vers ce
+# script. Un défaut à « a5 0 » faisait diverger le lancement direct du lancement
+# par start.sh — même stack, deux chiffrements, selon la porte d'entrée.
+#
+# ATTENTION : globals.conf est lu AVANT et fait autorité sur cette variable (son
+# en-tête le dit). Ce « := » n'est donc qu'un repli quand globals.conf est absent
+# — l'ISO, un conteneur nu. La valeur qui s'applique en pratique vient de là-bas,
+# et c'est pourquoi elle y a été changée aussi.
+: "${ENCRYPTION:=a5 1}"
+# Le pont TRX par défaut : il REMPLACE la chaîne IQ (osmo-trx-ipc,
+# calypso-ipc-device, si_bridge, demod-bridge) par un transceiver unique qui
+# décode le DL et encode l'UL. C'est le mode que start.sh passe déjà en
+# hand-off ; le lancement direct s'aligne.
+# CALYPSO_BRIDGE n'est pas déclaré dans globals.conf (les CALYPSO_* « passent au
+# travers, intact » d'après son en-tête) : l'environnement gagne donc vraiment.
+#   CALYPSO_BRIDGE=ipc  ./start-direct.sh   -> le pont IPC-MS à la place
+#   CALYPSO_BRIDGE=none ./start-direct.sh   -> ni l'un ni l'autre, chaîne IQ
+: "${CALYPSO_BRIDGE:=pont}"
 : "${MS_COUNT:=2}"
 : "${HOST_IP:=127.0.0.1}"
 mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb 2>/dev/null || true
@@ -545,6 +622,11 @@ banner
 printf '  %sprofil%s     %s (%s)\n' "$C_DIM" "$C_Z" "$CALYPSO_PROFILE" "$MODE"
 printf '  %senviron.%s   %s\n' "$C_DIM" "$C_Z" \
     "$(case "$RUNTIME_ENV" in docker) echo "conteneur docker" ;; vm) echo "machine virtuelle" ;; *) echo "machine physique" ;; esac)"
+if [ -n "$NODE_ID" ]; then
+    printf '  %snoeud%s      %s  %s(%s)%s\n' "$C_DIM" "$C_Z" "$NODE_ID" "$C_DIM" "${NODE_ID_SRC:-?}" "$C_Z"
+else
+    printf '  %snoeud%s      %s\n' "$C_DIM" "$C_Z" "aucun — identité SS7 inchangée"
+fi
 printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
 printf '  %sMS#1%s       %s  IMSI 001010001000001  ARFCN 514  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG"
 printf '  %sMS#2%s       %s  IMSI 001010001000002  ARFCN 516  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG"

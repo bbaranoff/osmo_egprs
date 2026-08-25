@@ -21,7 +21,7 @@ DUMP_FILE=""
 LIVE_MODE=0
 
 for arg in "$@"; do
-    case "$arg in
+    case "$arg" in
         --dump=*) DUMP_FILE="${arg#*=}" ;;
         --live)   LIVE_MODE=1 ;;
         --help|-h)

@@ -1,3 +1,19 @@
+# Dockerfile — IMAGE DE BASE osmocom-nitb (COUCHE STABLE)
+# ─────────────────────────────────────────────────────────────────────────────
+# Tout ce qui est LONG et rarement modifie vit ici : la TOTALITE des paquets apt
+# (une seule liste, plus aucun apt dans Dockerfile.run), la pile Osmocom
+# compilee depuis les sources, osmocom-bb + le firmware Calypso, QEMU et son
+# device IPC, gr-gsm/GNU Radio, le runtime Node et le dashboard web, la config
+# PulseAudio, les units systemd, les repertoires, le prompt.
+# ~11 Go et ~40 min de build : on ne la rebatit que quand une dependance change.
+#
+# L'iteration quotidienne se fait dans Dockerfile.run, qui repart de cette image
+# (`FROM osmocom-nitb`) et n'y rafraichit que les scripts, les configs, le pont
+# et les arbres git qemu-src / osmo_egprs — en secondes, pas en 40 minutes.
+#
+# Cette image reste AUTONOME : elle a son propre ENTRYPOINT et start-nitb.sh la
+# lance seule. Ne pas retirer ses COPY de configs/scripts sous pretexte que
+# Dockerfile.run les refait : le recouvrement est voulu des deux cotes.
 FROM ubuntu:22.04 AS osmocom-nitb
 
 # ROOT : ou vivent les sources dans l'image. Chemin FIXE et assume — dans un
@@ -9,8 +25,44 @@ ENV container=docker \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     LD_LIBRARY_PATH=/usr/local/lib
 
-# 1. Dépendances système complètes (Infrastructure + Osmocom-BB)
+# ── apt-fast : les téléchargements apt en parallèle ─────────────────────────
+# Cette image installe plusieurs centaines de paquets ; apt les récupère un par
+# un, apt-fast les met en parallèle via aria2. Le gain porte sur le
+# téléchargement, pas sur dpkg — l'installation reste séquentielle.
+#
+# Repli explicite : si le réseau ou GitHub manque à ce moment, on pose un
+# apt-fast qui appelle apt-get. Le build continue, plus lentement, au lieu
+# d'échouer sur un outil qui n'est qu'une optimisation.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        aria2 curl ca-certificates \
+    && { curl -fsSL -o /usr/local/sbin/apt-fast \
+            https://raw.githubusercontent.com/ilikenwf/apt-fast/master/apt-fast \
+         && curl -fsSL -o /etc/apt-fast.conf \
+            https://raw.githubusercontent.com/ilikenwf/apt-fast/master/apt-fast.conf ; } \
+    || printf '#!/bin/sh\nexec apt-get "$@"\n' > /usr/local/sbin/apt-fast \
+    && chmod +x /usr/local/sbin/apt-fast \
+    && rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 1. Dépendances système — TOUTES ici, y compris celles qu'installait
+#    Dockerfile.run. Une seule liste, un seul endroit où la faire évoluer :
+#    l'image d'exécution n'a plus à connaître apt du tout.
+#
+# tshark tire wireshark-common, qui pose une question debconf (capture non-root)
+# et bloquerait un build non interactif : on y répond d'avance.
+#
+# ⚠️ COUPLAGE EXTERIEUR — install_modules/10-deps.sh EXTRAIT cette liste du
+# Dockerfile (« la liste fait autorite dans le Dockerfile ») avec
+#   awk '/^RUN apt-get update && apt-get install/,/[^\\]$/'
+# Ce motif ne connait QUE `apt-get` : depuis le passage a apt-fast, il ne
+# capture plus que le bloc d'amorcage (aria2 curl ca-certificates) et
+# l'installation NATIVE (hors docker) repart avec une liste tronquee —
+# inst_deps_verify echoue sur build-essential/libtalloc-dev/libsctp-dev.
+# Le correctif est dans 10-deps.sh (accepter `apt-(get|fast)` dans l'awk ET
+# dans le sed qui suit), pas ici : ne pas repasser cette liste en apt-get pour
+# contourner le probleme.
+RUN echo 'wireshark-common wireshark-common/install-setuid boolean true' | debconf-set-selections
+RUN apt-fast update && apt-fast install -y --no-install-recommends \
     # Outils de build
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
     # Dépendances Osmocom Core & Network
@@ -28,7 +80,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgsm1-dev libgsm1 \
     iptables iproute2 asterisk ffmpeg \
     # Sync build-iso : psmisc (pkill/killall, cleanup) + pulseaudio (chaîne audio gapk/parec)
-    psmisc pulseaudio pulseaudio-utils binutils-arm-none-eabi
+    psmisc pulseaudio pulseaudio-utils binutils-arm-none-eabi \
+    # Toolchains alternatives : osmocom-bb jolly/testing et fixeria/burst_ind ne
+    # compilent qu'avec gcc-9 ; gcc-11 reste le compilateur par defaut du reste.
+    # (Ex-bloc apt dedie, supprime : les `update-alternatives` plus bas echouaient
+    #  « alternative path /usr/bin/gcc-9 doesn't exist » sans ces paquets.)
+    gcc-9 g++-9 gcc-11 g++-11 \
+    # log4cpp : etait installe a part avec le build-dep gnuradio (gr-gsm).
+    liblog4cpp5-dev \
+    # QEMU Calypso (fork bbaranoff/qemu) : venv + numpy/scipy pour l'outillage
+    # DSP, glib/pixman/slirp pour la cible arm-softmmu, ninja pour meson, socat
+    # pour les PTY de scripts/run.sh. (Ex-bloc apt-get juste avant le build QEMU.)
+    python3-venv python3-pip python3-numpy python3-scipy \
+    libglib2.0-dev libpixman-1-dev libslirp-dev socat ninja-build \
+    # Ex-Dockerfile.run — outillage d'exploitation du conteneur :
+    #   telnet   -> repli VTY (run_modules/21-abonnes-hlr.sh) + transport dashboard
+    #   whiptail -> menus de tools/vty-menu.sh et de start.sh
+    #   xz-utils -> `tar -xJf` du tarball Node 22 (bloc dashboard, en fin de fichier)
+    #   libasound2-plugins -> greffon ALSA->PulseAudio, EXIGE par configs/asound.conf
+    #        (`type pulse` sur gsm_out, gsm_in ET pcm.!default) : sans lui, toute
+    #        ouverture ALSA (gapk, mobile) echoue et l'audio est mort des 2 cotes
+    #   tshark/tcpdump/libcap2-bin -> capture ; libcap2-bin fournit le setcap ci-dessous
+    telnet nano whiptail xz-utils libasound2-plugins \
+    tcpdump tshark libcap2-bin
+
+# Capture non-root pour le dashboard et tcpdump. Position OBLIGATOIRE : dumpcap
+# n'existe qu'une fois wireshark-common installe (tire par tshark, juste au-dessus).
+RUN setcap cap_net_raw,cap_net_admin+eip "$(command -v dumpcap)"
 
 SHELL ["/bin/bash", "-c"]
 COPY configs/*conf /etc/asterisk/
@@ -167,6 +245,31 @@ RUN cd ${ROOT} && \
     # le mode PHY_MODE=qemu où QEMU émule un Calypso et exécute layer1.
     make nofirmware
 
+# ── Note historique — patch fake_trx TRXD v0 (RETIRE) ────────────────────────
+# Conserve verbatim : il documente une panne vecue. Il flottait dans
+# Dockerfile.run juste au-dessus du bloc firmware, avec lequel il n'a AUCUN
+# rapport — voisinage accidentel, pas lien de cause a effet.
+# ── Patch fake_trx : forcer TRXD v0 ─────────────────────────────────────────
+# osmo-bts-trx 1.10+ négocie TRXD v1 via SETFORMAT, mais trxcon (OsmocomBB)
+# ne supporte que v0. Le header v1 a 2 octets de plus → décalage des soft-bits
+# → BER constant 55/456 sur chaque frame → FBSB_SEARCH échoue en boucle.
+# Fix : forcer ver_req=0 dans la réponse SETFORMAT → le BTS reste en v0.
+# (patch TRXD v0 retire : burst_fwd.py:66 re-encode deja par interface,
+#  trxcon recoit du v0 quoi qu'il arrive -> le forcage etait inutile)
+
+# ── Firmware Calypso prebuild (layer1.highram.*) — ex-Dockerfile.run ─────────
+# `make nofirmware` ci-dessus ne construit justement PAS le firmware : on prend
+# les binaires prebuild de bbaranoff/firmware et on les depose la ou le mode
+# PHY_MODE=qemu les cherche. ORDRE IMPOSE : ce bloc exige A LA FOIS ce clone ET
+# l'arbre /opt/GSM/osmocom-bb ci-dessus — le placer plus haut ferait echouer les
+# cp et PHY_MODE=qemu partirait sans layer1.
+# (Le `rm -rf /opt/GSM/firmware` qui precedait le clone dans Dockerfile.run est
+#  supprime : ici le chemin n'existe pas encore, l'instruction etait morte.)
+RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
+RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.elf /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.elf
+RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.bin /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.bin
+RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.map /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.map
+
 # ── gsup-smsc-proto : SMSC externe connecté à OsmoHLR via GSUP ────────────────
 # Programmes : proto-smsc-daemon (réception MO SMS + relai MT via GSUP)
 #              proto-smsc-sendmt (injection MT SMS via socket UNIX local)
@@ -195,7 +298,9 @@ COPY scripts/. /etc/osmocom/
 COPY configs/*cfg /etc/osmocom/
 RUN mv /etc/osmocom/run.sh /root/run.sh
 # Copie des binaires vers /usr/bin pour systemd et installation des .service
-COPY scripts/gapk-start.sh /etc/osmocom/gapk-start.sh
+# (La `COPY scripts/gapk-start.sh /etc/osmocom/gapk-start.sh` qui etait ici est
+#  supprimee : `COPY scripts/. /etc/osmocom/` ci-dessus depose deja le fichier.
+#  Le RUN ci-dessous reste : le symlink et /var/lib/gapk sont uniques.)
 RUN chmod +x /etc/osmocom/gapk-start.sh && \
     ln -sf /etc/osmocom/gapk-start.sh /usr/local/bin/gapk-start.sh && \
     mkdir -p /var/lib/gapk
@@ -206,6 +311,13 @@ RUN cp -f /usr/local/bin/osmo* /usr/bin/ || true && \
     cp -f /usr/local/bin/gen-sms-* /usr/bin/ || true && \
     # Si tu as des fichiers .service dans configs/
     cp /etc/osmocom/configs/*.service /lib/systemd/system/ 2>/dev/null || true
+
+# ── Vérification binaires proto-SMSC ──────────────────────────────────────────
+# Ex-Dockerfile.run. Premier point du build ou les deux chemins testes sont
+# peuples (produits par gsup-smsc-proto, recopies dans /usr/bin juste au-dessus).
+RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
+    echo "proto-smsc binaries OK" || \
+    echo "WARNING: proto-smsc binaries not found in PATH"
 
 # 5. Fix Permissions & Systemd (Status 214/217)
 RUN sed -i 's/^CPUScheduling/#CPUScheduling/g' /lib/systemd/system/osmo-*.service && \
@@ -226,20 +338,69 @@ RUN systemctl enable osmo-bts-trx.service && \
 RUN mkdir -p /root/.osmocom/bb/ \
     && install -m755 ${ROOT}/osmocom-bb/src/host/trxcon/src/trxcon           /usr/local/bin/trxcon \
     && install -m755 ${ROOT}/osmocom-bb/src/host/layer23/src/mobile/mobile   /usr/local/bin/mobile \
-    && install -m755 ${ROOT}/osmocom-bb/src/host/virt_phy/src/virtphy        /usr/local/bin/virtphy \
-    && install -m755 ${ROOT}/osmocom-bb/src/host/layer23/src/misc/ccch_scan  /usr/local/bin/ccch_scan
+    && install -m755 ${ROOT}/osmocom-bb/src/host/virt_phy/src/virtphy        /usr/local/bin/virtphy
+# ccch_scan n'est plus installe ici : la branche fixeria/burst_ind, en fin de
+# fichier, ecrase de toute facon /usr/local/bin/ccch_scan par SA version (cp sans
+# `|| true`, donc obligatoire). Le binaire de master ne survivait jamais — c'est
+# la version burst_ind qui fait foi.
 
 # Confort du shell interactif. Pas de `source` ici : chaque RUN est un shell neuf,
 # ce serait sans effet — le fichier est lu a l'ouverture d'une session.
 RUN echo "alias faketrx='python3 ${ROOT}/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc
 # Prompt : root(rouge)@(bleu)<nom-container=\h>(jaune)☎️<dossier courant>(vert)#
 # \h = nom du container grâce à `docker run --hostname "$container_name"` (start.sh).
-RUN printf 'export PS1=%s\n' "'\[\e[1;31m\]\u\[\e[0m\]\[\e[1;34m\]@\[\e[0m\]\[\e[1;33m\]\h\[\e[0m\]☎️\[\e[1;32m\]\w\[\e[0m\]# '" >> ~/.bashrc
+# [refactor] LE PS1 ETAIT DEFINI DEUX FOIS, avec deux formats DIFFERENTS : ici
+# et dans Dockerfile.run. Bash lit ~/.bashrc de haut en bas -> c'est celui de
+# Dockerfile.run qui gagnait, et le prompt reellement affiche etait
+# `user@host:cwd☎️#`, pas celui decrit deux lignes plus haut. On ne garde QUE le
+# gagnant, a l'identique, pour ne rien changer au prompt visible ; l'explication
+# du `\h` ci-dessus reste vraie pour les deux formats.
+# ── Prompt interactif (root rouge / hostname bleu / cwd vert / ☎️#) ───────────
+RUN printf '%s\n' '' \
+    '### calypso-prompt ###' \
+    "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️# '" \
+    '### end calypso-prompt ###' >> /root/.bashrc
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 RUN chmod +x /root/run.sh
 
-# Répertoires pour le proto-SMSC
-RUN mkdir -p /var/log/osmocom /var/run/smsc
+# Répertoires pour le proto-SMSC + arborescence Asterisk (ex-Dockerfile.run,
+# ou ce mkdir faisait doublon avec celui-ci ; seul le chmod 755 etait unique).
+# Position : apres l'installation d'asterisk (liste apt) et apres WORKDIR /etc/osmocom.
+RUN mkdir -p /var/log/osmocom /var/run/smsc \
+        /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk \
+        /root/.osmocom/bb && \
+    chmod 755 /etc/asterisk /var/lib/asterisk /var/log/asterisk \
+        /var/run/asterisk /var/log/osmocom
+
+# ── PulseAudio system-mode : config bakée au build ────────────────────────────
+# (ex-Dockerfile.run — depend du paquet pulseaudio de la liste apt en tete ;
+#  place ici, tard, pour ne pas invalider le cache des ~200 lignes de compilation.)
+# Cause racine du warning "[audio] PulseAudio injoignable — audio dégradé" :
+# le démon system-mode lancé au runtime tournait SANS auth-anonymous (le patch
+# de start-direct.sh arrivait après son démarrage) → 'pactl' renvoyait
+# "Access denied", et un 2e démon ne pouvait pas démarrer ("Daemon already
+# running"). On bake ici la config pour que TOUT démon soit joignable dès son
+# lancement : socket anonyme + null-sinks gsm_audio/gsm_mic + root dans
+# pulse-access.
+#
+# [2026-08-12] gsm_mic AJOUTÉ ICI. Il n'était créé que par
+# scripts/pulse-gsm-setup.sh, appelé tard dans run.sh (après osmo-start.sh) :
+# un HLR qui rate coupe run.sh (set -e) et le sink n'existe jamais. Or
+# configs/asound.conf fait pointer la CAPTURE gsm_in sur gsm_mic.monitor, et
+# gapk_io abandonne lecture ET capture si la capture échoue → appel muet des
+# deux côtés. Les deux sinks doivent naître avec le démon, pas avec un script.
+RUN set -eux; \
+    usermod -aG pulse-access root 2>/dev/null || true; \
+    test -f /etc/pulse/system.pa; \
+    sed -i 's|^#\?load-module module-native-protocol-unix.*|load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native|' /etc/pulse/system.pa; \
+    grep -q 'auth-anonymous=1' /etc/pulse/system.pa \
+      || echo 'load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native' >> /etc/pulse/system.pa; \
+    grep -q 'sink_name=gsm_audio' /etc/pulse/system.pa \
+      || echo 'load-module module-null-sink sink_name=gsm_audio format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Audio' >> /etc/pulse/system.pa; \
+    grep -q 'sink_name=gsm_mic' /etc/pulse/system.pa \
+      || echo 'load-module module-null-sink sink_name=gsm_mic format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Mic' >> /etc/pulse/system.pa; \
+    sed -i 's|^load-module module-suspend-on-idle|#load-module module-suspend-on-idle|' /etc/pulse/system.pa; \
+    mkdir -p /var/run/pulse && chown -R pulse:pulse /var/run/pulse
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QEMU Calypso — RAN virtuel (baseband émulé)
@@ -256,11 +417,10 @@ RUN mkdir -p /var/log/osmocom /var/run/smsc
 # Voir scripts/run.sh PHY_MODE=qemu pour l'orchestration runtime.
 # ─────────────────────────────────────────────────────────────────────────────
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-venv python3-pip python3-numpy python3-scipy \
-    libglib2.0-dev libpixman-1-dev libslirp-dev \
-    socat ninja-build \
-    && rm -rf /var/lib/apt/lists/*
+# (Le `apt-get install python3-venv python3-pip python3-numpy python3-scipy
+#  libglib2.0-dev libpixman-1-dev libslirp-dev socat ninja-build` qui etait ici
+#  a ete fusionne dans la liste apt-fast en tete de fichier : une seule liste,
+#  un seul endroit ou la faire evoluer. Aucun paquet perdu.)
 
 # Build QEMU fork bbaranoff/qemu (cible arm-softmmu, machine "calypso")
 RUN cd /opt/GSM \
@@ -273,7 +433,6 @@ RUN cd /opt/GSM \
     && ../configure --target-list=arm-softmmu --prefix=/opt/GSM/qemu-install --disable-werror \
     && make -j$(nproc) \
     && make install \
-    && cd /opt/GSM/qemu-src/tools/calypso-ipc-device && make clean && make \
     && cp /opt/GSM/qemu-install/bin/qemu-system-arm /usr/local/bin/qemu-system-arm
 
 # Layout stable attendu par scripts/run.sh : /opt/GSM/qemu/{build,bridge.py,sercomm_udp.py,...}
@@ -281,6 +440,12 @@ RUN mkdir -p /opt/GSM/qemu/build \
     && cp /opt/GSM/qemu-src/*.py /opt/GSM/qemu/ 2>/dev/null || true \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
     && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
+
+# ROM DSP binaire, derivee du .txt symlinke juste au-dessus (ex-Dockerfile.run).
+# Semantique inchangee : elle etait deja generee AVANT le `git pull` de qemu-src
+# de l'image run. Pour un /opt/GSM/calypso_dsp a jour il faudrait la rejouer
+# APRES ce pull — ce n'est pas l'objet de ce decoupage.
+RUN python3 /opt/GSM/qemu-src/tools/dsp_txt2bin.py /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp
 
 # Build le DEVICE IPC calypso-ipc-device (tools/) — le Dockerfile ne le buildait
 # PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS
@@ -297,7 +462,6 @@ RUN sed -nE 's|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe mu
         /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list \
     && apt-get update \
     && apt-get build-dep -y gnuradio \
-    && apt-get install -y --no-install-recommends liblog4cpp5-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # On TÉLÉCHARGE et on exécute CE script (le gist, pinné au commit fcdb409).
@@ -315,6 +479,12 @@ RUN git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
     && make -j"$(nproc)" \
     && make install
 
+# Dernier maillon de la chaine venv/gr-gsm (ex-Dockerfile.run). Le venv ~/.env
+# est cree par le gist ci-dessus : ces deux lignes ne peuvent pas remonter plus
+# haut. matplotlib est consomme par tools/fft_global.sh et tools/matrix.sh.
+RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
+RUN . ~/.env/bin/activate && pip install matplotlib
+
 # ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qemu-src/run.sh casse) :
 # si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
 # record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
@@ -330,18 +500,35 @@ RUN cd /opt/GSM \
     && make install \
     && ldconfig
 
+# ── si_bridge.py : la version qemu-src ecrase celle du depot ─────────────────
+# Ex-Dockerfile.run. ⚠️ ORDRE CRITIQUE : ce `cp` DOIT rester APRES
+# `COPY opt-gsm/. /opt/GSM/` ci-dessus. Place avant, c'est opt-gsm/si_bridge.py
+# (version du depot) qui reprendrait le dessus et le demodulateur du SI reel
+# changerait EN SILENCE — panne visible seulement par un camping qui ne se fait
+# plus, sans message.
+# Comportement identique a avant le decoupage : c'est la version qemu-src qui
+# est en place dans l'image. Quelle copie fait foi (opt-gsm/si_bridge.py du
+# depot ou qemu-src/opt-gsm-scripts/si_bridge.py) reste un arbitrage A TRANCHER
+# — cf. start-nitb.sh l.7 : « 4 copies de si_bridge.py, toutes divergentes ».
+RUN cp /opt/GSM/qemu-src/opt-gsm-scripts/si_bridge.py /opt/GSM/si_bridge.py
+
 # ── GCC 9 pour osmocom-bb branches expérimentales (jolly/testing, burst_ind) ─
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc-9 g++-9 gcc-11 g++-11 \
-    && rm -rf /var/lib/apt/lists/* \
-    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 \
+# gcc-9 et gcc-11 sont installés avec le reste, plus haut : ici on ne fait que
+# déclarer les alternatives, dont l'ordre compte pour osmocom-bb.
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 \
        --slave /usr/bin/g++ g++ /usr/bin/g++-9 \
     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110 \
        --slave /usr/bin/g++ g++ /usr/bin/g++-11
 
 RUN update-alternatives --set gcc /usr/bin/gcc-9
 
-RUN git clone https://github.com/bbaranoff/osmo_egprs
+# Chemin EXPLICITE. Sans lui, ce clone heritait du WORKDIR /etc/osmocom (pose
+# beaucoup plus haut, jamais remis a ${ROOT}) et atterrissait dans
+# /etc/osmocom/osmo_egprs — masque au runtime par le montage de start.sh l.505,
+# et surtout PAS la ou Dockerfile.run va faire son `git pull`. Deux arbres, deux
+# HEAD, un seul utilise. /opt/GSM/osmo_egprs est le chemin nominal, teste en
+# premier par build-iso.sh l.964 et update.sh l.329.
+RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
@@ -366,6 +553,84 @@ RUN git clone --branch fixeria/burst_ind --depth 1 \
        /usr/local/bin/cell_log 2>/dev/null || true
 
 RUN update-alternatives --set gcc /usr/bin/gcc-11
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Node.js + dashboard web osmo-egprs-web (ex-Dockerfile.run, chaine complete)
+# ═════════════════════════════════════════════════════════════════════════════
+# Place EN FIN DE FICHIER a dessein : aucune etape du build ne depend de Node,
+# et la fin de fichier preserve le cache des couches longues de compilation.
+# L'ORDRE INTERNE DE CETTE CHAINE EST CONTRAINT — voir les ⚠️ ci-dessous.
+RUN if [ ! -d "/opt/osmo-egprs-web/" ]; then git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web; fi
+
+# ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
+# Le dashboard /opt/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
+# local, pas de docker) et est servi sur :8080. Le DÉMARRAGE est géré par
+# start-direct.sh (`systemctl restart osmo-egprs-web`) — ici on ne fait
+# qu'INSTALLER le runtime + les dépendances + le unit (enable au boot).
+#
+# Node 22 (LTS « Jod ») — même famille majeure que l'ISO, qui installe
+# nodesource setup_22.x (build-iso.sh). Garder les deux alignés : le dashboard
+# est le même server.js des deux côtés.
+ARG NODE_VERSION=v22.23.2
+RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz" \
+        -o /tmp/node.tar.xz && \
+    mkdir -p /opt/node && \
+    tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 && \
+    rm -f /tmp/node.tar.xz && \
+    ln -sf /opt/node/bin/node /usr/local/bin/node && \
+    ln -sf /opt/node/bin/npm  /usr/local/bin/npm && \
+    ln -sf /opt/node/bin/npx  /usr/local/bin/npx && \
+    node --version
+# Dépendances JS (ws) — node_modules est versionné dans le repo, on (re)installe
+# pour garantir la cohérence ; non-fatal si déjà présent / réseau absent.
+RUN cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
+# Unit systemd (fichier versionné dans le repo osmo-nitb-for-calypso, source unique).
+# Le START reste géré par start-direct.sh (`systemctl restart osmo-egprs-web`).
+COPY services/osmo-egprs-web.service /etc/systemd/system/osmo-egprs-web.service
+RUN ln -sf /etc/systemd/system/osmo-egprs-web.service \
+        /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service
+
+RUN cd /opt/osmo-egprs-web && git pull
+
+# ── Dashboard web : install-web-service.sh joue AU BOOT ───────────────────────
+# [2026-08-12] Remplace le geste manuel `bash /opt/osmo-egprs-web/install-web-service.sh`
+# qu'il fallait refaire dans chaque conteneur pour armer le HTTPS.
+#
+# Ce qui reste au BUILD (deja plus haut) : node, `npm install`, le unit du
+# service. Ce qui passe au BOOT : le certificat TLS auto-signe — une cle privee
+# generee au build serait la meme pour tous ceux qui tirent l'image. Le detail
+# du raisonnement est dans services/osmo-egprs-web-install.service.
+#
+# ⚠️ ORDRE : ce bloc DOIT rester APRES le `RUN cd /opt/osmo-egprs-web && git pull`
+# ci-dessus. La COPY ci-dessous modifie un fichier suivi par ce depot ; placee
+# avant, le `git pull` echouerait (« local changes would be overwritten »).
+#
+# SOURCE UNIQUE DU UNIT. install-web-service.sh installe le unit en le copiant
+# depuis /opt/osmo-egprs-web/osmo-egprs-web.service — la copie du depot
+# osmo-egprs-web, qui avait DIVERGE de celle-ci (elle avait perdu
+# `CAP_IFACE=any`, donc la capture du dashboard). On ecrase donc cette copie par
+# services/osmo-egprs-web.service : les deux emplacements servent desormais le
+# meme fichier, et le script ne peut plus reintroduire la regression.
+COPY services/osmo-egprs-web.service /opt/osmo-egprs-web/osmo-egprs-web.service
+# Fail-fast : si l'amont retire le script, on le sait au build, pas au boot par
+# un HTTPS muet.
+RUN test -s /opt/osmo-egprs-web/install-web-service.sh
+# [2026-08-12] REJOUER L'INSTALL WEB APRES LE PULL.
+# Le `npm install` plus haut (le premier des deux) tourne AVANT le `git pull` de
+# /opt/osmo-egprs-web ci-dessus : si le
+# pull rapatrie un package.json avec une dependance en plus, node_modules reste
+# a l'etat d'avant et le dashboard tombe au demarrage sur un `Cannot find
+# module` — au boot, dans le journal systemd, loin du build qui l'a cause. On
+# rejoue donc les dependances APRES le pull.
+# Non fatal (`|| true`) : node_modules est versionne dans le depot, un build
+# hors-ligne reste valable. Mais la sortie est conservee, pas avalee.
+RUN cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
+# Le reste de install-web-service.sh (certificat TLS + unit + enable) est joue AU
+# BOOT par osmo-egprs-web-install.service — cf. le commentaire de ce unit : ni
+# les `systemctl` ni la generation d'une cle privee n'ont leur place au build.
+COPY services/osmo-egprs-web-install.service /etc/systemd/system/osmo-egprs-web-install.service
+RUN ln -sf /etc/systemd/system/osmo-egprs-web-install.service \
+        /etc/systemd/system/multi-user.target.wants/osmo-egprs-web-install.service
 
 # --- Metadonnees de l'image ---------------------------------------------------
 # Regroupees a la fin : elles decrivent le conteneur qui tournera, pas une etape
