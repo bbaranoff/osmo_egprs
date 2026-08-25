@@ -64,9 +64,50 @@ for arg in "$@"; do case "$arg" in
     --node=*)       ISO_NODE="${arg#*=}" ;;
     --hub-ip=*)     ISO_HUB_IP="${arg#*=}" ;;
     --subnet=*)     ISO_SUBNET="${arg#*=}" ;;
+    --kb=*)         OSMO_ISO_KB="${arg#*=}" ;;
 esac; done
 
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LES QUESTIONS : toutes ici, une seule fois, avant que quoi que ce soit ne parte
+# ══════════════════════════════════════════════════════════════════════════════
+# Une question posee au milieu d'une construction d'une heure attend un humain
+# qui, lui, est parti. Et posee dans l'IMAGE - au premier boot - elle bloque
+# chaque machine qui demarre, alors que la reponse est la meme pour toutes.
+#
+# Tout ce qui se demande se demande donc ICI :
+#   - avant la construction, pour ne jamais interrompre une passe en cours ;
+#   - une seule fois, meme quand on produit les DEUX images : la reponse part
+#     dans l'environnement (export), et les passes filles en heritent ;
+#   - jamais en CI : sans terminal, on prend le defaut au lieu d'attendre un
+#     EOF qui, sous set -e, ferait echouer la construction.
+#
+# --kb=XX ou OSMO_ISO_KB=XX court-circuitent la question.
+ISO_KB_DEFAULT="fr"
+if [ -z "${OSMO_ISO_KB:-}" ]; then
+    if [ -t 0 ]; then
+        echo -e "${CYAN}${BOLD}══ Clavier de l'image ══${NC}"
+        echo "  1) fr   2) us   3) de   4) es   5) it"
+        echo "  6) pt   7) gb   8) be   9) ch   0) autre"
+        read -rp "  Choix [1] : " _kb_choice || _kb_choice=""
+        case "${_kb_choice:-1}" in
+            1|"") OSMO_ISO_KB="fr" ;;
+            2) OSMO_ISO_KB="us" ;;  3) OSMO_ISO_KB="de" ;;
+            4) OSMO_ISO_KB="es" ;;  5) OSMO_ISO_KB="it" ;;
+            6) OSMO_ISO_KB="pt" ;;  7) OSMO_ISO_KB="gb" ;;
+            8) OSMO_ISO_KB="be" ;;  9) OSMO_ISO_KB="ch" ;;
+            0) read -rp "  Layout (fr, us, ru, ar...) : " OSMO_ISO_KB || OSMO_ISO_KB=""
+               OSMO_ISO_KB="${OSMO_ISO_KB:-$ISO_KB_DEFAULT}" ;;
+            *) OSMO_ISO_KB="$ISO_KB_DEFAULT" ;;
+        esac
+    else
+        OSMO_ISO_KB="$ISO_KB_DEFAULT"
+        echo -e "  ${YELLOW}Pas de terminal : clavier ${OSMO_ISO_KB} (--kb=XX pour changer)${NC}"
+    fi
+fi
+export OSMO_ISO_KB
+echo -e "  ${GREEN}✓${NC} clavier de l'image : ${CYAN}${OSMO_ISO_KB}${NC}"
 
 # ── Sans argument : LES DEUX images ─────────────────────────────────────────
 # Un WAN a besoin de deux choses differentes - un hub SS7 et des noeuds - et
@@ -127,10 +168,14 @@ ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common
 if command -v apt-get &>/dev/null; then
     echo -e "${GREEN}[0/9] Installation des paquets hote (apt)...${NC}"
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq || true
+    # Options passees EN LIGNE, pas via /etc/apt : on est sur la machine de
+    # l'utilisateur, pas dans un rootfs jetable. On allege ce qui est telecharge
+    # (traductions) sans toucher aux garanties d'ecriture de son dpkg.
+    HOST_APT_FAST="-o Acquire::Languages=none -o Acquire::Retries=3 -o Acquire::http::Pipeline-Depth=5"
+    apt-get update -qq $HOST_APT_FAST || true
     # isolinux est optionnel (isohybrid) : on n'echoue pas s'il manque.
-    apt-get install -y --no-install-recommends $ISO_HOST_PKGS \
-        || apt-get install -y --no-install-recommends \
+    apt-get install -y $HOST_APT_FAST --no-install-recommends $ISO_HOST_PKGS \
+        || apt-get install -y $HOST_APT_FAST --no-install-recommends \
            squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git
 else
     echo -e "${YELLOW}apt-get absent : verification seule des outils hote.${NC}"
@@ -656,6 +701,28 @@ cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 chroot "$ROOTFS" bash -c '
 set -e; export DEBIAN_FRONTEND=noninteractive
 export DPKG_OPTIONS="--force-confold --force-confdef"
+
+# ── apt/dpkg rapides ────────────────────────────────────────────────────────
+# Ce rootfs est jetable : il est fabrique, empaquete en squashfs, puis efface.
+# Les garanties de durabilite que dpkg paie a chaque fichier - un fsync par
+# fichier deballe - n ont donc aucune valeur ici, et elles dominent le temps de
+# construction. force-unsafe-io les coupe : c est le reglage qu utilisent les
+# images Docker officielles, pour la meme raison.
+#
+# Le reste ne joue pas sur la durabilite mais sur ce qui est TELECHARGE :
+#   Languages=none    supprime les traductions de descriptions (inutiles ici)
+#   Pipeline-Depth    plusieurs requetes en vol au lieu d une a la fois
+#   Retries           un miroir qui bronche ne fait plus echouer la construction
+#                     entiere - ce chroot tourne sous set -e
+mkdir -p /etc/dpkg/dpkg.cfg.d /etc/apt/apt.conf.d
+echo "force-unsafe-io" > /etc/dpkg/dpkg.cfg.d/02-unsafe-io
+cat > /etc/apt/apt.conf.d/99osmo-fast <<APTFAST
+Acquire::Languages "none";
+Acquire::Retries "3";
+Acquire::http::Pipeline-Depth "5";
+Dpkg::Use-Pty "0";
+APTFAST
+
 APT_OPTS="-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
 
 # Preseed debconf
@@ -685,7 +752,7 @@ apt-get update -qq
 #   tcpdump  les captures GSMTAP/M3UA. Sans lui, une capture lancee en arriere
 #            plan echoue en silence et le pcap reste vide.
 #   git      la synchro du depot depuis la VM (update.sh).
-apt-get install -y $APT_OPTS --no-install-recommends netcat tcpdump git
+apt-get install -y $APT_OPTS --no-install-recommends netcat-openbsd tcpdump git logrotate
 
 # deb-src + build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw,
 # gmp, log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local.
@@ -1178,6 +1245,45 @@ cat > "$ROOTFS/etc/tmpfiles.d/osmo-captures.conf" <<'EOF'
 d /run/user/0/osmo-nitb/captures 0755 root root 1h
 EOF
 
+# 3bis. Le ring, plutot qu'un fichier qui gonfle
+# Purger toutes les heures ne protege de rien : entre deux passages, UNE
+# capture continue peut a elle seule remplir la RAM - et sur un lien charge,
+# c'est l'affaire de quelques minutes, pas d'une nuit. Un fichier unique en -w
+# croit sans limite ; -C <Mo> -W <n> lui substitue un ANNEAU de n fichiers qui
+# se recyclent : la capture ne s'arrete jamais, l'empreinte reste bornee.
+#
+# Par un wrapper plutot qu'en corrigeant les appelants : la capture GSMTAP est
+# lancee depuis le dashboard web (autre depot, clone au build) et depuis des
+# outils qui ne vivent pas dans ce depot-ci. Un wrapper vaut pour tous, y
+# compris ceux qu'on ajoutera. /usr/local/bin precede /usr/bin dans le PATH :
+# l'appel "tcpdump" passe par lui sans que rien n'ait a etre reecrit.
+#
+# Il ne force rien quand l'appelant a deja choisi (-C ou -W presents), et sans
+# -w il n'y a rien a borner.
+cat > "$ROOTFS/usr/local/bin/tcpdump" <<'TCPDUMPEOF'
+#!/bin/sh
+# tcpdump - wrapper osmo_egprs : impose un anneau aux captures sur fichier.
+# La racine du live est un tmpfs ; une capture non bornee finit par remplir la
+# RAM, et l'erreur tombe bien plus tard, sur une machine sans disque plein.
+# Reglable : OSMO_PCAP_RING_MB (defaut 32), OSMO_PCAP_RING_FILES (defaut 5).
+REAL=/usr/bin/tcpdump
+[ -x "$REAL" ] || REAL=/usr/sbin/tcpdump
+
+has_w=0; has_ring=0
+for a in "$@"; do
+    case "$a" in
+        -w|-w*)        has_w=1 ;;
+        -C|-C*|-W|-W*) has_ring=1 ;;
+    esac
+done
+
+if [ "$has_w" = 1 ] && [ "$has_ring" = 0 ]; then
+    exec "$REAL" -C "${OSMO_PCAP_RING_MB:-32}" -W "${OSMO_PCAP_RING_FILES:-5}" "$@"
+fi
+exec "$REAL" "$@"
+TCPDUMPEOF
+chmod +x "$ROOTFS/usr/local/bin/tcpdump"
+
 # ── Purge complete a chaque relance ─────────────────────────────────────────
 # Les caps ci-dessus empechent la derive PENDANT une session ; celui-ci repart
 # d'une racine propre A CHAQUE DEMARRAGE. Sur un live c'est sans perte : ces
@@ -1249,51 +1355,78 @@ if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
 fi
 chroot "$ROOTFS" systemctl enable ssh 2>/dev/null || true
 
-# Script de configuration clavier au premier boot
-cat > "$ROOTFS/etc/profile.d/01-keyboard-setup.sh" <<'KBSCRIPT'
+# ── Clavier : fige DANS l'image, plus demande au premier boot ───────────────
+# Le choix se fait au debut de cette construction (voir "LES QUESTIONS"). Ici on
+# ne fait que l'ecrire. L'ancienne version posait la question dans
+# /etc/profile.d au premier login : chaque machine du banc s'arretait alors sur
+# un menu, et une VM demarree sans console attendait une reponse que personne
+# n'allait donner.
+cat > "$ROOTFS/etc/default/keyboard" <<KBCONF
+XKBMODEL="pc105"
+XKBLAYOUT="${OSMO_ISO_KB}"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"
+KBCONF
+chroot "$ROOTFS" setupcon --force 2>/dev/null || true
+chroot "$ROOTFS" dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
+
+# Ce qui reste au login : le rappel, qui n'attend rien.
+# La commande DEPEND du role : le hub n'a pas de coeur GSM a demarrer, et
+# start-direct.sh y chercherait un BSC, un MSC, une BTS qui n'existent pas.
+# Lui dicter start-direct.sh, c'est envoyer droit dans une erreur.
+if [ "$ISO_ROLE" = "interstp" ]; then
+    OSMO_START_HINT='Pour demarrer le hub SS7 : /opt/osmo_egprs/start-interstp.sh'
+    OSMO_START_HINT2='  (etat des noeuds attaches : ./start-interstp.sh --status)'
+else
+    OSMO_START_HINT='Pour demarrer la stack : /opt/osmo_egprs/start-direct.sh --node N'
+    OSMO_START_HINT2='  (N de 1 a 9 : il fixe les point codes 1.<N>1.x du noeud)'
+fi
+cat > "$ROOTFS/etc/profile.d/01-osmo-disclaimer.sh" <<KBSCRIPT
 #!/bin/bash
-[ -f /var/lib/osmo-kb-done ] && return 0
-[ "$(id -u)" -ne 0 ] && return 0
+[ "\$(id -u)" -ne 0 ] && return 0
+[ -n "\${OSMO_DISCLAIMER_SHOWN:-}" ] && return 0
+export OSMO_DISCLAIMER_SHOWN=1
+echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lance automatiquement."
+echo -e "  \033[1;33m${OSMO_START_HINT}\033[0m"
+echo -e "  \033[0;36m${OSMO_START_HINT2}\033[0m"
+echo -e "  clavier : \033[1;32m\$(awk -F\\" '/^XKBLAYOUT/{print \$2}' /etc/default/keyboard 2>/dev/null)\033[0m  \033[0;36m(changer : osmo-keyboard)\033[0m"
+echo ""
+KBSCRIPT
 
-echo ""
-echo -e "\033[1;36m══ Configuration clavier ══\033[0m"
-echo ""
-echo "  1) fr    - Francais (AZERTY)"
-echo "  2) us    - English (QWERTY)"
-echo "  3) de    - Deutsch (QWERTZ)"
-echo "  4) es    - Espanol"
-echo "  5) it    - Italiano"
-echo "  6) pt    - Portugues"
-echo "  7) gb    - UK English"
-echo "  8) be    - Belge"
-echo "  9) ch    - Suisse"
-echo "  0) Autre (saisie manuelle)"
-echo ""
-read -rp "  Choix [1] : " KB_CHOICE
-KB_CHOICE="${KB_CHOICE:-1}"
+chmod +x "$ROOTFS/etc/profile.d/01-osmo-disclaimer.sh"
+rm -f "$ROOTFS/etc/profile.d/01-keyboard-setup.sh"
 
-case "$KB_CHOICE" in
-    1) KB_LAYOUT="fr" ;;
-    2) KB_LAYOUT="us" ;;
-    3) KB_LAYOUT="de" ;;
-    4) KB_LAYOUT="es" ;;
-    5) KB_LAYOUT="it" ;;
-    6) KB_LAYOUT="pt" ;;
-    7) KB_LAYOUT="gb" ;;
-    8) KB_LAYOUT="be" ;;
-    9) KB_LAYOUT="ch" ;;
-    0)
-        read -rp "  Layout (ex: fr, us, de, ru, ar...) : " KB_LAYOUT
-        KB_LAYOUT="${KB_LAYOUT:-us}"
-        ;;
-    *) KB_LAYOUT="fr" ;;
-esac
+# Le choix du clavier reste offert - mais QUAND ON LE DEMANDE. C'est le meme
+# menu qu'avant ; ce qui change, c'est qu'il ne s'interpose plus entre le login
+# et le shell : une VM sans console ne peut plus rester bloquee dessus.
+cat > "$ROOTFS/usr/local/bin/osmo-keyboard" <<'KBCMD'
+#!/bin/bash
+# osmo-keyboard - change la disposition clavier du systeme, a la demande.
+[ "$(id -u)" -ne 0 ] && { echo "Root requis."; exit 1; }
 
-echo ""
-echo -e "  \033[1;32m→ Clavier : ${KB_LAYOUT}\033[0m"
+if [ -n "$1" ]; then
+    KB_LAYOUT="$1"
+else
+    echo ""
+    echo -e "\033[1;36m== Configuration clavier ==\033[0m"
+    echo "  1) fr    2) us    3) de    4) es    5) it"
+    echo "  6) pt    7) gb    8) be    9) ch    0) autre"
+    echo ""
+    read -rp "  Choix [1] : " KB_CHOICE
+    case "${KB_CHOICE:-1}" in
+        1|"") KB_LAYOUT="fr" ;;
+        2) KB_LAYOUT="us" ;;  3) KB_LAYOUT="de" ;;
+        4) KB_LAYOUT="es" ;;  5) KB_LAYOUT="it" ;;
+        6) KB_LAYOUT="pt" ;;  7) KB_LAYOUT="gb" ;;
+        8) KB_LAYOUT="be" ;;  9) KB_LAYOUT="ch" ;;
+        0) read -rp "  Layout (fr, us, ru, ar...) : " KB_LAYOUT
+           KB_LAYOUT="${KB_LAYOUT:-us}" ;;
+        *) KB_LAYOUT="fr" ;;
+    esac
+fi
 
 loadkeys "$KB_LAYOUT" 2>/dev/null || true
-
 cat > /etc/default/keyboard <<KBCONF
 XKBMODEL="pc105"
 XKBLAYOUT="${KB_LAYOUT}"
@@ -1301,20 +1434,11 @@ XKBVARIANT=""
 XKBOPTIONS=""
 BACKSPACE="guess"
 KBCONF
-
 setupcon --force 2>/dev/null || true
 dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
-
-touch /var/lib/osmo-kb-done
-
-echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lance automatiquement."
-echo -e "  \033[1;33mPour demarrer la stack manuellement : /opt/osmo_egprs/start-direct.sh\033[0m"
-
-echo -e "  \033[1;32m✓ Clavier configure (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
-echo ""
-KBSCRIPT
-
-chmod +x "$ROOTFS/etc/profile.d/01-keyboard-setup.sh"
+echo -e "  \033[1;32mClavier : ${KB_LAYOUT}\033[0m   (sans persistance, revient au reboot)"
+KBCMD
+chmod +x "$ROOTFS/usr/local/bin/osmo-keyboard"
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 
 echo -e "  ${GREEN}✓${NC} config terminee"
@@ -1355,6 +1479,34 @@ menuentry "osmo_egprs - Live verbose (toram - RAM ~6 Go)" {
 }
 menuentry "osmo_egprs - Copy to RAM (toram - RAM ~6 Go)" {
     linux  /boot/vmlinuz boot=live toram copytoram quiet
+    initrd /boot/initrd.img
+}
+
+# ── Persistance ─────────────────────────────────────────────────────────────
+# Sans elle, la racine est un overlay tmpfs : tout ce qui s'ecrit vit en RAM et
+# meurt au reboot - configs SS7 posees a la main, base HLR, journaux compris.
+# C'est aussi ce qui rendait l'espace si vite compte : la pile ecrivait dans la
+# memoire, pas sur un disque.
+#
+# PAS de toram ici, et c'est le point : avec toram le systeme est recopie en RAM
+# et l'overlay y reste, ce qui annulerait l'interet. Sans lui, live-boot monte
+# l'union sur le volume de persistance et les ecritures atterrissent sur le
+# medium.
+#
+# Cote support, il faut un volume ETIQUETE "persistence" contenant un fichier
+# persistence.conf dont la seule ligne utile est "/ union" :
+#
+#   sudo mkfs.ext4 -L persistence /dev/sdX3
+#   sudo mount /dev/sdX3 /mnt && echo "/ union" | sudo tee /mnt/persistence.conf
+#
+# En VM, un second disque suffit. Sans volume ainsi etiquete, cette entree
+# demarre exactement comme un live ordinaire : rien ne casse, rien n'est garde.
+menuentry "osmo_egprs - Live PERSISTANT (ecrit sur le medium, pas en RAM)" {
+    linux  /boot/vmlinuz boot=live persistence persistence-encryption=none quiet
+    initrd /boot/initrd.img
+}
+menuentry "osmo_egprs - Live PERSISTANT verbose" {
+    linux  /boot/vmlinuz boot=live persistence persistence-encryption=none
     initrd /boot/initrd.img
 }
 GRUB

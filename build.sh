@@ -3,14 +3,20 @@ set -euo pipefail
 
 # 0. Parsing des arguments
 NO_CACHE=""
+LITE=0
 for arg in "$@"; do
     case "$arg" in
         --no-cache)
             NO_CACHE="--no-cache"
             ;;
+        --lite)
+            LITE=1
+            ;;
         -h|--help)
-            echo "Usage: sudo $0 [--no-cache]"
+            echo "Usage: sudo $0 [--no-cache] [--lite]"
             echo "  --no-cache   Force la reconstruction complete de l'image (paquets propres)."
+            echo "  --lite       Construit EN PLUS osmocom-nitb:lite : la meme pile, sans les"
+            echo "               arbres de sources de /opt/GSM (~4 Go sur 11). Voir Dockerfile.lite."
             exit 0
             ;;
         *)
@@ -65,4 +71,23 @@ if docker build $NO_CACHE . -t osmocom-nitb; then
 else
     echo -e "\033[0;31m[ERREUR] Le build Docker a echoue.\033[0m"
     exit 1
+fi
+
+# 6. Image lite : la meme pile, sans les arbres de sources
+# osmocom-nitb embarque /opt/GSM - les arbres de construction de gnuradio,
+# gr-gsm, qemu, libosmocore... 4 Go sur 11, qui ont servi a COMPILER et ne
+# servent plus a rien ensuite : ce qui tourne vit dans /usr/local.
+# Dockerfile.lite les retire et aplatit le resultat (voir son entete : effacer
+# dans une couche de plus ne rend aucun espace).
+if [[ "$LITE" -eq 1 ]]; then
+    echo "--- Lancement du build de l'image osmocom-nitb:lite ---"
+    if docker build $NO_CACHE -f Dockerfile.lite --build-arg BASE=osmocom-nitb \
+                   . -t osmocom-nitb:lite; then
+        echo -e "\033[0;32m[OK] Image osmocom-nitb:lite construite.\033[0m"
+        docker images --format '  {{.Repository}}:{{.Tag}}\t{{.Size}}' \
+            | grep -E '^\s+osmocom-nitb:(latest|lite)' || true
+    else
+        echo -e "\033[0;31m[ERREUR] Le build de l'image lite a echoue.\033[0m"
+        exit 1
+    fi
 fi
