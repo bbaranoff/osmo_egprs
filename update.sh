@@ -85,10 +85,8 @@ need_pkg() {   # $1=commande  $2..=paquets candidats, dans l'ordre
     return 1
 }
 
-APT_REFRESHED=0
-need_pkg git git
-need_pkg nc  netcat-openbsd netcat-traditional netcat socat
-need_pkg tcpdump tcpdump
+APT_REFRESHED=1
+need_pkg socat socat
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /usr/local/sbin/osmo-sync.sh - animation puis synchro, ecrit UNE fois
