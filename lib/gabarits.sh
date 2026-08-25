@@ -1,28 +1,28 @@
 # =============================================================================
-#  lib/gabarits.sh — le moteur de gabarits de configuration d'osmo_egprs
+#  lib/gabarits.sh - le moteur de gabarits de configuration d'osmo_egprs
 # =============================================================================
 #
-#  CE FICHIER EST UNE EXTRACTION, PAS UNE RÉÉCRITURE.
+#  CE FICHIER EST UNE EXTRACTION, PAS UNE REECRITURE.
 #  Les fonctions ci-dessous viennent telles quelles de start-direct.sh.legacy
-#  (L65-76, L106-258, L499-511). Elles n'ont pas été retouchées : le jour où
-#  un gabarit change, on veut pouvoir comparer ligne à ligne avec l'ancien.
+#  (L65-76, L106-258, L499-511). Elles n'ont pas ete retouchees : le jour ou
+#  un gabarit change, on veut pouvoir comparer ligne a ligne avec l'ancien.
 #
-#  POURQUOI LES SORTIR DU POINT D'ENTRÉE.
+#  POURQUOI LES SORTIR DU POINT D'ENTREE.
 #  Elles sont la SEULE chose que start-direct.sh faisait et que personne
-#  d'autre ne fait : substituer __ENCRYPTION__, __MCC__, __KI__, __ARFCN__ …
-#  dans configs/*.cfg puis les déposer dans /etc/osmocom, /etc/asterisk et
-#  ~/.osmocom/bb. Sans elles, les démons du cœur démarrent sur les fichiers
-#  qu'un run précédent a laissés — et `ENCRYPTION=a5 0` n'a aucun effet, en
+#  d'autre ne fait : substituer __ENCRYPTION__, __MCC__, __KI__, __ARFCN__ ...
+#  dans configs/*.cfg puis les deposer dans /etc/osmocom, /etc/asterisk et
+#  ~/.osmocom/bb. Sans elles, les demons du coeur demarrent sur les fichiers
+#  qu'un run precedent a laisses - et `ENCRYPTION=a5 0` n'a aucun effet, en
 #  silence. Le reste de start-direct.sh (lancer vingt processus) est repris
-#  par le moteur ; ceci ne l'est pas, donc on le préserve à l'identique et on
+#  par le moteur ; ceci ne l'est pas, donc on le preserve a l'identique et on
 #  le rend appelable depuis un module.
 #
-#  CE FICHIER NE FAIT RIEN AU SOURCE : il ne définit que des fonctions.
+#  CE FICHIER NE FAIT RIEN AU SOURCE : il ne definit que des fonctions.
 #  Le seul appelant attendu est run_modules/08-gabarits.sh.
 #
-#  DÉPENDANCES D'ENVIRONNEMENT (posées par l'appelant, valeurs de l'ancien
-#  script en défaut) : ENCRYPTION, HOST_IP, ALSA_OUTPUT, ALSA_INPUT.
-#  Le répertoire courant doit être celui d'osmo_egprs : les fonctions lisent
+#  DEPENDANCES D'ENVIRONNEMENT (posees par l'appelant, valeurs de l'ancien
+#  script en defaut) : ENCRYPTION, HOST_IP, ALSA_OUTPUT, ALSA_INPUT.
+#  Le repertoire courant doit etre celui d'osmo_egprs : les fonctions lisent
 #  `configs/*.cfg` et `scripts/*` en chemin RELATIF, comme dans l'original.
 # -----------------------------------------------------------------------------
 
@@ -102,14 +102,14 @@ EOF
 }
 _generate_sms_routing_conf_fallback() {
     local op_id=$1 n_operators=$2 i j
-    printf '# sms-routing.conf — Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
+    printf '# sms-routing.conf - Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
     for i in $(seq 1 "$n_operators"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
     printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        # Préfixe à CINQ chiffres : la maquette numérote les abonnés i0001,
-        # i0002… (MS#1 = 10001, MS#2 = 10002). Sans lui, aucun préfixe ne
-        # couvrait ces numéros et le relais rejetait tout SMS local avec
-        # « No route for destination ». Constaté le 2026-07-29.
+        # Prefixe a CINQ chiffres : la maquette numerote les abonnes i0001,
+        # i0002... (MS#1 = 10001, MS#2 = 10002). Sans lui, aucun prefixe ne
+        # couvrait ces numeros et le relais rejetait tout SMS local avec
+        # "No route for destination". Constate le 2026-07-29.
         for ms in 1 2; do printf '%s = %s\n' "$(( i * 10000 + ms ))" "$i"; done   # MSISDN exacts op*10000+ms (10001,10002,...)
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
@@ -143,8 +143,8 @@ detect_host_ip() {
 }
 
 # ── Auto-attach tmux ────────────────────────────────────────────────────────
-# run.sh tourne en arrière-plan et crée la session tmux 'osmocom'
-# (socket /tmp/osmocom_tmux). On attend qu'elle soit prête (run.sh terminé)
-# puis on s'y attache dans le terminal courant. $1 = log run.sh à surveiller.
-#   AUTO_ATTACH=0   → désactive (reste en arrière-plan, message manuel)
-#   Désactivé aussi si pas de TTY (scripté/bg) ou déjà dans un tmux.
+# run.sh tourne en arriere-plan et cree la session tmux 'osmocom'
+# (socket /tmp/osmocom_tmux). On attend qu'elle soit prete (run.sh termine)
+# puis on s'y attache dans le terminal courant. $1 = log run.sh a surveiller.
+#   AUTO_ATTACH=0   → desactive (reste en arriere-plan, message manuel)
+#   Desactive aussi si pas de TTY (scripte/bg) ou deja dans un tmux.

@@ -1,27 +1,27 @@
 #!/bin/bash
 # =============================================================================
-#  launch/start-oqc.sh — lance qemu-src depuis osmo_egprs
+#  launch/start-oqc.sh - lance qemu-src depuis osmo_egprs
 # =============================================================================
 #
-#  « oqc » = qemu-src, l'émulation Calypso (ARM7 + DSP TMS320C54x).
-#  Ce fichier est le raccourci depuis osmo_egprs : il trouve le dépôt et lui
-#  passe la main. Toute la logique de lancement vit là-bas, dans run_modules/.
+#  "oqc" = qemu-src, l'emulation Calypso (ARM7 + DSP TMS320C54x).
+#  Ce fichier est le raccourci depuis osmo_egprs : il trouve le depot et lui
+#  passe la main. Toute la logique de lancement vit la-bas, dans run_modules/.
 #
-#      ./launch/start-oqc.sh                  profil calypso (défaut)
+#      ./launch/start-oqc.sh                  profil calypso (defaut)
 #      ./launch/start-oqc.sh --list           le plan, sans rien lancer
-#      ./launch/start-oqc.sh --dry-run        déroule sans effet de bord
-#      ./launch/start-oqc.sh --status         où en est chaque étape
-#      ./launch/start-oqc.sh --stop           arrête, en ordre inverse
-#      ./launch/start-oqc.sh --check-paths    vérifie les dépendances de la machine
+#      ./launch/start-oqc.sh --dry-run        deroule sans effet de bord
+#      ./launch/start-oqc.sh --status         ou en est chaque etape
+#      ./launch/start-oqc.sh --stop           arrete, en ordre inverse
+#      ./launch/start-oqc.sh --check-paths    verifie les dependances de la machine
 #
-#  Les variables CALYPSO_* passées en préfixe traversent jusqu'à QEMU :
+#  Les variables CALYPSO_* passees en prefixe traversent jusqu'a QEMU :
 #      CALYPSO_MODE=native ./launch/start-oqc.sh
 #
-#  Où est le dépôt : OQC_ROOT, sinon les emplacements habituels sont essayés.
+#  Ou est le depot : OQC_ROOT, sinon les emplacements habituels sont essayes.
 #      OQC_ROOT=~/src/qemu-src ./launch/start-oqc.sh
 #
-#  À ne pas confondre avec start-direct.sh, qui orchestre TOUTE la pile
-#  (cœur Osmocom + radio) et dont le mode « qemu » aboutit également ici.
+#  A ne pas confondre avec start-direct.sh, qui orchestre TOUTE la pile
+#  (coeur Osmocom + radio) et dont le mode "qemu" aboutit egalement ici.
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
@@ -41,11 +41,11 @@ if ! OQC="$(_find_oqc)"; then
     cat >&2 <<'ERR'
 qemu-src introuvable.
 
-Cherché dans : ../qemu-src, $GSM_ROOT/qemu-src, ~/qemu-src
+Cherche dans : ../qemu-src, $GSM_ROOT/qemu-src, ~/qemu-src
 
 Indiquez son emplacement :
     OQC_ROOT=/chemin/vers/qemu-src ./launch/start-oqc.sh
-ou récupérez-le :
+ou recuperez-le :
     git clone https://github.com/bbaranoff/qemu qemu-src
 ERR
     exit 2

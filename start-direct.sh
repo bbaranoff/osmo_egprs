@@ -1,21 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# start-direct.sh — Prépare l'environnement Calypso puis lance run.sh
+# start-direct.sh - Prepare l'environnement Calypso puis lance run.sh
 # =============================================================================
 #
-# Ce script ne démarre aucun démon.
+# Ce script ne demarre aucun demon.
 #
 # Il :
 #   1. charge l'environnement ;
-#   2. détecte le matériel / les binaires ;
+#   2. detecte le materiel / les binaires ;
 #   3. choisit le mode (profil) ;
-#   4. génère les fichiers mobile_*.cfg ;
-#   5. exporte les variables nécessaires ;
-#   6. exécute run.sh.
+#   4. genere les fichiers mobile_*.cfg ;
+#   5. exporte les variables necessaires ;
+#   6. execute run.sh.
 #
 # Toute la logique GSM vit ensuite dans run.sh (et run_modules/).
 #
-# CHAÎNE DE CONFIGURATION — NE PAS LA CASSER
+# CHAINE DE CONFIGURATION - NE PAS LA CASSER
 #     VAR=x ./start-direct.sh   ← la ligne de commande gagne toujours
 #       -> environment/load.env
 #          -> paths / modes / domaines
@@ -23,33 +23,33 @@
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
-# ── [2026-08-14] GARDE « on doit être dans Docker » RETIRÉE ───────────────────
+# ── [2026-08-14] GARDE "on doit etre dans Docker" RETIREE ───────────────────
 # Elle exigeait /.dockerenv ET /etc/docker-entrypoint-cmd, et sortait en exit 1
 # quand l'un manquait. Sur l'ISO il n'y a pas de Docker : les deux fichiers sont
-# absents, la garde bloquait donc le seul lanceur utilisable là-bas. Retirée sur
-# demande explicite — c'est le cas d'usage ISO qui prime.
+# absents, la garde bloquait donc le seul lanceur utilisable la-bas. Retiree sur
+# demande explicite - c'est le cas d'usage ISO qui prime.
 #
-# CE QU'ON PERD, et c'était sa raison d'être (constat du 12/08) : lancé par
-# erreur sur un HÔTE qui a Docker, ce script repart sur un environnement à
-# moitié construit — /opt/GSM/qemu-src n'y existe pas, mais /tmp/osmo-nitb/logs,
-# lui, se crée tout seul — et meurt sur un « run.sh introuvable » qui ne désigne
-# pas la vraie cause. Si ce symptôme réapparaît sur une machine avec Docker,
-# c'est ça : là-bas le lanceur est ./start.sh (ou ./start-nitb.sh), pas celui-ci.
+# CE QU'ON PERD, et c'etait sa raison d'etre (constat du 12/08) : lance par
+# erreur sur un HOTE qui a Docker, ce script repart sur un environnement a
+# moitie construit - /opt/GSM/qemu-src n'y existe pas, mais /tmp/osmo-nitb/logs,
+# lui, se cree tout seul - et meurt sur un "run.sh introuvable" qui ne designe
+# pas la vraie cause. Si ce symptome reapparait sur une machine avec Docker,
+# c'est ca : la-bas le lanceur est ./start.sh (ou ./start-nitb.sh), pas celui-ci.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
-# WAN : jamais par défaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
-# pose une ISO construite avec --wan) le monte avant de passer la main à run.sh.
+# WAN : jamais par defaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
+# pose une ISO construite avec --wan) le monte avant de passer la main a run.sh.
 WAN_MESH=0
-# --virtualbox : monte le segment et les VM avant le WAN. Refusé si l'on tourne
-# DANS une VM — c'est l'hôte qui pilote VirtualBox (le script le vérifie).
+# --virtualbox : monte le segment et les VM avant le WAN. Refuse si l'on tourne
+# DANS une VM - c'est l'hote qui pilote VirtualBox (le script le verifie).
 VBOX_INTERCO=0
 VBOX_NODES=""
 VBOX_HOST_NODE=1
-# --node : le numéro de CE nœud, choisi au lancement et pas à la construction.
-# C'est ce qui permet une ISO unique pour les neuf nœuds.
+# --node : le numero de CE noeud, choisi au lancement et pas a la construction.
+# C'est ce qui permet une ISO unique pour les neuf noeuds.
 NODE_ID=""
 NODE_OP=1
 HUB_IP=""
@@ -57,47 +57,47 @@ usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
   Modes (profils) :
-    faketrx-qemu   cœur + BTS#0 QEMU + BTS#1 faketrx (défaut)
-    faketrx        cœur + fake_trx + trxcon + mobile
+    faketrx-qemu   coeur + BTS#0 QEMU + BTS#1 faketrx (defaut)
+    faketrx        coeur + fake_trx + trxcon + mobile
     qemu           pipeline Calypso QEMU seul
-    virtphy        cœur + osmo-bts-virtual + virtphy
-    noproc         cœur seul (no-process)
+    virtphy        coeur + osmo-bts-virtual + virtphy
+    noproc         coeur seul (no-process)
     core           alias noproc
     hybrid         alias faketrx-qemu
     hw             SDR physique
   Options :
-    --list              affiche le plan (délègue à run.sh --list)
-    --dry-run           déroule sans effet de bord
+    --list              affiche le plan (delegue a run.sh --list)
+    --dry-run           deroule sans effet de bord
     --profile <nom>     force le profil
-    --stop              arrête la pile (délègue à run.sh --stop)
-    --status            interroge l'état (délègue à run.sh --status)
-    --force             relance même les modules déjà démarrés
+    --stop              arrete la pile (delegue a run.sh --stop)
+    --status            interroge l'etat (delegue a run.sh --status)
+    --force             relance meme les modules deja demarres
     --verbose           montre la sortie des modules
-    --check-paths       vérifie les dépendances déclarées
-    --wan               monte le WAN à N noeuds (1 à 9) AVANT run.sh et demande :
+    --check-paths       verifie les dependances declarees
+    --wan               monte le WAN a N noeuds (1 a 9) AVANT run.sh et demande :
                           nombre de noeuds, IP de chaque noeud, indicatif de
-                          chaque noeud, numéro du noeud construit par ce lancement
-    --wan-nodes "1:IP:IND …"   même chose sans question (scriptable)
-    --wan-id N          numéro du noeud local (sinon déduit des IP locales)
-    --wan-conf FICHIER  table à lire/écrire (défaut /etc/osmo-wan.conf)
-    --node N            numéro de CE nœud, 1 à 9. DÉDUIT AUTOMATIQUEMENT s'il
+                          chaque noeud, numero du noeud construit par ce lancement
+    --wan-nodes "1:IP:IND ..."   meme chose sans question (scriptable)
+    --wan-id N          numero du noeud local (sinon deduit des IP locales)
+    --wan-conf FICHIER  table a lire/ecrire (defaut /etc/osmo-wan.conf)
+    --node N            numero de CE noeud, 1 a 9. DEDUIT AUTOMATIQUEMENT s'il
                         est omis : environnement, puis /etc/osmo-role, puis la
-                        table WAN comparée aux adresses locales. Cette option
-                        ne sert qu'à forcer. Réécrit son identité SS7
-                        (point codes 1.<nœud><op>.<rôle>, routing contexts) et
+                        table WAN comparee aux adresses locales. Cette option
+                        ne sert qu'a forcer. Reecrit son identite SS7
+                        (point codes 1.<noeud><op>.<role>, routing contexts) et
                         pointe son ASP sur l'inter-STP. Une seule ISO suffit
-                        alors pour les neuf nœuds — le numéro se choisit ici.
-    --op N              opérateur porté par ce nœud (défaut 1)
-    --hub-ip ADRESSE    inter-STP à joindre (défaut : selon docker ou VM)
+                        alors pour les neuf noeuds - le numero se choisit ici.
+    --op N              operateur porte par ce noeud (defaut 1)
+    --hub-ip ADRESSE    inter-STP a joindre (defaut : selon docker ou VM)
     --virtualbox[=N]    WAN entre CETTE machine et N-1 VM VirtualBox (implique
-                        --wan). À lancer depuis l'hôte, pas depuis une VM.
-    --vbox-node N       numéro de noeud porté par cette machine (défaut 1)
+                        --wan). A lancer depuis l'hote, pas depuis une VM.
+    --vbox-node N       numero de noeud porte par cette machine (defaut 1)
     -h, --help          cette aide
 
   Sans --wan : aucun WAN. Avec --wan le profil reste faketrx-qemu (hybride,
-  1 faketrx + 1 QEMU Calypso), qui est déjà le défaut de ce script.
-  Composer <indicatif><numéro> joint ce numéro sur le noeud correspondant.
-Toute variable CALYPSO_* passée en préfixe est transmise à run.sh / QEMU :
+  1 faketrx + 1 QEMU Calypso), qui est deja le defaut de ce script.
+  Composer <indicatif><numero> joint ce numero sur le noeud correspondant.
+Toute variable CALYPSO_* passee en prefixe est transmise a run.sh / QEMU :
   CALYPSO_MODE=native ./start-direct.sh
 USAGE
 }
@@ -143,18 +143,19 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-# --- où tourne-t-on ? ---------------------------------------------------------
-# La question n'est pas cosmétique : le plan d'adressage EN DÉPEND.
+# --- ou tourne-t-on ? ---------------------------------------------------------
+# La question n'est pas cosmetique : le plan d'adressage EN DEPEND.
 #   docker  → l'inter-STP est le conteneur osmo-inter-stp (172.20.0.10), le
-#             nœud a déjà son IP quand les démons démarrent.
-#   VM/ISO  → l'inter-STP est une machine à part (192.168.56.1), et l'adresse
-#             du nœud vient du DHCP : elle peut manquer au lancement.
+#             noeud a deja son IP quand les demons demarrent.
+#   VM/ISO  → l'inter-STP est une machine a part (192.168.1.49 sur le banc,
+#             ou une host-only 192.168.56.x selon le montage), et l'adresse
+#             du noeud vient du DHCP : elle peut manquer au lancement.
 # Prendre l'un pour l'autre donne un ASP qui ne s'attache jamais, avec pour
-# seule trace un « connection refused » vers une adresse inexistante ici.
+# seule trace un "connection refused" vers une adresse inexistante ici.
 #
-# /.dockerenv seul ne suffit pas — il est vrai dans n'importe quel conteneur.
-# On exige aussi /etc/docker-entrypoint-cmd, que scripts/entrypoint.sh dépose :
-# c'est ce couple qui identifie un conteneur DE CE DÉPÔT.
+# /.dockerenv seul ne suffit pas - il est vrai dans n'importe quel conteneur.
+# On exige aussi /etc/docker-entrypoint-cmd, que scripts/entrypoint.sh depose :
+# c'est ce couple qui identifie un conteneur DE CE DEPOT.
 detect_runtime_env() {
     if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then
         echo docker; return
@@ -163,10 +164,10 @@ detect_runtime_env() {
         echo docker; return
     fi
     # systemd-detect-virt SORT EN CODE 1 quand il ne trouve rien. Un
-    # « $(cmd || echo none) » produit alors DEUX lignes — la sortie « none » du
-    # programme, plus celle du repli — et aucun motif ne correspond : une
-    # machine physique se retrouvait classée « vm ». On ignore le code de
-    # sortie et on ne garde que la première ligne.
+    # "$(cmd || echo none)" produit alors DEUX lignes - la sortie "none" du
+    # programme, plus celle du repli - et aucun motif ne correspond : une
+    # machine physique se retrouvait classee "vm". On ignore le code de
+    # sortie et on ne garde que la premiere ligne.
     local v
     v="$(systemd-detect-virt 2>/dev/null | head -1)" || true
     v="${v:-none}"
@@ -178,21 +179,21 @@ detect_runtime_env() {
 }
 RUNTIME_ENV="${RUNTIME_ENV:-$(detect_runtime_env)}"
 
-# --- quel nœud sommes-nous ? --------------------------------------------------
-# Le numéro de nœud décide des point codes, du routing context et de l'indicatif.
-# Le taper à chaque lancement est une occasion de se tromper — et une erreur ici
-# ne se voit pas : la pile démarre, elle présente simplement au hub l'adresse SS7
-# d'un autre nœud. On le déduit donc, et on DIT d'où vient la réponse.
+# --- quel noeud sommes-nous ? --------------------------------------------------
+# Le numero de noeud decide des point codes, du routing context et de l'indicatif.
+# Le taper a chaque lancement est une occasion de se tromper - et une erreur ici
+# ne se voit pas : la pile demarre, elle presente simplement au hub l'adresse SS7
+# d'un autre noeud. On le deduit donc, et on DIT d'ou vient la reponse.
 #
-# Ordre, du plus explicite au plus déduit. Le premier qui répond gagne :
-#   1. --node passé en ligne de commande
-#   2. l'environnement — c'est ainsi que start.sh le transmet au conteneur
-#   3. /etc/osmo-role, figé dans l'image par build-iso.sh --node N
-#   4. la table WAN : l'adresse de ce nœud y figure, et nous l'avons
-#   5. rien — on ne touche alors PAS à l'identité SS7, plutôt que d'en inventer une
-# Renvoie « numéro|origine ». Pas deux variables : la fonction est appelée dans
-# une substitution de commande, donc dans un SOUS-SHELL — toute variable qu'elle
-# poserait y resterait, et l'appelant n'afficherait « ? » qu'après coup.
+# Ordre, du plus explicite au plus deduit. Le premier qui repond gagne :
+#   1. --node passe en ligne de commande
+#   2. l'environnement - c'est ainsi que start.sh le transmet au conteneur
+#   3. /etc/osmo-role, fige dans l'image par build-iso.sh --node N
+#   4. la table WAN : l'adresse de ce noeud y figure, et nous l'avons
+#   5. rien - on ne touche alors PAS a l'identite SS7, plutot que d'en inventer une
+# Renvoie "numero|origine". Pas deux variables : la fonction est appelee dans
+# une substitution de commande, donc dans un SOUS-SHELL - toute variable qu'elle
+# poserait y resterait, et l'appelant n'afficherait "?" qu'apres coup.
 detect_node_id() {
     local n
 
@@ -205,12 +206,12 @@ detect_node_id() {
     fi
 
     # La table WAN et nos propres adresses : c'est la source la plus fiable en VM,
-    # où une seule ISO sert les neuf nœuds et où seule l'IP les distingue.
+    # ou une seule ISO sert les neuf noeuds et ou seule l'IP les distingue.
     local conf="${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
     if [ -r "$conf" ] && [ -r "$HERE/network/wan-nodes.sh" ]; then
         n="$(
             # Sous-shell : wan-nodes.sh pose des variables et des tableaux qu'on
-            # ne veut pas voir déborder dans le lanceur.
+            # ne veut pas voir deborder dans le lanceur.
             set +u
             . "$HERE/network/wan-nodes.sh" 2>/dev/null || exit 0
             WAN_NODE_ID=0
@@ -236,7 +237,7 @@ fi
 # Pour les scripts qui ne connaissent que deux mondes : docker, ou tout le reste.
 case "$RUNTIME_ENV" in docker) NODE_MODE=docker ;; *) NODE_MODE=native ;; esac
 
-# --- affichage (identique à run.sh) -------------------------------------------
+# --- affichage (identique a run.sh) -------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     TTY=1
     C_OK=$'\033[32m'; C_KO=$'\033[31m'; C_SK=$'\033[33m'
@@ -252,7 +253,7 @@ say_begin() {
         printf '[ .. ] %s\n' "$1"
     fi
 }
-say_end() { # $1=tag $2=couleur $3=libellé $4=détail
+say_end() { # $1=tag $2=couleur $3=libelle $4=detail
     if [ $TTY -eq 1 ]; then printf '\r\033[K'; fi
     printf '[%s%s%s] %s' "$2" "$1" "$C_Z" "$3"
     [ -n "${4:-}" ] && printf ' %s(%s)%s' "$C_DIM" "$4" "$C_Z"
@@ -261,14 +262,14 @@ say_end() { # $1=tag $2=couleur $3=libellé $4=détail
 banner() {
     echo -e "${C_CYAN}"
     echo "╔══════════════════════════════════════════════════════╗"
-    echo "║   Calypso GSM — bootstrap → run.sh                   ║"
+    echo "║   Calypso GSM - bootstrap → run.sh                   ║"
     echo "╚══════════════════════════════════════════════════════╝"
     echo -e "${C_Z}"
 }
 # --- 1. configuration ---------------------------------------------------------
-# [2026-08-03] globals.conf — les reglages reseau (MCC/MNC/ARFCN/KI/IMSI/A5...).
+# [2026-08-03] globals.conf - les reglages reseau (MCC/MNC/ARFCN/KI/IMSI/A5...).
 # Genere par ./generate_configs.sh cote hote ; ici on se contente de le lire.
-# L'idiome « := » qu'il utilise laisse gagner toute variable deja posee, donc
+# L'idiome ":=" qu'il utilise laisse gagner toute variable deja posee, donc
 #     ARFCN=520 ./start-direct.sh
 # surcharge sans toucher au fichier.
 [ -r "$HERE/globals.conf" ] && { set -a; . "$HERE/globals.conf"; set +a; }
@@ -281,7 +282,7 @@ elif [ -f "$HERE/env/load.env" ]; then
     set -a; . "$HERE/env/load.env"; set +a
     say_end " OK " "$C_OK" "Chargement de l'environnement" "env/load.env"
 else
-    # Fallback minimal (chemins typiques du dépôt)
+    # Fallback minimal (chemins typiques du depot)
     : "${GSM_ROOT:=/opt/GSM}"
     : "${NITB_TREE:=$HERE}"
     if [ -x "$HERE/run.sh" ]; then
@@ -295,45 +296,45 @@ else
 fi
 : "${RUN_DIR:=/run/osmo-direct}"
 # Repli si load.env est absent. Les journaux restent sous RUN_DIR (tmpfs) :
-# le défilement tmux en dépend — cf. environment/paths.env.
+# le defilement tmux en depend - cf. environment/paths.env.
 : "${LOG_DIR:=$RUN_DIR/logs}"
-# A5/1 par défaut : c'est le chiffrement que la maquette valide de bout en bout
-# (Calypso ↔ BTS), et ce que start.sh impose déjà dans son hand-off vers ce
-# script. Un défaut à « a5 0 » faisait diverger le lancement direct du lancement
-# par start.sh — même stack, deux chiffrements, selon la porte d'entrée.
+# A5/1 par defaut : c'est le chiffrement que la maquette valide de bout en bout
+# (Calypso ↔ BTS), et ce que start.sh impose deja dans son hand-off vers ce
+# script. Un defaut a "a5 0" faisait diverger le lancement direct du lancement
+# par start.sh - meme stack, deux chiffrements, selon la porte d'entree.
 #
-# ATTENTION : globals.conf est lu AVANT et fait autorité sur cette variable (son
-# en-tête le dit). Ce « := » n'est donc qu'un repli quand globals.conf est absent
-# — l'ISO, un conteneur nu. La valeur qui s'applique en pratique vient de là-bas,
-# et c'est pourquoi elle y a été changée aussi.
+# ATTENTION : globals.conf est lu AVANT et fait autorite sur cette variable (son
+# en-tete le dit). Ce ":=" n'est donc qu'un repli quand globals.conf est absent
+# - l'ISO, un conteneur nu. La valeur qui s'applique en pratique vient de la-bas,
+# et c'est pourquoi elle y a ete changee aussi.
 : "${ENCRYPTION:=a5 1}"
-# Le pont TRX par défaut : il REMPLACE la chaîne IQ (osmo-trx-ipc,
+# Le pont TRX par defaut : il REMPLACE la chaine IQ (osmo-trx-ipc,
 # calypso-ipc-device, si_bridge, demod-bridge) par un transceiver unique qui
-# décode le DL et encode l'UL. C'est le mode que start.sh passe déjà en
+# decode le DL et encode l'UL. C'est le mode que start.sh passe deja en
 # hand-off ; le lancement direct s'aligne.
-# CALYPSO_BRIDGE n'est pas déclaré dans globals.conf (les CALYPSO_* « passent au
-# travers, intact » d'après son en-tête) : l'environnement gagne donc vraiment.
-#   CALYPSO_BRIDGE=ipc  ./start-direct.sh   -> le pont IPC-MS à la place
-#   CALYPSO_BRIDGE=none ./start-direct.sh   -> ni l'un ni l'autre, chaîne IQ
+# CALYPSO_BRIDGE n'est pas declare dans globals.conf (les CALYPSO_* "passent au
+# travers, intact" d'apres son en-tete) : l'environnement gagne donc vraiment.
+#   CALYPSO_BRIDGE=ipc  ./start-direct.sh   -> le pont IPC-MS a la place
+#   CALYPSO_BRIDGE=none ./start-direct.sh   -> ni l'un ni l'autre, chaine IQ
 : "${CALYPSO_BRIDGE:=pont}"
 : "${MS_COUNT:=2}"
 : "${HOST_IP:=127.0.0.1}"
 mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb 2>/dev/null || true
-# --- 2. détection des chemins / binaires --------------------------------------
-say_begin "Résolution de run.sh"
+# --- 2. detection des chemins / binaires --------------------------------------
+say_begin "Resolution de run.sh"
 # [2026-08-08] Le chemin etait cable en dur ICI, ce qui rendait MORTE toute la
 # resolution de OQC_ROOT faite plus haut (trois candidats testes pour rien) et
-# contredisait le contrat annonce en tete de fichier (« la ligne de commande
-# gagne toujours ») : RUN_SH etait la seule variable non surchargeable.
+# contredisait le contrat annonce en tete de fichier ("la ligne de commande
+# gagne toujours") : RUN_SH etait la seule variable non surchargeable.
 # Ordre : RUN_SH explicite > OQC_ROOT resolu > chemin historique.
 : "${RUN_SH:=${OQC_ROOT:+$OQC_ROOT/run.sh}}"
 : "${RUN_SH:=/opt/GSM/qemu-src/run.sh}"
 if [ ! -x "$RUN_SH" ]; then
-    say_end "FAIL" "$C_KO" "Résolution de run.sh" "$RUN_SH introuvable ou non exécutable"
-    printf '       %s→ Vérifiez que /opt/GSM/qemu-src/run.sh existe et est exécutable%s\n' "$C_DIM" "$C_Z"
+    say_end "FAIL" "$C_KO" "Resolution de run.sh" "$RUN_SH introuvable ou non executable"
+    printf '       %s→ Verifiez que /opt/GSM/qemu-src/run.sh existe et est executable%s\n' "$C_DIM" "$C_Z"
     exit 1
 fi
-say_end " OK " "$C_OK" "Résolution de run.sh" "$RUN_SH"
+say_end " OK " "$C_OK" "Resolution de run.sh" "$RUN_SH"
 RUN_ROOT="$(dirname "$RUN_SH")"
 # Profil → mapping vers les profils attendus par run.sh
 case "$PROFILE" in
@@ -356,7 +357,7 @@ path_ok=1
 _check() {
     local name="$1" val="${!1:-}"
     if [ -z "$val" ]; then
-        printf '\n       %s%s non défini%s\n' "$C_DIM" "$name" "$C_Z"
+        printf '\n       %s%s non defini%s\n' "$C_DIM" "$name" "$C_Z"
         path_ok=0
     elif [ -e "$val" ]; then
         :
@@ -365,7 +366,7 @@ _check() {
         path_ok=0
     fi
 }
-# Variables optionnelles selon le profil ; on ne bloque que si présentes et cassées
+# Variables optionnelles selon le profil ; on ne bloque que si presentes et cassees
 for v in QEMU_BIN FIRMWARE_ELF DSP_PROM0 OSMOCON; do
     # `[ -n x ] && _check || true` avalait le verdict : _check pouvait poser
     # path_ok=0 sans que la boucle ne le laisse remonter. Forme explicite.
@@ -374,9 +375,9 @@ done
 if [ $path_ok -eq 1 ]; then
     say_end " OK " "$C_OK" "Validation des chemins"
 else
-    say_end "WARN" "$C_SK" "Validation des chemins" "certains chemins manquent (run.sh vérifiera)"
+    say_end "WARN" "$C_SK" "Validation des chemins" "certains chemins manquent (run.sh verifiera)"
 fi
-# --- 4. génération des configs mobile -----------------------------------------
+# --- 4. generation des configs mobile -----------------------------------------
 # MS#1 (QEMU / mobile principal) et MS#2 (faketrx side-car) pour le profil hybrid.
 BB_DIR="/root/.osmocom/bb"
 mkdir -p "$BB_DIR"
@@ -425,7 +426,7 @@ generate_mobile_cfg() {
         # Template minimal de secours
         cat > "$dest" <<EOF
 !
-! mobile.cfg généré par start-direct.sh (secours)
+! mobile.cfg genere par start-direct.sh (secours)
 !
 log stderr
  logging color 1
@@ -457,7 +458,7 @@ EOF
 # Tant que le lanceur du conteneur designe mobile_group1.cfg, ce qu'on ecrit ici
 # est inerte. Verifier avant de croire un reglage pose ici :
 #     pgrep -a mobile
-say_begin "Génération mobile MS#1"
+say_begin "Generation mobile MS#1"
 MS1_CFG="${MOBILE_CFG_MS1_PATH:-$BB_DIR/mobile.cfg}"
 generate_mobile_cfg "$MS1_CFG" \
     4247 \
@@ -466,8 +467,8 @@ generate_mobile_cfg "$MS1_CFG" \
     514 \
     "001010001000001" \
     "00 11 22 33 44 55 66 77 88 99 aa bb cc dd 01 01"
-say_end " OK " "$C_OK" "Génération mobile MS#1" "$MS1_CFG"
-say_begin "Génération mobile MS#2 (faketrx)"
+say_end " OK " "$C_OK" "Generation mobile MS#1" "$MS1_CFG"
+say_begin "Generation mobile MS#2 (faketrx)"
 MS2_CFG="$BB_DIR/mobile_faketrx_bts1.cfg"
 generate_mobile_cfg "$MS2_CFG" \
     4248 \
@@ -477,7 +478,7 @@ generate_mobile_cfg "$MS2_CFG" \
     "001010001000002" \
     "00 11 22 33 44 55 66 77 88 99 aa bb cc dd 02 01" \
     gsm_out gsm_in
-say_end " OK " "$C_OK" "Génération mobile MS#2 (faketrx)" "$MS2_CFG"
+say_end " OK " "$C_OK" "Generation mobile MS#2 (faketrx)" "$MS2_CFG"
 # Export pour que les modules run.sh / hybrid puissent les retrouver
 export MOBILE_CFG_MS1="$MS1_CFG"
 export MOBILE_CFG_MS2="$MS2_CFG"
@@ -513,13 +514,13 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     # Preset EXISTANT "bridge" = pont Python a la place d'ipc/trx-ipc : c'est
     # exactement notre cas. Il pose SKIP_IPC_DEVICE=1 / SKIP_TRX_IPC=1, et
     # comme il n'est pas full-grgsm il DESACTIVE aussi 65-record-drain et
-    # 66-grgsm-decode (MOD_ENABLED_IF) — le pont fournit lui-meme le GSMTAP.
+    # 66-grgsm-decode (MOD_ENABLED_IF) - le pont fournit lui-meme le GSMTAP.
     export CALYPSO_PIPELINE=bridge
     _PONT="${PONT_PY:-/opt/GSM/pont/pont.py}"
     # [2026-08-16] N'ARMER LE LANCEUR QUE SUR UN VRAI DEMARRAGE.
     # Ce bloc s'execute AVANT le `case "$ACTION"` plus bas. Sur `--stop` (comme
     # sur --list/--status/--check-paths) on armait donc quand meme le lanceur
-    # differe, que `run.sh --stop` tuait aussitot — d'ou le « line 450: Killed »
+    # differe, que `run.sh --stop` tuait aussitot - d'ou le "line 450: Killed"
     # crache par bash en plein arret propre. Un arret qui programme un demarrage
     # n'a aucun sens, et le message faisait croire a une panne.
     # Le pont DEJA VIVANT, lui, est bien arrete : le teardown le connait
@@ -535,7 +536,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         # [2026-08-16] KILLALL DEMANDE PAR L'OPERATEUR, et assume.
         # Le motif nominatif ci-dessus rate tout pont lance sous un autre chemin
         # (PONT_PY surcharge, une sauvegarde .bak), et c'est ce qui faisait
-        # echouer le teardown sur « port:5700 port:5701 port:5702 ».
+        # echouer le teardown sur "port:5700 port:5701 port:5702".
         # ⚠️ CE QUE CA EMPORTE, en plus du pont : fake_trx.py (le transceiver de
         # MS#2), sms-interop-relay.py (routage SMS inter-operateurs, HORS pile
         # run.sh donc non relance automatiquement), gsm_sniff.py et les scripts
@@ -561,7 +562,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         # 25 s etait un pari sur la duree du teardown de run.sh. Des que
         # celui-ci archive de gros journaux (mesure : 62 Mo -> ~40 s), le pont
         # se rebindait sur 5700-5702 EN PLEIN teardown, qui echouait alors sur
-        # « restes du run precedent : port:5700 port:5701 port:5702 » et
+        # "restes du run precedent : port:5700 port:5701 port:5702" et
         # abandonnait toute la sequence. Le symptome se deplacait avec la
         # taille des journaux, ce qui le faisait passer pour intermittent.
         # On attend maintenant un EVENEMENT et non une duree : osmo-bts-trx,
@@ -572,9 +573,9 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
               _n=$((_n + 1)); sleep 1
           done
           if [ "$_n" -ge 180 ]; then
-              echo "[pont] osmo-bts-trx jamais vu apres 180 s — demarrage quand meme"
+              echo "[pont] osmo-bts-trx jamais vu apres 180 s - demarrage quand meme"
           else
-              echo "[pont] osmo-bts-trx detecte apres ${_n} s — la pile est debout, on binde"
+              echo "[pont] osmo-bts-trx detecte apres ${_n} s - la pile est debout, on binde"
           fi
           sleep 1
           pkill -f "$_PONT" 2>/dev/null; sleep 1
@@ -601,12 +602,12 @@ if [ "${CALYPSO_BRIDGE:-}" = ipc ]; then
             "${C_DIM:-}" "${C_Z:-}" "$CALYPSO_TRX_IQ_HOST" "$CALYPSO_TRX_IQ_RX_PORT" "$CALYPSO_TRX_IQ_TX_PORT"
         ( sleep 6; "$_MSIPC" >"${LOG_DIR:-/tmp/osmo-nitb/logs}/osmo-trx-ms-ipc.log" 2>&1 ) &
     else
-        printf '  osmo-trx-ms-ipc PAS COMPILE (%s) — build requis\n' "$_MSIPC"
+        printf '  osmo-trx-ms-ipc PAS COMPILE (%s) - build requis\n' "$_MSIPC"
     fi
 fi
 
 
-# --- 5. exports supplémentaires pour le profil hybrid -------------------------
+# --- 5. exports supplementaires pour le profil hybrid -------------------------
 if [ "$MODE" = "faketrx-qemu" ] || [ "$CALYPSO_PROFILE" = "hybrid" ]; then
     export QEMU_ATTACH_TRX="${QEMU_ATTACH_TRX:-0}"
     export NO_LOCAL_BTS="${NO_LOCAL_BTS:-0}"
@@ -617,7 +618,7 @@ if [ "$MODE" = "faketrx-qemu" ] || [ "$CALYPSO_PROFILE" = "hybrid" ]; then
     export BTS1_ARFCN=516
     export BTS0_ARFCN=514
 fi
-# --- 6. résumé ----------------------------------------------------------------
+# --- 6. resume ----------------------------------------------------------------
 banner
 printf '  %sprofil%s     %s (%s)\n' "$C_DIM" "$C_Z" "$CALYPSO_PROFILE" "$MODE"
 printf '  %senviron.%s   %s\n' "$C_DIM" "$C_Z" \
@@ -625,7 +626,7 @@ printf '  %senviron.%s   %s\n' "$C_DIM" "$C_Z" \
 if [ -n "$NODE_ID" ]; then
     printf '  %snoeud%s      %s  %s(%s)%s\n' "$C_DIM" "$C_Z" "$NODE_ID" "$C_DIM" "${NODE_ID_SRC:-?}" "$C_Z"
 else
-    printf '  %snoeud%s      %s\n' "$C_DIM" "$C_Z" "aucun — identité SS7 inchangée"
+    printf '  %snoeud%s      %s\n' "$C_DIM" "$C_Z" "aucun - identite SS7 inchangee"
 fi
 printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
 printf '  %sMS#1%s       %s  IMSI 001010001000001  ARFCN 514  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG"
@@ -633,7 +634,7 @@ printf '  %sMS#2%s       %s  IMSI 001010001000002  ARFCN 516  VTY 4248\n' "$C_DI
 printf '  %sjournaux%s   %s\n' "$C_DIM" "$C_Z" "$LOG_DIR"
 printf '  %schiffrement%s %s\n' "$C_DIM" "$C_Z" "$ENCRYPTION"
 printf '\n'
-# --- 7. actions déléguées à run.sh --------------------------------------------
+# --- 7. actions deleguees a run.sh --------------------------------------------
 RUN_ARGS=()
 [ "$DRY" -eq 1 ]     && RUN_ARGS+=(--dry-run)
 [ "$FORCE" -eq 1 ]   && RUN_ARGS+=(--force)
@@ -651,9 +652,9 @@ case "$ACTION" in
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${RUN_ARGS[@]}"
         ;;
     stop)
-        say_begin "Arrêt de la pile via run.sh"
+        say_begin "Arret de la pile via run.sh"
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
-        say_end " OK " "$C_OK" "Arrêt de la pile via run.sh"
+        say_end " OK " "$C_OK" "Arret de la pile via run.sh"
         exit 0
         ;;
     status)
@@ -663,48 +664,48 @@ case "$ACTION" in
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --check-paths
         ;;
 esac
-# --- 7ter. Identité de nœud (--node) -------------------------------------------
+# --- 7ter. Identite de noeud (--node) -------------------------------------------
 # AVANT le WAN et avant run.sh : les point codes sont lus par osmo-stp, osmo-msc
-# et osmo-bsc à leur démarrage. Les changer après ne servirait à rien.
+# et osmo-bsc a leur demarrage. Les changer apres ne servirait a rien.
 if [ -n "$NODE_ID" ]; then
     if ! [[ "$NODE_ID" =~ ^[1-9]$ ]]; then
-        say_end " KO " "$C_KO" "--node" "un chiffre de 1 à 9"; exit 2
+        say_end " KO " "$C_KO" "--node" "un chiffre de 1 a 9"; exit 2
     fi
     SETID="$HERE/network/set-node-id.sh"
     if [ ! -r "$SETID" ]; then
         say_end " KO " "$C_KO" "--node" "network/set-node-id.sh absent"; exit 1
     fi
-    say_begin "Identité SS7 du nœud $NODE_ID"
+    say_begin "Identite SS7 du noeud $NODE_ID"
     setid_args=(--node "$NODE_ID" --op "$NODE_OP" --mode "$NODE_MODE")
     [ -n "$HUB_IP" ] && setid_args+=(--hub-ip "$HUB_IP")
     if [ "$DRY" -eq 1 ]; then
-        say_end " -- " "$C_DIM" "Identité SS7 du nœud $NODE_ID" "dry-run"
+        say_end " -- " "$C_DIM" "Identite SS7 du noeud $NODE_ID" "dry-run"
         bash "$SETID" "${setid_args[@]}" --dry-run 2>&1 | sed 's/^/  /'
     elif bash "$SETID" "${setid_args[@]}" > "${LOG_DIR:-/tmp}/set-node-id.log" 2>&1; then
-        say_end " OK " "$C_OK" "Identité SS7" "nœud $NODE_ID · PC 1.${NODE_ID}${NODE_OP}.x · mode $NODE_MODE"
+        say_end " OK " "$C_OK" "Identite SS7" "noeud $NODE_ID · PC 1.${NODE_ID}${NODE_OP}.x · mode $NODE_MODE"
     else
-        say_end " KO " "$C_KO" "Identité SS7" "voir ${LOG_DIR:-/tmp}/set-node-id.log"
+        say_end " KO " "$C_KO" "Identite SS7" "voir ${LOG_DIR:-/tmp}/set-node-id.log"
         exit 1
     fi
-    # Le numéro de nœud vaut aussi pour la voix et les SMS : c'est le même nœud.
+    # Le numero de noeud vaut aussi pour la voix et les SMS : c'est le meme noeud.
     WAN_NODE_ID="$NODE_ID"
 fi
 
-# --- 7bis. WAN à N noeuds ------------------------------------------------------
-# ICI et pas après : ce processus va devenir run.sh (exec), il n'y a pas d'après.
-# Asterisk n'est pas encore lancé — setup-wan-mesh.sh le voit, écrit la conf et
-# ne redémarre rien ; run.sh démarrera Asterisk avec le WAN déjà en place.
+# --- 7bis. WAN a N noeuds ------------------------------------------------------
+# ICI et pas apres : ce processus va devenir run.sh (exec), il n'y a pas d'apres.
+# Asterisk n'est pas encore lance - setup-wan-mesh.sh le voit, ecrit la conf et
+# ne redemarre rien ; run.sh demarrera Asterisk avec le WAN deja en place.
 #
-# Sûr vis-à-vis des gabarits : en natif rien ne réinstalle /etc/asterisk au
-# démarrage (install_configs_native n'a aucun appelant, run_modules/08-gabarits.sh
-# n'existe pas), donc le bloc WAN écrit ici survit à run.sh. Si un module de
-# gabarits revient un jour, il faudra rejouer le WAN APRÈS lui.
+# Sur vis-a-vis des gabarits : en natif rien ne reinstalle /etc/asterisk au
+# demarrage (install_configs_native n'a aucun appelant, run_modules/08-gabarits.sh
+# n'existe pas), donc le bloc WAN ecrit ici survit a run.sh. Si un module de
+# gabarits revient un jour, il faudra rejouer le WAN APRES lui.
 if [ -r "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" ] && [ "$WAN_MESH" -eq 0 ]; then
-    # Table figée dans l'image (ISO construite avec --wan) : WAN_AUTO=1 dit
-    # « ce système EST un noeud », on n'oblige pas à retaper l'option.
+    # Table figee dans l'image (ISO construite avec --wan) : WAN_AUTO=1 dit
+    # "ce systeme EST un noeud", on n'oblige pas a retaper l'option.
     if grep -q '^WAN_AUTO=1' "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null; then
         WAN_MESH=1
-        printf '  %sWAN%s        table figée dans %s (WAN_AUTO=1)\n' \
+        printf '  %sWAN%s        table figee dans %s (WAN_AUTO=1)\n' \
             "$C_DIM" "$C_Z" "${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
     fi
 fi
@@ -733,12 +734,12 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     if [ -n "${WAN_NODES:-}" ]; then
         wan_nodes_parse "$WAN_NODES" || exit 1
         [ "${WAN_NODE_ID:-0}" != "0" ] || wan_nodes_detect_self || {
-            printf '  %sWAN%s : aucune IP locale dans la table — passez --wan-id N\n' "$C_KO" "$C_Z"
+            printf '  %sWAN%s : aucune IP locale dans la table - passez --wan-id N\n' "$C_KO" "$C_Z"
             exit 1; }
     else
         wan_nodes_load "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null || true
-        # Une ISO diffusée sur N machines porte la MÊME table : chaque machine
-        # se reconnaît à son IP plutôt que d'exiger une image par noeud.
+        # Une ISO diffusee sur N machines porte la MEME table : chaque machine
+        # se reconnait a son IP plutot que d'exiger une image par noeud.
         wan_nodes_detect_self 2>/dev/null || true
         if [ "${WAN_NODE_COUNT:-0}" -lt 1 ] || [ "${WAN_NODE_ID:-0}" = "0" ]; then
             wan_nodes_prompt || exit 1
@@ -751,26 +752,60 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     if [ "$DRY" -eq 1 ]; then
         printf '  [dry-run] %s --native --id %s\n' "$WAN_MESH_SH" "$WAN_NODE_ID"
     else
-        say_begin "WAN — application de la table"
-        # --native / --docker : même distinction que pour les point codes.
+        say_begin "WAN - application de la table"
+        # --native / --docker : meme distinction que pour les point codes.
         if WAN_AUTO=1 bash "$WAN_MESH_SH" "--$NODE_MODE" --id "$WAN_NODE_ID" \
                 --nodes "$(wan_nodes_spec)" --ops 1 \
                 --config "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" > "${LOG_DIR:-/tmp}/wan-mesh.log" 2>&1; then
-            say_end " OK " "$C_OK" "WAN — noeud $WAN_NODE_ID, indicatif $(wan_local_ind)"
+            say_end " OK " "$C_OK" "WAN - noeud $WAN_NODE_ID, indicatif $(wan_local_ind)"
         else
             say_end " KO " "$C_KO" "WAN" "voir ${LOG_DIR:-/tmp}/wan-mesh.log"
+        fi
+    fi
+
+    # --- 7quater. Adressage SS7 du noeud (set_stp_ip.sh) ----------------------
+    # setup-wan-mesh.sh monte la VOIX et les SMS entre noeuds ; il ne touche pas
+    # au SS7. Sans ce qui suit, --wan donnait un WAN ou les appels passaient mais
+    # ou l'ASP inter-STP visait encore 127.0.0.1, en shutdown : l'interco SS7 ne
+    # montait jamais, et rien dans la sortie ne disait pourquoi.
+    #
+    # set_stp_ip.sh est le seul a ecrire d'un coup les trois configs, la table
+    # WAN et /etc/osmo-role. On lui passe --no-ip : l'adresse locale est deja
+    # posee (DHCP ou bloc WAN ci-dessus), et --restart serait absurde ici
+    # puisque run.sh va demarrer la pile juste apres, avec les fichiers corriges.
+    STP_IP_SH="$HERE/set_stp_ip.sh"
+    if [ -r "$STP_IP_SH" ] && [ "${WAN_NODE_ID:-0}" != "0" ]; then
+        self_ip="${WAN_IP[$WAN_NODE_ID]:-}"
+        hub_ip="$HUB_IP"
+        [ -n "$hub_ip" ] || hub_ip="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' /etc/osmo-role 2>/dev/null)"
+
+        stp_args=(--operator --node "$WAN_NODE_ID" --no-ip --conf-dir "${OSMOCOM_CFG:-/etc/osmocom}")
+        [ -n "$self_ip" ] && stp_args+=(--ip "$self_ip")
+        [ -n "$hub_ip" ]  && stp_args+=(--hub-ip "$hub_ip")
+
+        if [ "$DRY" -eq 1 ]; then
+            printf '  [dry-run] %s %s\n' "$STP_IP_SH" "${stp_args[*]}"
+        else
+            say_begin "Adressage SS7 - inter-STP ${hub_ip:-?}"
+            if bash "$STP_IP_SH" "${stp_args[@]}" > "${LOG_DIR:-/tmp}/set-stp-ip.log" 2>&1; then
+                say_end " OK " "$C_OK" "Adressage SS7" "noeud $WAN_NODE_ID -> inter-STP ${hub_ip:-?}"
+            else
+                # Non fatal : la pile locale tourne tres bien sans interco. On le
+                # DIT, plutot que de laisser croire a un WAN complet.
+                say_end " ~~ " "$C_SK" "Adressage SS7" "echec - voir ${LOG_DIR:-/tmp}/set-stp-ip.log"
+            fi
         fi
     fi
 fi
 
 # --- 8. lancement : exec run.sh -----------------------------------------------
-say_begin "Transmission à run.sh"
+say_begin "Transmission a run.sh"
 if [ $DRY -eq 1 ]; then
-    say_end " -- " "$C_DIM" "Transmission à run.sh" "dry-run"
+    say_end " -- " "$C_DIM" "Transmission a run.sh" "dry-run"
     printf '  commande : CALYPSO_PROFILE=%s bash %s %s\n' \
         "$CALYPSO_PROFILE" "$RUN_SH" "${RUN_ARGS[*]}"
     exit 0
 fi
-say_end " OK " "$C_OK" "Transmission à run.sh" "profil=$CALYPSO_PROFILE"
+say_end " OK " "$C_OK" "Transmission a run.sh" "profil=$CALYPSO_PROFILE"
 # Hand-off total : ce processus devient run.sh
 exec bash "$RUN_SH" "${RUN_ARGS[@]}"

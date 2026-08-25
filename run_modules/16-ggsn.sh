@@ -1,20 +1,20 @@
 # =============================================================================
-#  16-ggsn — OsmoGGSN, la sortie paquet (GTP)
+#  16-ggsn - OsmoGGSN, la sortie paquet (GTP)
 # =============================================================================
-#  RÔLE      termine les tunnels GTP du SGSN et route le trafic de l'abonné
+#  ROLE      termine les tunnels GTP du SGSN et route le trafic de l'abonne
 #            vers l'APN (interface TUN). Sans lui, pas de contexte PDP : la
-#            data GPRS/EDGE ne s'établit pas. Optionnel pour la voix et le SMS.
-#  PRÉREQUIS binaire et conf osmo-ggsn ; l'interface TUN de l'APN ; l'adresse
-#            « gtp bind-ip » doit être portée par une interface locale.
-#  SUCCÈS    VTY en écoute (4260) ET les deux sockets GTP UDP en écoute sur
-#            l'adresse de bind (2123 contrôle, 2152 utilisateur) ET aucun
-#            redémarrage depuis le lancement.
+#            data GPRS/EDGE ne s'etablit pas. Optionnel pour la voix et le SMS.
+#  PREREQUIS binaire et conf osmo-ggsn ; l'interface TUN de l'APN ; l'adresse
+#            "gtp bind-ip" doit etre portee par une interface locale.
+#  SUCCES    VTY en ecoute (4260) ET les deux sockets GTP UDP en ecoute sur
+#            l'adresse de bind (2123 controle, 2152 utilisateur) ET aucun
+#            redemarrage depuis le lancement.
 #  JOURNAL   journalctl -u osmo-ggsn   (sans systemd : $LOG_DIR/osmo-ggsn.log)
 # -----------------------------------------------------------------------------
 : "${MODDIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 . "$MODDIR/_lib/core.sh"
 
-MOD_REGISTER ggsn "Cœur — OsmoGGSN (data GTP)"
+MOD_REGISTER ggsn "Coeur - OsmoGGSN (data GTP)"
 MOD_REQUIRED[ggsn]=0
 MOD_DEPS[ggsn]="apn0"
 MOD_PROFILES[ggsn]="calypso faketrx hybrid core"
@@ -33,13 +33,13 @@ _ggsn_ip()  { core_cfg_field "$(_ggsn_cfg)" '^[[:space:]]*gtp[[:space:]]+bind-ip
 mod_ggsn_check() {
     core_bin osmo-ggsn >/dev/null || { mod_fail "binaire osmo-ggsn introuvable"; return $MOD_RC_FAIL; }
     [ -r "$(_ggsn_cfg)" ] || {
-        mod_hint "déployez la configuration : cp configs/osmo-ggsn.cfg $OSMOCOM_CFG/"
+        mod_hint "deployez la configuration : cp configs/osmo-ggsn.cfg $OSMOCOM_CFG/"
         mod_fail "configuration illisible : $(_ggsn_cfg)"; return $MOD_RC_FAIL; }
     local ip; ip="$(_ggsn_ip)"
-    [ -n "$ip" ] || { mod_fail "« gtp bind-ip » absent de $(_ggsn_cfg)"; return $MOD_RC_FAIL; }
+    [ -n "$ip" ] || { mod_fail ""gtp bind-ip" absent de $(_ggsn_cfg)"; return $MOD_RC_FAIL; }
     core_ip_local "$ip" || {
-        mod_hint "corrigez « gtp bind-ip » dans $(_ggsn_cfg) : aucune interface ne porte $ip"
-        mod_fail "adresse GTP $ip introuvable localement — le GGSN refusera de démarrer"
+        mod_hint "corrigez "gtp bind-ip" dans $(_ggsn_cfg) : aucune interface ne porte $ip"
+        mod_fail "adresse GTP $ip introuvable localement - le GGSN refusera de demarrer"
         return $MOD_RC_FAIL; }
     mod_ok
 }
@@ -48,13 +48,13 @@ mod_ggsn_status() { core_unit_active "$GGSN_UNIT" || core_vty_listen "$GGSN_VTY_
 
 mod_ggsn_start() {
     core_svc_start "$GGSN_UNIT" "$(core_bin osmo-ggsn)" -c "$(_ggsn_cfg)" \
-        || { mod_fail "systemctl start $GGSN_UNIT a échoué"
+        || { mod_fail "systemctl start $GGSN_UNIT a echoue"
              mod_hint "journalctl -u $GGSN_UNIT -n 30"; return $MOD_RC_FAIL; }
     mod_ok
 }
 
-# BARRIÈRE — le GGSN peut être « actif » et n'avoir ouvert aucun tunnel s'il
-# n'a pas pu se lier à son adresse GTP ou attacher son interface TUN.
+# BARRIERE - le GGSN peut etre "actif" et n'avoir ouvert aucun tunnel s'il
+# n'a pas pu se lier a son adresse GTP ou attacher son interface TUN.
 mod_ggsn_wait() {
     local to="${MOD_TIMEOUT[ggsn]}" ip; ip="$(_ggsn_ip)"
 
@@ -63,16 +63,16 @@ mod_ggsn_wait() {
         return $MOD_RC_FAIL
     fi
     if ! wait_until "$to" "GTP-C ($ip:$GGSN_GTPC_PORT)" core_udp_listen "$GGSN_GTPC_PORT" "$ip"; then
-        mod_hint "l'interface TUN de l'APN est-elle montée ? ip link show ${APN_DEV:-apn0}"
+        mod_hint "l'interface TUN de l'APN est-elle montee ? ip link show ${APN_DEV:-apn0}"
         return $MOD_RC_FAIL
     fi
     if ! wait_until "$to" "GTP-U ($ip:$GGSN_GTPU_PORT)" core_udp_listen "$GGSN_GTPU_PORT" "$ip"; then
-        mod_hint "port $GGSN_GTPU_PORT déjà pris ? ss -lun | grep $GGSN_GTPU_PORT"
+        mod_hint "port $GGSN_GTPU_PORT deja pris ? ss -lun | grep $GGSN_GTPU_PORT"
         return $MOD_RC_FAIL
     fi
     if core_restarted_since "$GGSN_UNIT"; then
-        mod_hint "journalctl -u $GGSN_UNIT -n 50 : le service redémarre en boucle"
-        mod_fail "OsmoGGSN a redémarré depuis le lancement"
+        mod_hint "journalctl -u $GGSN_UNIT -n 50 : le service redemarre en boucle"
+        mod_fail "OsmoGGSN a redemarre depuis le lancement"
         return $MOD_RC_FAIL
     fi
     mod_ok

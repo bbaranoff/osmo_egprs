@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # force_stack.sh
-# À lancer en root (sudo).
+# A lancer en root (sudo).
 # But :
 #  - FORCER (kill + relance) Linphone en user
 #  - FORCER (kill + relance) Wireshark en root sur UDP/4729 (GSMTAP)
 #  - Restart du service docker
 # Affichage:
-#   [....] action en cours  -> se transforme en -> [ OK ] action finie (même ligne)
+#   [....] action en cours  -> se transforme en -> [ OK ] action finie (meme ligne)
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ kill_name_root() {
   pkill -x "$name" 2>/dev/null || true
 }
 
-# ---------- préflight ----------
+# ---------- preflight ----------
 [[ "${EUID}" -eq 0 ]] || fail "Lance en root: sudo $0"
 
 need sudo
@@ -39,7 +39,7 @@ need systemctl
 
 TARGET_USER="${SUDO_USER:-}"
 if [[ -z "${TARGET_USER}" || "${TARGET_USER}" == "root" ]]; then
-  fail "SUDO_USER absent — lance via sudo (ex: sudo $0)"
+  fail "SUDO_USER absent - lance via sudo (ex: sudo $0)"
 fi
 
 id -u "${TARGET_USER}" >/dev/null 2>&1 || fail "User invalide: ${TARGET_USER}"
@@ -80,5 +80,5 @@ step "Check: listeners UDP/${GSMTAP_PORT}"
 ss -lunp | awk -v p=":${GSMTAP_PORT}" '$0 ~ p {print}' >/dev/null 2>&1 || true
 step_ok "Check: listeners UDP/${GSMTAP_PORT}"
 
-step "Stack forcée"
-step_ok "Stack forcée"
+step "Stack forcee"
+step_ok "Stack forcee"

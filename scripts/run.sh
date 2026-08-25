@@ -1,7 +1,7 @@
 #!/bin/bash
-# run.sh — Orchestrateur intra-container Osmocom
+# run.sh - Orchestrateur intra-container Osmocom
 #
-# PHY_MODE=faketrx (défaut) : fake_trx → trxcon → mobile
+# PHY_MODE=faketrx (defaut) : fake_trx → trxcon → mobile
 # PHY_MODE=virtphy           : osmo-bts-virtual → virtphy → mobile
 #
 set -euo pipefail
@@ -20,9 +20,9 @@ GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC
 FAKETRX_PY="${FAKETRX_PY:-${FAKE_TRX:-${OSMOCOM_BB:-${GSM_ROOT:-/opt/GSM}/osmocom-bb}/src/target/trx_toolkit/fake_trx.py}}"
 OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-1}"; MOBILE_MODE="${MOBILE_MODE:-combined}"
 PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy
-# RUN_NO_PROCESS=1 : prépare/génère uniquement les configs (MS, TRX, handover)
+# RUN_NO_PROCESS=1 : prepare/genere uniquement les configs (MS, TRX, handover)
 # et sort SANS lancer aucun process (ni osmo-start, ni fake_trx/trxcon, ni
-# mobile/asterisk/smsc). Utilisé par le mode QEMU de start.sh qui veut juste
+# mobile/asterisk/smsc). Utilise par le mode QEMU de start.sh qui veut juste
 # les configs en place avant de lancer ${OQC_ROOT}/run.sh.
 RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
@@ -87,7 +87,7 @@ init_tmux() {
         echo -e "  ${GREEN}✓ tmux OK${NC}"
     else
         TMUX_OK=false
-        echo -e "  ${RED}✗ tmux échec — mode background${NC}"
+        echo -e "  ${RED}✗ tmux echec - mode background${NC}"
     fi
 }
 
@@ -146,9 +146,9 @@ generate_ms_configs() {
         echo "$block" >> "$outfile"; echo "" >> "$outfile"
     }
 
-    # Si le fichier est bind-monté (docker -v file:file), rm renvoie EBUSY.
+    # Si le fichier est bind-monte (docker -v file:file), rm renvoie EBUSY.
     # Dans ce cas on ne peut pas le supprimer mais on peut le truncate puis
-    # ré-écrire dedans, ce qui est équivalent pour notre besoin.
+    # re-ecrire dedans, ce qui est equivalent pour notre besoin.
     for f in /root/.osmocom/bb/mobile_ms*.cfg /root/.osmocom/bb/mobile_group*.cfg; do
         [ -e "$f" ] || continue
         if ! rm -f "$f" 2>/dev/null; then
@@ -188,7 +188,7 @@ inject_extra_trx() {
         local a=$((arfcn0 + t*2))
         printf ' trx %d\n  power-ramp max-initial 23000 mdBm\n  power-ramp step-size 2000 mdB\n  power-ramp step-interval 1\n  ms-power-control osmo\n  phy 0 instance %d\n' "$t" "$t" >> "$bts"
     done
-    echo -e "  ${GREEN}✓ ${1} TRX injectés (osmo-bts-trx)${NC}"
+    echo -e "  ${GREEN}✓ ${1} TRX injectes (osmo-bts-trx)${NC}"
 }
 
 # ── TRX injection (virtphy mode) ─────────────────────────────────────────────
@@ -197,7 +197,7 @@ inject_extra_trx_virtual() {
     local bts="/etc/osmocom/osmo-bts-virtual.cfg"
     [ -f "$bts" ] || return 0
 
-    # Ajouter des instances phy supplémentaires après "instance 0"
+    # Ajouter des instances phy supplementaires apres "instance 0"
     local tmp; tmp=$(mktemp)
     local insert_done=0
     while IFS= read -r line; do
@@ -211,11 +211,11 @@ inject_extra_trx_virtual() {
     done < "$bts"
     cp "$tmp" "$bts"; rm -f "$tmp"
 
-    # Ajouter les TRX supplémentaires en fin de fichier
+    # Ajouter les TRX supplementaires en fin de fichier
     for t in $(seq 1 $(($1-1))); do
         printf ' trx %d\n  power-ramp max-initial 23000 mdBm\n  power-ramp step-size 2000 mdB\n  power-ramp step-interval 1\n  ms-power-control osmo\n  phy 0 instance %d\n' "$t" "$t" >> "$bts"
     done
-    echo -e "  ${GREEN}✓ ${1} TRX injectés (osmo-bts-virtual)${NC}"
+    echo -e "  ${GREEN}✓ ${1} TRX injectes (osmo-bts-virtual)${NC}"
 }
 
 # ── Handover ──────────────────────────────────────────────────────────────────
@@ -229,43 +229,43 @@ inject_handover() {
 }
 
 # ── Sinks PulseAudio (gsm_audio + gsm_mic) ───────────────────────────────────
-# Docker : /scripts/  |  natif : /etc/osmocom/  (même script, chemin différent)
+# Docker : /scripts/  |  natif : /etc/osmocom/  (meme script, chemin different)
 # Idempotent et NON FATAL : sans PulseAudio l'audio gapk est indispo, mais on ne
-# doit jamais tuer run.sh (set -e) pour ça.
-# $1 = timeout d'attente de PulseAudio (défaut 30 s). Le démon n'est pas démarré
-# par ce script mais par lib/audio.sh (pipeline qemu) : sur l'appel PRÉCOCE [2d]
-# il peut ne pas être encore là, d'où un timeout court pour ne pas staller.
+# doit jamais tuer run.sh (set -e) pour ca.
+# $1 = timeout d'attente de PulseAudio (defaut 30 s). Le demon n'est pas demarre
+# par ce script mais par lib/audio.sh (pipeline qemu) : sur l'appel PRECOCE [2d]
+# il peut ne pas etre encore la, d'ou un timeout court pour ne pas staller.
 setup_pulse_sinks() {
     local PULSE_SETUP=/scripts/pulse-gsm-setup.sh
     [ -f "$PULSE_SETUP" ] || PULSE_SETUP=/etc/osmocom/pulse-gsm-setup.sh
-    [ -f "$PULSE_SETUP" ] || { echo -e "  ${YELLOW}pulse-gsm-setup.sh introuvable — audio indispo${NC}"; return 0; }
+    [ -f "$PULSE_SETUP" ] || { echo -e "  ${YELLOW}pulse-gsm-setup.sh introuvable - audio indispo${NC}"; return 0; }
     PULSE_TIMEOUT="${1:-30}" "$PULSE_SETUP" \
-        || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh échoué (audio indispo) — on continue${NC}"
+        || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh echoue (audio indispo) - on continue${NC}"
 }
 
 # ── Bridge audio UNIVERSEL ───────────────────────────────────────────────────
-# gapk (RTP réseau → sink gsm_audio) + sortie son. Appelé en mode faketrx/virtphy
-# ET en mode no-process (qemu) — c'est CE bridge qui manquait en qemu (run.sh
-# sortait avant [6c] → gsm_audio muet → « pas d'audio en qemu »).
+# gapk (RTP reseau → sink gsm_audio) + sortie son. Appele en mode faketrx/virtphy
+# ET en mode no-process (qemu) - c'est CE bridge qui manquait en qemu (run.sh
+# sortait avant [6c] → gsm_audio muet → "pas d'audio en qemu").
 #
-# Sortie : si le pulse de l'HÔTE est joignable en TCP (relai ouvert par start.sh,
+# Sortie : si le pulse de l'HOTE est joignable en TCP (relai ouvert par start.sh,
 # = WSLg→Windows en WSL, = pulse de session en Linux natif), on fait un pont
-# direct parec|paplay (1 seule horloge, pas de dérive → pas de son « pété »).
-# Sinon, fallback loopback local vers le sink par défaut du conteneur (carte).
+# direct parec|paplay (1 seule horloge, pas de derive → pas de son "pete").
+# Sinon, fallback loopback local vers le sink par defaut du conteneur (carte).
 audio_bridge() {
-    pactl info >/dev/null 2>&1 || { echo -e "  ${YELLOW}PulseAudio indisponible — bridge audio non lancé${NC}"; return 0; }
+    pactl info >/dev/null 2>&1 || { echo -e "  ${YELLOW}PulseAudio indisponible - bridge audio non lance${NC}"; return 0; }
 
-    # gapk : RTP réseau → sink gsm_audio
+    # gapk : RTP reseau → sink gsm_audio
     local GAPK=/scripts/gapk-start.sh; [ -f "$GAPK" ] || GAPK=/etc/osmocom/gapk-start.sh
     if [ -f "$GAPK" ]; then
         run_in_tmux "gapk" "GAPK_ALSA_DEV=gsm_out bash '$GAPK' auto gsm gsm_out"
-        echo -e "  ${GREEN}✓ gapk auto (RTP réseau → gsm_audio)${NC}"
+        echo -e "  ${GREEN}✓ gapk auto (RTP reseau → gsm_audio)${NC}"
     else
-        echo -e "  ${YELLOW}gapk-start.sh absent — pas de bridge RTP${NC}"
+        echo -e "  ${YELLOW}gapk-start.sh absent - pas de bridge RTP${NC}"
     fi
 
-    # Sortie vers le pulse de l'hôte si le relai TCP est ouvert (HOST_AUDIO_RELAY
-    # est positionné par start.sh quand le relai a été activé : tcp:<gw>:4713).
+    # Sortie vers le pulse de l'hote si le relai TCP est ouvert (HOST_AUDIO_RELAY
+    # est positionne par start.sh quand le relai a ete active : tcp:<gw>:4713).
     local relay="${HOST_AUDIO_RELAY:-}"
     if [ -n "$relay" ] && pactl --server="$relay" info >/dev/null 2>&1; then
         pkill -f "paplay --server=${relay}" 2>/dev/null || true
@@ -277,15 +277,15 @@ audio_bridge() {
             sleep 1
           done' >/var/log/osmocom/host-audio.log 2>&1 &
         echo $! > /run/host-audio.pid
-        echo -e "  ${GREEN}✓ pont audio parec|paplay → hôte (${relay})${NC}"
+        echo -e "  ${GREEN}✓ pont audio parec|paplay → hote (${relay})${NC}"
     else
-        # Fallback natif sans relai : loopback vers le sink par défaut (carte).
+        # Fallback natif sans relai : loopback vers le sink par defaut (carte).
         if ! pactl list short modules 2>/dev/null | grep -q 'source=gsm_audio.monitor'; then
             pactl load-module module-loopback source=gsm_audio.monitor latency_msec=20 >/dev/null 2>&1 \
-                && echo -e "  ${GREEN}✓ loopback gsm_audio → sink par défaut (carte)${NC}" \
-                || echo -e "  ${YELLOW}loopback non chargé (pas de sortie son ?)${NC}"
+                && echo -e "  ${GREEN}✓ loopback gsm_audio → sink par defaut (carte)${NC}" \
+                || echo -e "  ${YELLOW}loopback non charge (pas de sortie son ?)${NC}"
         else
-            echo -e "  ${GREEN}✓ loopback gsm_audio déjà actif${NC}"
+            echo -e "  ${GREEN}✓ loopback gsm_audio deja actif${NC}"
         fi
     fi
 }
@@ -294,10 +294,10 @@ audio_bridge() {
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
-# RUN_NO_PROCESS=1 : on prépare tmux + configs + core Osmocom (osmo-start :
-# STP/HLR/MGW/MSC/BSC… → le HLR est up et peut être alimenté par start.sh),
+# RUN_NO_PROCESS=1 : on prepare tmux + configs + core Osmocom (osmo-start :
+# STP/HLR/MGW/MSC/BSC... → le HLR est up et peut etre alimente par start.sh),
 # mais on NE lance PAS les process radio/mobile/asterisk/smsc dans le tmux.
-[ "$RUN_NO_PROCESS" = "1" ] && echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : core seul, PHY/mobile/asterisk/smsc NON lancés ===${NC}"
+[ "$RUN_NO_PROCESS" = "1" ] && echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : core seul, PHY/mobile/asterisk/smsc NON lances ===${NC}"
 
 echo -e "${GREEN}=== [1/10] tmux ===${NC}"
 init_tmux
@@ -318,15 +318,15 @@ echo -e "${GREEN}=== [2c] Handover ===${NC}"
 inject_handover
 echo ""
 
-# ── [2d] Audio PulseAudio — AVANT le cœur, volontairement ────────────────────
-# [2026-08-12] Ce bloc n'existait qu'en [6b], donc APRÈS osmo-start.sh. Or
+# ── [2d] Audio PulseAudio - AVANT le coeur, volontairement ────────────────────
+# [2026-08-12] Ce bloc n'existait qu'en [6b], donc APRES osmo-start.sh. Or
 # osmo-start.sh fait `exit 1` si le HLR ne monte pas, et avec `set -euo pipefail`
-# (ligne 7) run.sh meurt là : pulse-gsm-setup.sh — le seul endroit qui crée le
-# null-sink gsm_mic — n'est alors JAMAIS exécuté. La capture gsm_in
+# (ligne 7) run.sh meurt la : pulse-gsm-setup.sh - le seul endroit qui cree le
+# null-sink gsm_mic - n'est alors JAMAIS execute. La capture gsm_in
 # (= gsm_mic.monitor) ne s'ouvre plus, gapk_io abandonne les DEUX sens, et tout
-# appel est muet, echo-test 600 compris. C'est exactement le « ça marche sur un
-# PC et pas sur l'autre » : ça dépend de si le HLR est monté du premier coup.
-# L'audio n'a AUCUNE dépendance sur le cœur — on le monte donc en premier.
+# appel est muet, echo-test 600 compris. C'est exactement le "ca marche sur un
+# PC et pas sur l'autre" : ca depend de si le HLR est monte du premier coup.
+# L'audio n'a AUCUNE dependance sur le coeur - on le monte donc en premier.
 # L'appel en [6b] reste en place (idempotent) pour les relances partielles.
 echo -e "${GREEN}=== [2d] Audio PulseAudio (sinks) ===${NC}"
 setup_pulse_sinks 3
@@ -336,19 +336,19 @@ echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 
 # Mode no-process : le core tourne (HLR alimentable par start.sh), on
-# s'arrête ici sans lancer PHY/mobile/asterisk/smsc dans le tmux. On
-# configure tout de même PulseAudio (sink gsm_audio) car le pipeline lancé
+# s'arrete ici sans lancer PHY/mobile/asterisk/smsc dans le tmux. On
+# configure tout de meme PulseAudio (sink gsm_audio) car le pipeline lance
 # ensuite (ex. ${OQC_ROOT}/run.sh) en a besoin pour l'audio gapk.
 if [ "$RUN_NO_PROCESS" = "1" ]; then
     echo ""
     echo -e "${GREEN}=== Audio PulseAudio (no-process) ===${NC}"
     setup_pulse_sinks
-    # Bridge audio AUSSI en no-process : sans ça, gapk n'est jamais lancé et le
-    # pipeline qemu n'a aucun audio (bug « pas de son en qemu »).
+    # Bridge audio AUSSI en no-process : sans ca, gapk n'est jamais lance et le
+    # pipeline qemu n'a aucun audio (bug "pas de son en qemu").
     echo -e "${GREEN}=== Bridge audio (no-process / qemu) ===${NC}"
     audio_bridge
     echo ""
-    echo -e "${GREEN}Core Osmocom prêt (no-process). PHY/mobile/asterisk/smsc NON lancés.${NC}"
+    echo -e "${GREEN}Core Osmocom pret (no-process). PHY/mobile/asterisk/smsc NON lances.${NC}"
     echo -e "  tmux : ${CYAN}tmux -S ${TMUX_SOCKET} attach -t ${SESSION}${NC}"
     exit 0
 fi
@@ -367,7 +367,7 @@ if [ "$PHY_MODE" = "virtphy" ]; then
     # ─────────────────────────────────────────────────────────────────────────
 
     echo -e "${GREEN}=== [4/10] BTS Virtual ===${NC}"
-    # Arrêter osmo-bts-trx s'il a été démarré par systemd
+    # Arreter osmo-bts-trx s'il a ete demarre par systemd
     systemctl stop osmo-bts-trx 2>/dev/null || true
     systemctl disable osmo-bts-trx 2>/dev/null || true
 
@@ -391,7 +391,7 @@ if [ "$PHY_MODE" = "virtphy" ]; then
         fi
         [ $((ms % 8)) -eq 1 ] || [ "$ms" -eq "$N_MS" ] && echo -e "  ${CYAN}[ue${ms}]${NC} l2=${local_l2}"
     done
-    # Laisser virtphy créer les sockets avant de lancer mobile
+    # Laisser virtphy creer les sockets avant de lancer mobile
     sleep 2
 
     # Pas de step 6 (trxcon) en mode virtphy
@@ -404,9 +404,9 @@ else
     # ─────────────────────────────────────────────────────────────────────────
 
     echo -e "${GREEN}=== [3b/10] osmo-bts-trx ===${NC}"
-    # BTS lancé AVANT fake_trx : il poll le transceiver (POWERON) et se connecte
-    # dès que fake_trx répond. On stoppe une éventuelle instance systemd pour
-    # éviter un double-BTS.
+    # BTS lance AVANT fake_trx : il poll le transceiver (POWERON) et se connecte
+    # des que fake_trx repond. On stoppe une eventuelle instance systemd pour
+    # eviter un double-BTS.
     systemctl stop osmo-bts-trx 2>/dev/null || true
     run_in_tmux "bts" "osmo-bts-trx -c /etc/osmocom/osmo-bts-trx.cfg"
 
@@ -442,11 +442,11 @@ else
 fi
 
 echo -e "${GREEN}=== [6b/10] Audio PulseAudio ===${NC}"
-setup_pulse_sinks   # déjà fait en [2d] — idempotent, filet pour relance partielle
+setup_pulse_sinks   # deja fait en [2d] - idempotent, filet pour relance partielle
 echo ""
 
-# ── [6c] Bridge audio : gapk (RTP → gsm_audio) + sortie vers l'hôte ───────────
-echo -e "${GREEN}=== [6c/10] Bridge audio (gapk + sortie hôte) ===${NC}"
+# ── [6c] Bridge audio : gapk (RTP → gsm_audio) + sortie vers l'hote ───────────
+echo -e "${GREEN}=== [6c/10] Bridge audio (gapk + sortie hote) ===${NC}"
 audio_bridge
 echo ""
 
@@ -467,7 +467,7 @@ else
             echo -e " ${GREEN}OK${NC}"; sleep 3
         fi
         run_in_tmux "ue_g${g}" "mobile -c /root/.osmocom/bb/mobile_group${g}.cfg"
-        echo -e "  ${GREEN}Groupe ${g} démarré${NC}"
+        echo -e "  ${GREEN}Groupe ${g} demarre${NC}"
     done
 fi
 
@@ -481,16 +481,16 @@ else
     run_in_tmux "smsc" "echo 'SMSC non disponible'"
 fi
 
-# ── Nettoyage : supprimer la fenêtre main inutile ─────────────────────────────
+# ── Nettoyage : supprimer la fenetre main inutile ─────────────────────────────
 if [ "$TMUX_OK" = true ]; then
     sleep 1
     tmux -S "$TMUX_SOCKET" kill-window -t "${SESSION}:main" 2>/dev/null || true
 fi
 
-# ── Résumé ────────────────────────────────────────────────────────────────────
+# ── Resume ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  Op${OPERATOR_ID} — ${N_MS} MS — ${MOBILE_MODE} — ${PHY_MODE} — ${N_TRX} TRX     ║${NC}"
+echo -e "${GREEN}║  Op${OPERATOR_ID} - ${N_MS} MS - ${MOBILE_MODE} - ${PHY_MODE} - ${N_TRX} TRX     ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 if [ "$PHY_MODE" = "virtphy" ]; then
@@ -507,4 +507,4 @@ if [ "$TMUX_OK" = true ]; then
         || tmux -S "$TMUX_SOCKET" select-window -t "${SESSION}:ue1" 2>/dev/null || true
 fi
 echo ""
-echo -e "${GREEN}run.sh terminé${NC}"
+echo -e "${GREEN}run.sh termine${NC}"

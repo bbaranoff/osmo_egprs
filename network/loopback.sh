@@ -29,11 +29,11 @@ enable_loopback() {
     echo "[*] Sink   : $SINK"
 
     if [[ -n "${ids}" ]]; then
-        echo "[OK] loopback déjà présent : ${ids}"
+        echo "[OK] loopback deja present : ${ids}"
     else
         local mid
         mid="$(pactl load-module module-loopback source="${SOURCE}" sink="${SINK}" latency_msec=20)"
-        echo "[OK] loopback chargé, module id=${mid}"
+        echo "[OK] loopback charge, module id=${mid}"
     fi
 }
 
@@ -45,14 +45,14 @@ disable_loopback() {
     echo "[*] Sink   : $SINK"
 
     if [[ -z "${ids}" ]]; then
-        echo "[OK] aucun loopback à retirer"
+        echo "[OK] aucun loopback a retirer"
         return 0
     fi
 
     while read -r id; do
         [[ -n "${id}" ]] || continue
         pactl unload-module "${id}"
-        echo "[OK] loopback retiré, module id=${id}"
+        echo "[OK] loopback retire, module id=${id}"
     done <<< "${ids}"
 }
 

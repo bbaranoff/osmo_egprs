@@ -1,5 +1,5 @@
-# 00-prereqs — la machine peut-elle accueillir cette installation ?
-INST_REGISTER prereqs "Prérequis du système"
+# 00-prereqs - la machine peut-elle accueillir cette installation ?
+INST_REGISTER prereqs "Prerequis du systeme"
 INST_ROOT[prereqs]=0
 
 inst_prereqs_run() {

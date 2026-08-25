@@ -1,9 +1,9 @@
 #!/bin/bash
-# start-nitb.sh — meme lanceur que start.sh, mais sur l'image osmocom-nitb.
+# start-nitb.sh - meme lanceur que start.sh, mais sur l'image osmocom-nitb.
 #
 # POURQUOI UN WRAPPER ET PAS UNE COPIE. start.sh fait 1 300 lignes (reseaux,
 # generation de configs, SS7 inter-operateurs, ports, audio). Le dupliquer
-# creerait une 2e copie qui divergerait — le depot en a deja paye le prix
+# creerait une 2e copie qui divergerait - le depot en a deja paye le prix
 # ailleurs (4 copies de si_bridge.py, 3 de gapk-start.sh, toutes divergentes).
 # Ici il n'y a qu'UNE variable qui change : l'image.
 #
@@ -15,7 +15,7 @@
 #     MASQUE l'entrypoint de l'image nitb. Ce n'est pas un probleme : le
 #     dossier genere contient bien un entrypoint.sh (copie de scripts/
 #     entrypoint.sh, le meme fichier que /scripts/entrypoint.sh dans l'image
-#     run — 1988 o, identique). C'est la condition qui rend ce wrapper viable :
+#     run - 1988 o, identique). C'est la condition qui rend ce wrapper viable :
 #     SI scripts/entrypoint.sh disparaissait du dossier genere, l'image nitb
 #     demarrerait sans entrypoint alors que l'image run continuerait de
 #     marcher. Le controle ci-dessous le verifie a chaque lancement.
@@ -49,7 +49,7 @@ fi
 # ── 2. L'entrypoint doit survivre au montage de /etc/osmocom ──────────────────
 # On teste la PRESENCE, pas le bit d'execution : dans le depot le fichier est en
 # 644, et c'est normal. Le bit +x est pose EN AVAL, aux deux endroits qui en ont
-# besoin — generate_configs.sh l.204-205 (`cp scripts/*` puis `chmod +x` dans le
+# besoin - generate_configs.sh l.204-205 (`cp scripts/*` puis `chmod +x` dans le
 # dossier genere, celui qui est monte sur /etc/osmocom) et Dockerfile.run l.75
 # (`chmod +x /scripts/*.sh` dans l'image). Tester `-x` ici refusait donc de
 # demarrer sur un depot parfaitement sain.
@@ -57,7 +57,7 @@ if [ ! -s "${HERE}/scripts/entrypoint.sh" ]; then
     echo -e "${RED}scripts/entrypoint.sh absent ou vide.${NC}"
     echo -e "L'image ${IMAGE_NITB} a son entrypoint dans /etc/osmocom, que start.sh"
     echo -e "recouvre par le dossier de config genere. Sans ce fichier, le"
-    echo -e "conteneur demarrerait sans entrypoint — alors que l'image"
+    echo -e "conteneur demarrerait sans entrypoint - alors que l'image"
     echo -e "osmocom-run, elle, continuerait de marcher (son entrypoint est dans"
     echo -e "/scripts). Panne asymetrique et illisible : on refuse avant."
     exit 1

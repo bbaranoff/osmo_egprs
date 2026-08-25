@@ -1,27 +1,27 @@
 #!/bin/bash
-# start.sh — Lance la stack Osmocom GSM multi-opérateurs
+# start.sh - Lance la stack Osmocom GSM multi-operateurs
 #
-# Modes : net-host (1 opérateur, SDR physique) | bridge (N opérateurs SS7 inter-op)
+# Modes : net-host (1 operateur, SDR physique) | bridge (N operateurs SS7 inter-op)
 set -eu
 
-# ── Ce script est le lanceur de l'HÔTE. Refus net s'il tourne DANS le conteneur ──
-# [2026-08-12] start.sh pilote docker (build, réseaux, `docker run`, volumes) ;
-# start-direct.sh, lui, prépare l'environnement Calypso et lance run.sh À
-# L'INTÉRIEUR. Les confondre ne donne pas une erreur lisible : `docker` n'existe
-# pas dans l'image, donc on part sur une cascade de « command not found » après
-# avoir déjà créé des fichiers et touché des configs. Mieux vaut s'arrêter avant
-# d'avoir rien fait, et nommer le script à utiliser.
+# ── Ce script est le lanceur de l'HOTE. Refus net s'il tourne DANS le conteneur ──
+# [2026-08-12] start.sh pilote docker (build, reseaux, `docker run`, volumes) ;
+# start-direct.sh, lui, prepare l'environnement Calypso et lance run.sh A
+# L'INTERIEUR. Les confondre ne donne pas une erreur lisible : `docker` n'existe
+# pas dans l'image, donc on part sur une cascade de "command not found" apres
+# avoir deja cree des fichiers et touche des configs. Mieux vaut s'arreter avant
+# d'avoir rien fait, et nommer le script a utiliser.
 #
-# Discriminant vérifié dans LES DEUX SENS le 12/08 : `/.dockerenv` et
-# `/etc/docker-entrypoint-cmd` (posé par scripts/entrypoint.sh) sont présents
-# dans le conteneur et absents sur l'hôte. On exige les DEUX : `/.dockerenv`
-# seul serait vrai dans n'importe quel conteneur, y compris un où ce script
-# aurait légitimement sa place.
+# Discriminant verifie dans LES DEUX SENS le 12/08 : `/.dockerenv` et
+# `/etc/docker-entrypoint-cmd` (pose par scripts/entrypoint.sh) sont presents
+# dans le conteneur et absents sur l'hote. On exige les DEUX : `/.dockerenv`
+# seul serait vrai dans n'importe quel conteneur, y compris un ou ce script
+# aurait legitimement sa place.
 if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then
-    printf '\033[1;31mVous êtes dans le docker ! Utilisez start-direct.sh\033[0m\n' >&2
-    printf '\n  \033[0;36m/opt/GSM/osmo_egprs/start-direct.sh\033[0m   (ou ./start-direct.sh depuis le dépôt)\n' >&2
-    printf '\n  start.sh est le lanceur de l'"'"'HÔTE : il construit l'"'"'image, crée les\n' >&2
-    printf '  réseaux et fait le « docker run ». Rien de tout ça n'"'"'a de sens ici.\n' >&2
+    printf '\033[1;31mVous etes dans le docker ! Utilisez start-direct.sh\033[0m\n' >&2
+    printf '\n  \033[0;36m/opt/GSM/osmo_egprs/start-direct.sh\033[0m   (ou ./start-direct.sh depuis le depot)\n' >&2
+    printf '\n  start.sh est le lanceur de l'"'"'HOTE : il construit l'"'"'image, cree les\n' >&2
+    printf '  reseaux et fait le "docker run". Rien de tout ca n'"'"'a de sens ici.\n' >&2
     exit 1
 fi
 
@@ -29,11 +29,11 @@ DEBUG=
 if [[ -n "$DEBUG" ]]; then
     set -x
     PS4='[DEBUG] + ${BASH_SOURCE}:${LINENO}: '
-    echo "=== MODE DEBUG ACTIVÉ ==="
+    echo "=== MODE DEBUG ACTIVE ==="
 fi
 
 IMAGE_BASE="osmocom-nitb"
-# [2026-08-12] Surchargeable depuis l'environnement — c'est ce que fait
+# [2026-08-12] Surchargeable depuis l'environnement - c'est ce que fait
 # start-nitb.sh, qui relance exactement ce script avec IMAGE_RUN=osmocom-nitb.
 # Idiome `:=` du projet : une valeur posee explicitement en amont gagne, le
 # defaut ne s'applique qu'a vide. NE PAS remettre en dur : start-nitb.sh
@@ -45,8 +45,8 @@ INTER_NET="gsm-inter"
 INTER_NET_SUBNET="172.20.0.0/24"
 INTER_NET_GATEWAY="172.20.0.1"
 
-# Quel nœud du WAN héberge le hub SS7. UN SEUL doit le faire : deux hubs, c'est
-# deux réseaux SS7 séparés qui s'ignorent, et rien ne le signale.
+# Quel noeud du WAN heberge le hub SS7. UN SEUL doit le faire : deux hubs, c'est
+# deux reseaux SS7 separes qui s'ignorent, et rien ne le signale.
 WAN_HUB_NODE="${WAN_HUB_NODE:-1}"
 IMAGE_STP="${IMAGE_STP:-osmocom-stp}"
 INTER_STP_CONTAINER="osmo-inter-stp"
@@ -65,20 +65,20 @@ SMS_ROUTING_DIR=""
 # ══════════════════════════════════════════════════════════════════════════════
 # WAN Interop
 # ══════════════════════════════════════════════════════════════════════════════
-# Deux WAN coexistent ici, et ils ne font PAS la même chose :
+# Deux WAN coexistent ici, et ils ne font PAS la meme chose :
 #
 #   WAN_ENABLED (legacy, --pas d'option, question whiptail) : DEUX serveurs,
-#     préfixe unique 66, network/setup-wan-interop.sh. Conservé tel quel.
+#     prefixe unique 66, network/setup-wan-interop.sh. Conserve tel quel.
 #
-#   WAN_MESH (option --wan) : N noeuds (1 à 9), UN INDICATIF PAR NOEUD,
-#     network/setup-wan-mesh.sh. C'est le seul qui tienne au-delà de deux
-#     serveurs — le legacy réécrit son bloc de conf à chaque appel, donc
-#     l'enchaîner sur trois pairs ne laisse que le dernier.
+#   WAN_MESH (option --wan) : N noeuds (1 a 9), UN INDICATIF PAR NOEUD,
+#     network/setup-wan-mesh.sh. C'est le seul qui tienne au-dela de deux
+#     serveurs - le legacy reecrit son bloc de conf a chaque appel, donc
+#     l'enchainer sur trois pairs ne laisse que le dernier.
 #
-# Les deux sont EXCLUSIFS et aucun n'est actif par défaut.
+# Les deux sont EXCLUSIFS et aucun n'est actif par defaut.
 WAN_MESH=0
 # --virtualbox : les pairs du WAN sont des VM VirtualBox sur CETTE machine, et
-# cette machine est elle-même un noeud. Voir network/setup-vbox-interco.sh.
+# cette machine est elle-meme un noeud. Voir network/setup-vbox-interco.sh.
 VBOX_INTERCO=0
 VBOX_NODES=""
 VBOX_HOST_NODE=1
@@ -95,12 +95,12 @@ WAN_SIP_BASE=5080
 WAN_RTP_BASE=20000
 WAN_RTP_PER_OP=500
 PHY_MODE="faketrx"   # faketrx | virtphy
-# Choix passés au start-direct.sh DANS le conteneur via le handoff (NO_MENU=1),
-# pour éviter les menus whiptail laggy en docker exec -ti. Fixés sur l'HÔTE.
-# Retenu AVANT le défaut : « l'appelant a-t-il imposé le mode ? ». C'est ce qui
-# permet à --wan de basculer en hybride sans écraser un HANDOFF_MODE=... explicite.
+# Choix passes au start-direct.sh DANS le conteneur via le handoff (NO_MENU=1),
+# pour eviter les menus whiptail laggy en docker exec -ti. Fixes sur l'HOTE.
+# Retenu AVANT le defaut : "l'appelant a-t-il impose le mode ?". C'est ce qui
+# permet a --wan de basculer en hybride sans ecraser un HANDOFF_MODE=... explicite.
 HANDOFF_MODE_FROM_ENV="${HANDOFF_MODE:+1}"
-HANDOFF_MODE="${HANDOFF_MODE:-qemu}"               # qemu | faketrx-qemu (combiné)
+HANDOFF_MODE="${HANDOFF_MODE:-qemu}"               # qemu | faketrx-qemu (combine)
 HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -120,16 +120,16 @@ wan_rtp_start()   { echo $(( WAN_RTP_BASE + ($1 - 1) * WAN_RTP_PER_OP )); }
 wan_rtp_end()     { echo $(( WAN_RTP_BASE + $1 * WAN_RTP_PER_OP - 1 )); }
 
 wan_sms_port()    { echo $(( 7890 + $1 - 1 )); }
-# Un WAN est actif — legacy OU mesh. Sert partout où la question est « faut-il
-# ouvrir les ports WAN », indépendamment du mécanisme choisi.
+# Un WAN est actif - legacy OU mesh. Sert partout ou la question est "faut-il
+# ouvrir les ports WAN", independamment du mecanisme choisi.
 wan_active()      { [ "$WAN_ENABLED" = "true" ] || [ "${WAN_MESH:-0}" = "1" ]; }
 
-# Linphone helpers — port SIP/RTP exposé sur le host
+# Linphone helpers - port SIP/RTP expose sur le host
 linphone_sip_port()  { echo $(( 5060 + ($1 - 1) )); }
 linphone_rtp_start() { echo $(( 30000 + ($1 - 1) * 200 )); }
 linphone_rtp_end()   { echo $(( 30000 + $1 * 200 - 1 )); }
 
-# Global — détecté avant la boucle opérateurs
+# Global - detecte avant la boucle operateurs
 HOST_IP="127.0.0.1"
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
@@ -179,18 +179,18 @@ wt_msg() {
     whiptail --backtitle "$WT_BACKTITLE" --msgbox "$1" 10 "$WT_WIDTH"
 }
 
-# ── Loopback audio côté session utilisateur ───────────────────────────────
-# ── Session audio de l'hôte : QUI, et OÙ ────────────────────────────────────
-# [2026-08-12] Ces deux fonctions codaient « nirvana » en dur et cherchaient
-# /home/<user>/osmo_egprs/loopback.sh — un chemin QUI N'EXISTE PAS (le script
-# est network/loopback.sh). Résultat : enable_user_loopback échouait sur toute
-# machine sans utilisateur nirvana, et disable_user_loopback (appelé à l'arrêt)
-# était déjà du code mort ICI. On résout les deux à l'exécution.
+# ── Loopback audio cote session utilisateur ───────────────────────────────
+# ── Session audio de l'hote : QUI, et OU ────────────────────────────────────
+# [2026-08-12] Ces deux fonctions codaient "nirvana" en dur et cherchaient
+# /home/<user>/osmo_egprs/loopback.sh - un chemin QUI N'EXISTE PAS (le script
+# est network/loopback.sh). Resultat : enable_user_loopback echouait sur toute
+# machine sans utilisateur nirvana, et disable_user_loopback (appele a l'arret)
+# etait deja du code mort ICI. On resout les deux a l'execution.
 #
-# Le critère du bon utilisateur n'est pas son nom mais la PRÉSENCE de son socket
+# Le critere du bon utilisateur n'est pas son nom mais la PRESENCE de son socket
 # pulse : c'est la seule chose qui distingue une session graphique vivante d'un
-# compte qui existe. Même logique que session_user() de wslg-audio-bridge.sh,
-# étendue au balayage de /run/user/*.
+# compte qui existe. Meme logique que session_user() de wslg-audio-bridge.sh,
+# etendue au balayage de /run/user/*.
 session_pulse_user() {
     local u uid sock
     for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)" "${USER:-}"; do
@@ -198,7 +198,7 @@ session_pulse_user() {
         uid="$(id -u "$u" 2>/dev/null)" || continue
         [ -S "/run/user/${uid}/pulse/native" ] && { echo "$u"; return 0; }
     done
-    # Dernier recours : propriétaire du premier socket pulse trouvé. Couvre le
+    # Dernier recours : proprietaire du premier socket pulse trouve. Couvre le
     # `sudo -i` (SUDO_USER perdu) et les sessions sans logname (cron, service).
     for sock in /run/user/*/pulse/native; do
         [ -S "$sock" ] || continue
@@ -209,7 +209,7 @@ session_pulse_user() {
     return 1
 }
 
-# Le script de loopback vit dans le dépôt, pas dans un $HOME.
+# Le script de loopback vit dans le depot, pas dans un $HOME.
 find_loopback_script() {
     local d c
     d="$(cd "$(dirname "$0")" && pwd)"
@@ -222,11 +222,11 @@ find_loopback_script() {
 enable_user_loopback() {
     local target_user target_uid target_runtime loopback_script
     target_user="$(session_pulse_user)" || {
-        echo -e "  ${YELLOW}[audio] aucune session PulseAudio utilisateur — loopback ignoré${NC}"
+        echo -e "  ${YELLOW}[audio] aucune session PulseAudio utilisateur - loopback ignore${NC}"
         return 0
     }
     loopback_script="$(find_loopback_script)" || {
-        echo -e "  ${YELLOW}[audio] network/loopback.sh introuvable — loopback ignoré${NC}"
+        echo -e "  ${YELLOW}[audio] network/loopback.sh introuvable - loopback ignore${NC}"
         return 0
     }
     target_uid="$(id -u "$target_user")"
@@ -242,7 +242,7 @@ enable_user_loopback() {
             echo -e "  ${RED}[FAIL]${NC} enable loopback"
             return 1
         }
-    echo -e "[ OK ]${NC} loopback activé"
+    echo -e "[ OK ]${NC} loopback active"
 }
 
 disable_user_loopback() {
@@ -288,7 +288,7 @@ build_alsa_args() {
     echo "$alsa_args"
 }
 
-# ── Audio hôte : expose le pulse de l'hôte en TCP ──────────────────────────
+# ── Audio hote : expose le pulse de l'hote en TCP ──────────────────────────
 ensure_host_audio_relay() {
     [ -n "${HOST_AUDIO_RELAY_DONE:-}" ] && return 0
     HOST_AUDIO_RELAY_DONE=1
@@ -296,18 +296,18 @@ ensure_host_audio_relay() {
     [ -x "$bridge" ] || { echo -e "  ${YELLOW}[host-audio] $bridge introuvable${NC}" >&2; return 0; }
     if "$bridge" host-relay; then
         HOST_AUDIO_RELAY="tcp:${INTER_NET_GATEWAY}:${WSLG_TCP_PORT:-4713}"
-        echo -e "  ${GREEN}[host-audio] relai prêt → ${HOST_AUDIO_RELAY}${NC}"
+        echo -e "  ${GREEN}[host-audio] relai pret → ${HOST_AUDIO_RELAY}${NC}"
     else
         HOST_AUDIO_RELAY=""
-        echo -e "  ${YELLOW}[host-audio] relai non ouvert — fallback carte locale dans le conteneur${NC}"
+        echo -e "  ${YELLOW}[host-audio] relai non ouvert - fallback carte locale dans le conteneur${NC}"
     fi
 
     # [2026-08-12] Sens MONTANT (micro). Le relai ci-dessus ne couvre que la
-    # descente (gsm_audio.monitor → HP de l'hôte). Le micro, lui, vient du
-    # navigateur, qui capture la source PAR DEFAUT de l'hôte — laquelle peut
-    # très bien être une entrée fantôme qui ne sort que du zéro (vécu ici :
-    # défaut non muté à 93 % et pourtant silence total, cf. host_mic()).
-    # On choisit donc la source à l'oreille, pas au nom. Non fatal.
+    # descente (gsm_audio.monitor → HP de l'hote). Le micro, lui, vient du
+    # navigateur, qui capture la source PAR DEFAUT de l'hote - laquelle peut
+    # tres bien etre une entree fantome qui ne sort que du zero (vecu ici :
+    # defaut non mute a 93 % et pourtant silence total, cf. host_mic()).
+    # On choisit donc la source a l'oreille, pas au nom. Non fatal.
     "$bridge" host-mic || true
 }
 
@@ -319,24 +319,24 @@ QUICK_EXPLICIT=0; [ -n "${OSMO_QUICK:-}" ] && QUICK_EXPLICIT=1
 
 build_run_image() {
     if [ "${QUICK:-0}" = "1" ]; then
-        echo -e "${GREEN}Build de l'image run...${NC} ${YELLOW}(quick — cache docker réutilisé)${NC}"
+        echo -e "${GREEN}Build de l'image run...${NC} ${YELLOW}(quick - cache docker reutilise)${NC}"
         docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
     else
-        echo -e "${GREEN}Build de l'image run...${NC} ${CYAN}(normal — --no-cache)${NC}"
+        echo -e "${GREEN}Build de l'image run...${NC} ${CYAN}(normal - --no-cache)${NC}"
         docker build --no-cache --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
     fi
-    echo -e "${GREEN}Image '$IMAGE_RUN' prête.${NC}"
+    echo -e "${GREEN}Image '$IMAGE_RUN' prete.${NC}"
 }
 
 check_image() {
     if ! docker image inspect "$IMAGE_RUN" &>/dev/null; then
-        echo -e "${RED}Image '$IMAGE_RUN' introuvable — build en cours...${NC}"
+        echo -e "${RED}Image '$IMAGE_RUN' introuvable - build en cours...${NC}"
         build_run_image
     fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Génération dynamique — pjsip interop trunks
+# Generation dynamique - pjsip interop trunks
 # ══════════════════════════════════════════════════════════════════════════════
 generate_pjsip_interop_trunks() {
     local op_id=$1
@@ -408,38 +408,38 @@ EOF
 # ══════════════════════════════════════════════════════════════════════════════
 _generate_sms_routing_conf_fallback() {
     local op_id=$1 n_operators=$2
-    printf '# sms-routing.conf — Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
+    printf '# sms-routing.conf - Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
     for i in $(seq 1 "$n_operators"); do
         printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"
     done
     printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        for ms in 1 2; do printf '%s = %s\n' "$(( i * 10000 + ms ))" "$i"; done   # MSISDN exacts op*10000+ms (10001,10002,...) — PAS de concatenation
+        for ms in 1 2; do printf '%s = %s\n' "$(( i * 10000 + ms ))" "$i"; done   # MSISDN exacts op*10000+ms (10001,10002,...) - PAS de concatenation
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ─────────────────────────────────────────────────────────────────────────────
-# Configuration du réseau — déléguée à ./generate_configs.sh
+# Configuration du reseau - deleguee a ./generate_configs.sh
 #
 # [2026-08-03] Ce fichier portait ici une copie de 132 lignes de
 # apply_config_templates(), jumelle de celle de lib/gabarits.sh (70 lignes).
-# Deux implémentations de la même chose, qui divergeaient en silence : celle-ci
-# copiait tout scripts/, l'autre une liste blanche périmée. Elles vivent
-# désormais dans generate_configs.sh, une seule fois.
+# Deux implementations de la meme chose, qui divergeaient en silence : celle-ci
+# copiait tout scripts/, l'autre une liste blanche perimee. Elles vivent
+# desormais dans generate_configs.sh, une seule fois.
 #
-# generate_configs.sh crée globals.conf à la racine s'il n'existe pas — et ne
-# l'écrase JAMAIS ensuite. Tes réglages survivent donc à tous les runs. Pour
+# generate_configs.sh cree globals.conf a la racine s'il n'existe pas - et ne
+# l'ecrase JAMAIS ensuite. Tes reglages survivent donc a tous les runs. Pour
 # repartir des valeurs d'usine : ./generate_configs.sh --force
 # ─────────────────────────────────────────────────────────────────────────────
-# start.sh n'a pas de variable de répertoire (il travaille en chemins relatifs
-# depuis la racine du dépôt) : on résout ici, sans rien supposer.
+# start.sh n'a pas de variable de repertoire (il travaille en chemins relatifs
+# depuis la racine du depot) : on resout ici, sans rien supposer.
 #
-# BASH_SOURCE ne suffit pas : build-iso.sh extrait ce fichier en bibliothèque
-# ($WORK/start.lib.sh) puis la source, et BASH_SOURCE désigne alors la COPIE,
-# dans un répertoire de travail où generate_configs.sh n'existe pas.
-# OSMO_REPO_DIR laisse l'appelant nommer la vraie racine du dépôt.
+# BASH_SOURCE ne suffit pas : build-iso.sh extrait ce fichier en bibliotheque
+# ($WORK/start.lib.sh) puis la source, et BASH_SOURCE designe alors la COPIE,
+# dans un repertoire de travail ou generate_configs.sh n'existe pas.
+# OSMO_REPO_DIR laisse l'appelant nommer la vraie racine du depot.
 _GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate_configs.sh"
 "$_GC_SH" >/dev/null || true
 . "$_GC_SH"
@@ -462,7 +462,7 @@ _GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate
 # VOIT au lieu d'etre ecrasee en silence.
 #
 # qemu-src est RECOMPILE apres le pull : mettre la source a jour sans relier le
-# binaire ne change rien a ce qui tourne — et c'est indiscernable d'un pull qui
+# binaire ne change rien a ce qui tourne - et c'est indiscernable d'un pull qui
 # aurait echoue. Le juge d'un binaire a jour reste `stat -L /proc/<pid>/exe`.
 #
 # Non bloquant (reseau absent = on continue), mais BRUYANT : un pull rate doit
@@ -472,7 +472,7 @@ force_update_trees() {
     echo -e "  ${GREEN}[*] Mise a jour forcee des depots (avant run.sh)...${NC}"
     for repo in /opt/GSM/qemu-src /opt/GSM/osmo_egprs /opt/osmo-egprs-web; do
         if ! docker exec "$c" test -d "$repo/.git" 2>/dev/null; then
-            echo -e "    ${YELLOW}$repo : pas un depot git — ignore${NC}"
+            echo -e "    ${YELLOW}$repo : pas un depot git - ignore${NC}"
             continue
         fi
         local before after
@@ -485,7 +485,7 @@ force_update_trees() {
                 echo -e "    ${GREEN}$repo${NC} : $before -> $after"
             fi
         else
-            echo -e "    ${RED}$repo : pull KO (divergence ou reseau) — le run part sur $before${NC}"
+            echo -e "    ${RED}$repo : pull KO (divergence ou reseau) - le run part sur $before${NC}"
         fi
     done
     # Recompilation de QEMU : sans elle le pull ci-dessus ne change RIEN au
@@ -494,7 +494,7 @@ force_update_trees() {
     if docker exec "$c" bash -c 'cd /opt/GSM/qemu-src/build && ninja' >/dev/null 2>&1; then
         echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qemu-src/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
     else
-        echo -e "    ${RED}ninja KO — le run utilisera le binaire de l'image${NC}"
+        echo -e "    ${RED}ninja KO - le run utilisera le binaire de l'image${NC}"
         docker exec "$c" bash -c 'cd /opt/GSM/qemu-src/build && ninja 2>&1 | tail -15' | sed 's/^/      /'
     fi
 }
@@ -517,10 +517,10 @@ build_vol_args() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TUN hôte
+# TUN hote
 # ══════════════════════════════════════════════════════════════════════════════
 prepare_host_tun() {
-    echo -e "${GREEN}[*] Configuration TUN sur l'hôte...${NC}"
+    echo -e "${GREEN}[*] Configuration TUN sur l'hote...${NC}"
     modprobe tun 2>/dev/null || true
     mkdir -p /dev/net
     if [ ! -c /dev/net/tun ]; then
@@ -542,34 +542,34 @@ start_inter_stp() {
     tmpdir=$(mktemp -d)
     local inter_cfg="${tmpdir}/osmo-stp-interop.cfg"
     if [ "${WAN_MESH:-0}" = "1" ]; then
-        # Plan WAN : un AS par couple (nœud, opérateur), point codes
-        # 1.<nœud><op>.<rôle>. Le hub doit connaître TOUS les nœuds, pas
-        # seulement les opérateurs locaux — sinon les ASP distants s'attachent
-        # à un AS qui n'existe pas et sont rejetés sans explication.
-        echo -e "${GREEN}Génération config inter-STP WAN (${WAN_NODE_COUNT} nœuds × ${n_operators})...${NC}"
+        # Plan WAN : un AS par couple (noeud, operateur), point codes
+        # 1.<noeud><op>.<role>. Le hub doit connaitre TOUS les noeuds, pas
+        # seulement les operateurs locaux - sinon les ASP distants s'attachent
+        # a un AS qui n'existe pas et sont rejetes sans explication.
+        echo -e "${GREEN}Generation config inter-STP WAN (${WAN_NODE_COUNT} noeuds × ${n_operators})...${NC}"
         bash ./helpers/create_interop.sh --wan "$WAN_NODE_COUNT" "$n_operators" "$inter_cfg" > /dev/null
     else
-        echo -e "${GREEN}Génération config inter-STP (${n_operators} opérateurs)...${NC}"
+        echo -e "${GREEN}Generation config inter-STP (${n_operators} operateurs)...${NC}"
         bash ./helpers/create_interop.sh "$n_operators" "$inter_cfg" > /dev/null
     fi
     if [ ! -f "$inter_cfg" ]; then
-        echo -e "${RED}Échec génération config inter-STP${NC}"; exit 1
+        echo -e "${RED}Echec generation config inter-STP${NC}"; exit 1
     fi
     # Le hub ne fait que router du M3UA : l'image osmocom-stp (Dockerfile.stp)
-    # lui suffit et pèse une fraction d'osmocom-run. On ne la CONSTRUIT pas ici
-    # à l'insu de l'appelant — si elle manque, on reste sur l'image complète,
+    # lui suffit et pese une fraction d'osmocom-run. On ne la CONSTRUIT pas ici
+    # a l'insu de l'appelant - si elle manque, on reste sur l'image complete,
     # qui contient aussi osmo-stp.
     local stp_image="$IMAGE_RUN"
     if [ "${BUILD_STP:-0}" = "1" ] && ! docker image inspect "$IMAGE_STP" >/dev/null 2>&1; then
         echo -e "  ${GREEN}Construction de ${IMAGE_STP} (Dockerfile.stp)...${NC}"
         docker build -f "$(dirname "$0")/Dockerfile.stp" -t "$IMAGE_STP" "$(dirname "$0")" \
-            || echo -e "  ${YELLOW}⚠ échec — on restera sur ${IMAGE_RUN}${NC}"
+            || echo -e "  ${YELLOW}⚠ echec - on restera sur ${IMAGE_RUN}${NC}"
     fi
     if docker image inspect "$IMAGE_STP" >/dev/null 2>&1; then
         stp_image="$IMAGE_STP"
         echo -e "  ${CYAN}image ${IMAGE_STP} (STP seul)${NC}"
     elif [ "${WAN_MESH:-0}" = "1" ]; then
-        echo -e "  ${YELLOW}image ${IMAGE_STP} absente — on utilise ${IMAGE_RUN}.${NC}"
+        echo -e "  ${YELLOW}image ${IMAGE_STP} absente - on utilise ${IMAGE_RUN}.${NC}"
         echo -e "  ${CYAN}Pour la construire : docker build -f Dockerfile.stp -t ${IMAGE_STP} .${NC}"
     fi
 
@@ -589,7 +589,7 @@ start_inter_stp() {
     docker exec "$INTER_STP_CONTAINER" \
         tmux new-session -d -s stp \
         "osmo-stp -c /etc/osmocom/osmo-stp-interop.cfg 2>&1 | tee /tmp/osmo-stp.log"
-    echo -ne "${GREEN}[*] Attente démarrage inter-STP"
+    echo -ne "${GREEN}[*] Attente demarrage inter-STP"
     local retries=25
     while [ $retries -gt 0 ]; do
         if docker exec "$INTER_STP_CONTAINER" \
@@ -611,7 +611,7 @@ start_inter_stp() {
 
 wait_inter_stp_ready() {
     local n_operators=$1
-    echo -ne "${GREEN}[*] Vérification stabilisation inter-STP (routes SS7)${NC}"
+    echo -ne "${GREEN}[*] Verification stabilisation inter-STP (routes SS7)${NC}"
     for i in {1..15}; do sleep 1; echo -n "."; done
     echo -e " ${GREEN}✓${NC}"
     return 0
@@ -660,32 +660,32 @@ setup_wan_interop() {
 # ══════════════════════════════════════════════════════════════════════════════
 # WAN mesh (--wan)
 # ══════════════════════════════════════════════════════════════════════════════
-# Renseigne la table des noeuds : sans interaction si WAN_NODES est déjà posé
+# Renseigne la table des noeuds : sans interaction si WAN_NODES est deja pose
 # (option --wan-nodes ou variable d'environnement), par questions sinon.
 wan_mesh_configure() {
     local n_operators=$1
     WAN_OPS="$n_operators"
 
-    # Le point code WAN vaut 1.<nœud><op>.<rôle> : le champ central du format
-    # ITU 3-8-3 tient sur 8 bits, soit 255. Avec 12 opérateurs, le nœud 9
-    # donnerait « 912 » — un point code invalide, refusé par osmo-stp au
-    # démarrage avec une erreur de parsing qui ne dit rien du nombre
-    # d'opérateurs. On arrête ici, en nommant la cause.
+    # Le point code WAN vaut 1.<noeud><op>.<role> : le champ central du format
+    # ITU 3-8-3 tient sur 8 bits, soit 255. Avec 12 operateurs, le noeud 9
+    # donnerait "912" - un point code invalide, refuse par osmo-stp au
+    # demarrage avec une erreur de parsing qui ne dit rien du nombre
+    # d'operateurs. On arrete ici, en nommant la cause.
     if [ "$n_operators" -gt 9 ]; then
-        echo -e "${RED}[WAN] ${n_operators} opérateurs : le plan de point codes WAN${NC}" >&2
-        echo -e "${RED}      (1.<nœud><op>.<rôle>) n'en admet que 9 par nœud.${NC}" >&2
-        echo -e "${CYAN}      Répartissez-les sur plusieurs nœuds, ou lancez sans --wan.${NC}" >&2
+        echo -e "${RED}[WAN] ${n_operators} operateurs : le plan de point codes WAN${NC}" >&2
+        echo -e "${RED}      (1.<noeud><op>.<role>) n'en admet que 9 par noeud.${NC}" >&2
+        echo -e "${CYAN}      Repartissez-les sur plusieurs noeuds, ou lancez sans --wan.${NC}" >&2
         exit 1
     fi
 
-    # --virtualbox : le segment, les VM et la table sont fabriqués AVANT tout le
+    # --virtualbox : le segment, les VM et la table sont fabriques AVANT tout le
     # reste, puis relus comme n'importe quelle table. Le WAN qui suit ne sait
-    # pas — et n'a pas à savoir — que ses pairs sont des VM.
+    # pas - et n'a pas a savoir - que ses pairs sont des VM.
     if [ "${VBOX_INTERCO:-0}" = "1" ] && [ -z "${WAN_NODES:-}" ]; then
         local _vb=("$(dirname "$0")/network/setup-vbox-interco.sh"
                    --host-node "$VBOX_HOST_NODE" --conf "$WAN_CONF_FILE")
         [ -n "${VBOX_NODES:-}" ] && _vb+=(--nodes "$VBOX_NODES")
-        bash "${_vb[@]}" || { echo -e "${RED}[WAN] interconnexion VirtualBox échouée${NC}" >&2; exit 1; }
+        bash "${_vb[@]}" || { echo -e "${RED}[WAN] interconnexion VirtualBox echouee${NC}" >&2; exit 1; }
         wan_nodes_load "$WAN_CONF_FILE" || exit 1
         WAN_NODES="$(wan_nodes_spec)"
         WAN_NODE_ID="$VBOX_HOST_NODE"
@@ -695,12 +695,12 @@ wan_mesh_configure() {
         wan_nodes_parse "$WAN_NODES" || exit 1
         if [ "${WAN_NODE_ID:-0}" = "0" ]; then
             wan_nodes_detect_self || {
-                echo -e "${RED}[WAN] aucune IP locale ne correspond à la table : passez --wan-id N${NC}" >&2
+                echo -e "${RED}[WAN] aucune IP locale ne correspond a la table : passez --wan-id N${NC}" >&2
                 exit 1; }
         fi
         wan_nodes_validate || exit 1
     else
-        # Une table déjà posée sur cette machine sert de valeurs par défaut :
+        # Une table deja posee sur cette machine sert de valeurs par defaut :
         # relancer le lab ne redemande donc pas tout, il propose l'existant.
         wan_nodes_load "$WAN_CONF_FILE" 2>/dev/null || true
         wan_nodes_prompt || exit 1
@@ -722,20 +722,20 @@ wan_mesh_apply() {
     fi
     bash "$script_path" --docker \
         --nodes "$(wan_nodes_spec)" --id "$WAN_NODE_ID" --ops "$n_operators" \
-        || echo -e "${RED}[WAN] setup-wan-mesh.sh a échoué${NC}"
+        || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue${NC}"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PoC QEMU — entrée par défaut du premier menu
+# PoC QEMU - entree par defaut du premier menu
 # ══════════════════════════════════════════════════════════════════════════════
 start_qemu_poc() {
-    echo -e "${GREEN}PoC QEMU Calypso — bring-up minimal + qemu-src/run.sh...${NC}"
+    echo -e "${GREEN}PoC QEMU Calypso - bring-up minimal + qemu-src/run.sh...${NC}"
     QEMU_POC=1
     start_bridge_mode
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Mode virtual (multi-opérateurs SS7 — ex-bridge)
+# Mode virtual (multi-operateurs SS7 - ex-bridge)
 # ══════════════════════════════════════════════════════════════════════════════
 start_bridge_mode() {
     local n_operators
@@ -746,33 +746,33 @@ start_bridge_mode() {
         n_operators=1
         OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=2
         WAN_ENABLED="false"
-        # --wan reste valable en PoC QEMU : un noeud = un opérateur, c'est
-        # exactement la maquette « N machines qui s'appellent ».
+        # --wan reste valable en PoC QEMU : un noeud = un operateur, c'est
+        # exactement la maquette "N machines qui s'appellent".
         [ "${WAN_MESH:-0}" = "1" ] && wan_mesh_configure 1
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
         ENCRYPTION="a5 0"
-        echo -e "  ${CYAN}[PoC QEMU] 1 opérateur · no-process + qemu-src/run.sh · A5/1${NC}"
+        echo -e "  ${CYAN}[PoC QEMU] 1 operateur · no-process + qemu-src/run.sh · A5/1${NC}"
     else
         # ── Mode interactif ──────────────────────────────────────────────────
-        n_operators=$(wt_input "Opérateurs" "Nombre d'opérateurs (1-36) :" "2") || exit 1
+        n_operators=$(wt_input "Operateurs" "Nombre d'operateurs (1-36) :" "2") || exit 1
         n_operators=${n_operators:-2}
         if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 36 ]; then
-            wt_msg "Nombre invalide (1–36)."; exit 1
+            wt_msg "Nombre invalide (1-36)."; exit 1
         fi
 
         local use_defaults="N"
-        wt_yesno "Valeurs par défaut" "Valeurs par défaut pour tous (MCC=001, MNC=01/02/…) ?" && use_defaults="O"
+        wt_yesno "Valeurs par defaut" "Valeurs par defaut pour tous (MCC=001, MNC=01/02/...) ?" && use_defaults="O"
 
         local same_ms_all="N"
         if [ "$use_defaults" != "O" ]; then
-            wt_yesno "MS" "Même nombre de MS pour tous les opérateurs ?" && same_ms_all="O"
+            wt_yesno "MS" "Meme nombre de MS pour tous les operateurs ?" && same_ms_all="O"
         fi
 
         declare -A OP_MCC OP_MNC OP_NAME OP_MS
 
         if [ "$use_defaults" = "O" ]; then
             local common_ms
-            common_ms=$(wt_input "MS" "MS par opérateur (1-64) :" "8") || exit 1
+            common_ms=$(wt_input "MS" "MS par operateur (1-64) :" "8") || exit 1
             common_ms=${common_ms:-8}
             if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
             for i in $(seq 1 "$n_operators"); do
@@ -782,23 +782,23 @@ start_bridge_mode() {
         else
             if [ "$same_ms_all" = "O" ]; then
                 local common_ms
-                common_ms=$(wt_input "MS" "MS par opérateur (1-64) :" "8") || exit 1
+                common_ms=$(wt_input "MS" "MS par operateur (1-64) :" "8") || exit 1
                 common_ms=${common_ms:-8}
                 if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
                 for i in $(seq 1 "$n_operators"); do
                     local mcc mnc name dmnc; dmnc=$(printf '%02d' "$i")
-                    mcc=$(wt_input "Opérateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
-                    mnc=$(wt_input "Opérateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
-                    name=$(wt_input "Opérateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                    mcc=$(wt_input "Operateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
+                    mnc=$(wt_input "Operateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
+                    name=$(wt_input "Operateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
                     OP_MS[$i]=$common_ms
                 done
             else
                 for i in $(seq 1 "$n_operators"); do
                     local mcc mnc name n_ms dmnc; dmnc=$(printf '%02d' "$i")
-                    mcc=$(wt_input "Opérateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
-                    mnc=$(wt_input "Opérateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
-                    name=$(wt_input "Opérateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
-                    n_ms=$(wt_input "Opérateur ${i}" "Nombre de MS (1-64) :" "1") || exit 1; OP_MS[$i]=${n_ms:-1}
+                    mcc=$(wt_input "Operateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
+                    mnc=$(wt_input "Operateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
+                    name=$(wt_input "Operateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                    n_ms=$(wt_input "Operateur ${i}" "Nombre de MS (1-64) :" "1") || exit 1; OP_MS[$i]=${n_ms:-1}
                     if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then OP_MS[$i]=1; fi
                 done
             fi
@@ -807,7 +807,7 @@ start_bridge_mode() {
         # ── WAN ──────────────────────────────────────────────────────────────
         if [ "${WAN_MESH:-0}" = "1" ]; then
             wan_mesh_configure "$n_operators"
-        elif wt_yesno "WAN Interop" "Activer WAN vers un serveur distant (2 serveurs, préfixe 66) ?"; then
+        elif wt_yesno "WAN Interop" "Activer WAN vers un serveur distant (2 serveurs, prefixe 66) ?"; then
             WAN_ENABLED="true"
             local auto_ip=""
             auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
@@ -822,9 +822,9 @@ start_bridge_mode() {
                 [ -z "$WAN_REMOTE_IP" ] && WAN_ENABLED="false"
             fi
             if [ "$WAN_ENABLED" = "true" ]; then
-                wan_nremote=$(wt_input "WAN" "Nb opérateurs distants :" "$n_operators") || exit 1
+                wan_nremote=$(wt_input "WAN" "Nb operateurs distants :" "$n_operators") || exit 1
                 WAN_N_REMOTE="${wan_nremote:-$n_operators}"
-                wan_pfx=$(wt_input "WAN" "Préfixe WAN :" "$WAN_PREFIX") || exit 1
+                wan_pfx=$(wt_input "WAN" "Prefixe WAN :" "$WAN_PREFIX") || exit 1
                 WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
                 echo -e "  ${GREEN}WAN: ${WAN_LOCAL_IP} ↔ ${WAN_REMOTE_IP} (local=${n_operators} remote=${WAN_N_REMOTE} prefix=${WAN_PREFIX})${NC}"
             fi
@@ -834,18 +834,18 @@ start_bridge_mode() {
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
         ENCRYPTION="${ENCRYPTION:-a5 0}"
         if [ "${WAN_MESH:-0}" = "1" ] && [ -z "$HANDOFF_MODE_FROM_ENV" ]; then
-            # Un noeud de WAN est une maquette complète : il lui faut une radio
-            # des DEUX types pour que l'appel inter-noeud soit vraiment porté de
-            # bout en bout. D'où l'hybride par défaut — un faketrx + un QEMU
-            # Calypso — au lieu du menu. HANDOFF_MODE=... en préfixe le change.
+            # Un noeud de WAN est une maquette complete : il lui faut une radio
+            # des DEUX types pour que l'appel inter-noeud soit vraiment porte de
+            # bout en bout. D'ou l'hybride par defaut - un faketrx + un QEMU
+            # Calypso - au lieu du menu. HANDOFF_MODE=... en prefixe le change.
             HANDOFF_MODE="faketrx-qemu"; HANDOFF_QEMU_CHOICE="faketrx-qemu"
-            echo -e "  ${GREEN}[RAN] WAN → hybride par défaut : ${CYAN}1 faketrx + 1 QEMU Calypso${NC}"
+            echo -e "  ${GREEN}[RAN] WAN → hybride par defaut : ${CYAN}1 faketrx + 1 QEMU Calypso${NC}"
         else
             choose_ran_host
         fi
     fi
 
-    # ── Détection IP hôte ────────────────────────────────────────────────────
+    # ── Detection IP hote ────────────────────────────────────────────────────
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
         | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
     if [ -z "$HOST_IP" ]; then
@@ -853,30 +853,30 @@ start_bridge_mode() {
     fi
     HOST_IP="${HOST_IP:-127.0.0.1}"
     REAL_UID=$(id -u "${SUDO_USER:-$(logname 2>/dev/null || echo root)}")
-    echo -e "${GREEN}IP hôte : ${CYAN}${HOST_IP}${NC}  (Linphone)${NC}"
+    echo -e "${GREEN}IP hote : ${CYAN}${HOST_IP}${NC}  (Linphone)${NC}"
     echo ""
 
-    # ── Où joindre le hub SS7, vu d'ici ──────────────────────────────────────
+    # ── Ou joindre le hub SS7, vu d'ici ──────────────────────────────────────
     # Le hub est UNIQUE pour tout le WAN. Deux cas, et le mauvais donne un ASP
     # qui ne s'attache jamais :
-    #   ce nœud héberge le hub  → les conteneurs le joignent en interne (172.20.0.10)
-    #   un autre nœud l'héberge → ils sortent sur le WAN, vers SON adresse
+    #   ce noeud heberge le hub  → les conteneurs le joignent en interne (172.20.0.10)
+    #   un autre noeud l'heberge → ils sortent sur le WAN, vers SON adresse
     WAN_STP_TARGET="$INTER_STP_IP"
     if [ "${WAN_MESH:-0}" = "1" ] && [ "${WAN_NODE_ID}" != "${WAN_HUB_NODE}" ]; then
         WAN_STP_TARGET="${WAN_IP[$WAN_HUB_NODE]:-}"
         if [ -z "$WAN_STP_TARGET" ]; then
-            echo -e "${RED}[SS7] le nœud ${WAN_HUB_NODE} (hub) n'est pas dans la table WAN${NC}" >&2
+            echo -e "${RED}[SS7] le noeud ${WAN_HUB_NODE} (hub) n'est pas dans la table WAN${NC}" >&2
             exit 1
         fi
     fi
 
-    # ── Réseau backbone ──────────────────────────────────────────────────────
+    # ── Reseau backbone ──────────────────────────────────────────────────────
     if docker network inspect "$INTER_NET" &>/dev/null; then
-        echo -e "  ${CYAN}Réseau backbone ${INTER_NET} déjà présent${NC}"
+        echo -e "  ${CYAN}Reseau backbone ${INTER_NET} deja present${NC}"
     elif docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" "$INTER_NET" &>/dev/null; then
-        echo -e "  ${GREEN}✓ Réseau backbone ${INTER_NET} (${INTER_NET_SUBNET}) créé${NC}"
+        echo -e "  ${GREEN}✓ Reseau backbone ${INTER_NET} (${INTER_NET_SUBNET}) cree${NC}"
     else
-        echo -e "  ${RED}✗ Échec création réseau backbone ${INTER_NET} (${INTER_NET_SUBNET})${NC}"; exit 1
+        echo -e "  ${RED}✗ Echec creation reseau backbone ${INTER_NET} (${INTER_NET_SUBNET})${NC}"; exit 1
     fi
 
     # ── SMS Routing ──────────────────────────────────────────────────────────
@@ -893,8 +893,8 @@ start_bridge_mode() {
         start_inter_stp "$n_operators"
         wait_inter_stp_ready "$n_operators"
     else
-        echo -e "${CYAN}[SS7] hub porté par le nœud ${WAN_HUB_NODE} (${WAN_STP_TARGET}) — pas de hub ici.${NC}"
-        echo -e "${CYAN}      Les ASP de ce nœud s'y attacheront en M3UA/SCTP 2908.${NC}"
+        echo -e "${CYAN}[SS7] hub porte par le noeud ${WAN_HUB_NODE} (${WAN_STP_TARGET}) - pas de hub ici.${NC}"
+        echo -e "${CYAN}      Les ASP de ce noeud s'y attacheront en M3UA/SCTP 2908.${NC}"
     fi
 
     # ── HLR subscribers ──────────────────────────────────────────────────────
@@ -912,10 +912,10 @@ start_bridge_mode() {
         done
     done
     local total_subs; total_subs=$(( $(wc -l < "$all_subscribers_file") - 1 ))
-    echo -e "${GREEN}Abonnés total : ${total_subs}${NC}"
+    echo -e "${GREEN}Abonnes total : ${total_subs}${NC}"
     echo ""
 
-    # ── Démarrage séquentiel des opérateurs ──────────────────────────────────
+    # ── Demarrage sequentiel des operateurs ──────────────────────────────────
     for i in $(seq 1 "$n_operators"); do
         local container_name net_name subnet gateway container_ip inter_local_ip rctx_inter
         local n_groups last_group_ip
@@ -930,24 +930,24 @@ start_bridge_mode() {
         n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
         last_group_ip="127.0.0.${n_groups}"
 
-        echo -e "${CYAN}── Opérateur ${i} : ${OP_NAME[$i]} (MCC=${OP_MCC[$i]} MNC=${OP_MNC[$i]}) ──${NC}"
-        echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Privé : ${CYAN}${container_ip}${NC}"
+        echo -e "${CYAN}── Operateur ${i} : ${OP_NAME[$i]} (MCC=${OP_MCC[$i]} MNC=${OP_MNC[$i]}) ──${NC}"
+        echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Prive : ${CYAN}${container_ip}${NC}"
         echo -e "  STP PC     : 1.${i}.2  RCTX : ${rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
 
         if docker network inspect "$net_name" &>/dev/null; then
-            echo -e "  Réseau     : ${CYAN}${net_name}${NC} (déjà présent)"
+            echo -e "  Reseau     : ${CYAN}${net_name}${NC} (deja present)"
         elif docker network create --subnet="$subnet" --gateway="$gateway" "$net_name" &>/dev/null; then
-            echo -e "  Réseau     : ${GREEN}✓ ${net_name} (${subnet}) créé${NC}"
+            echo -e "  Reseau     : ${GREEN}✓ ${net_name} (${subnet}) cree${NC}"
         else
-            echo -e "  ${RED}✗ Échec création réseau ${net_name} (${subnet})${NC}"; exit 1
+            echo -e "  ${RED}✗ Echec creation reseau ${net_name} (${subnet})${NC}"; exit 1
         fi
 
         local tmpdir
         tmpdir=$(mktemp -d)
-        # Plan de point codes. Hors WAN : 1.<op>.<rôle>, comme toujours. En WAN :
-        # le numéro de nœud entre dedans, sans quoi deux machines présentent au
-        # hub des adresses SS7 identiques — routage faux, et silencieux.
-        # Seul RCTX_INTER est surchargé : c'est le seul routing context que le
+        # Plan de point codes. Hors WAN : 1.<op>.<role>, comme toujours. En WAN :
+        # le numero de noeud entre dedans, sans quoi deux machines presentent au
+        # hub des adresses SS7 identiques - routage faux, et silencieux.
+        # Seul RCTX_INTER est surcharge : c'est le seul routing context que le
         # hub voit. Ceux du MSC et du BSC restent internes au conteneur.
         local _pc_mid="$i" _rctx_inter=""
         if [ "${WAN_MESH:-0}" = "1" ]; then
@@ -966,21 +966,21 @@ start_bridge_mode() {
         vol_args=$(build_vol_args "$tmpdir")
         alsa_args=$(build_alsa_args)
 
-        # [2026-08-12] Le chown est OBLIGATOIRE, pas cosmétique. Ce répertoire est
-        # monté sur /var/log/osmocom et les démons tournent en osmocom (999:1000
-        # dans l'image). Créé en root:root, osmo-hlr ne peut pas créer son fichier
-        # de log → « % Unable to create file '/var/log/osmocom/osmo-hlr.log' » →
-        # échec du parse de sa config → boucle de restart systemd → osmo-start.sh
-        # `exit 1` (« HLR indispensable ») → run.sh meurt (set -e) et n'atteint
-        # aucun de ses étages suivants. Un simple problème de droits fait donc
+        # [2026-08-12] Le chown est OBLIGATOIRE, pas cosmetique. Ce repertoire est
+        # monte sur /var/log/osmocom et les demons tournent en osmocom (999:1000
+        # dans l'image). Cree en root:root, osmo-hlr ne peut pas creer son fichier
+        # de log → "% Unable to create file '/var/log/osmocom/osmo-hlr.log'" →
+        # echec du parse de sa config → boucle de restart systemd → osmo-start.sh
+        # `exit 1` ("HLR indispensable") → run.sh meurt (set -e) et n'atteint
+        # aucun de ses etages suivants. Un simple probleme de droits fait donc
         # tomber tout le pipeline, audio compris.
         mkdir -p /tmp/osmocom-logs/op${i}
         chown 999:1000 /tmp/osmocom-logs/op${i} 2>/dev/null || true
 
-        # ── Ports à exposer ──────────────────────────────────────────────────
+        # ── Ports a exposer ──────────────────────────────────────────────────
         local port_args=""
 
-        # Linphone SIP/RTP — toujours exposé
+        # Linphone SIP/RTP - toujours expose
         local lsip_port lrtp_s lrtp_e
         lsip_port=$(linphone_sip_port "$i")
         lrtp_s=$(linphone_rtp_start "$i")
@@ -988,7 +988,7 @@ start_bridge_mode() {
         port_args="-p ${lsip_port}:5060/udp -p ${lrtp_s}-${lrtp_e}:${lrtp_s}-${lrtp_e}/udp"
         echo -e "  Linphone   : ${CYAN}${HOST_IP}:${lsip_port}${NC}  RTP ${lrtp_s}-${lrtp_e}"
 
-        # WAN en plus si activé (legacy ou mesh)
+        # WAN en plus si active (legacy ou mesh)
         if wan_active; then
             local sip_port rtp_start rtp_end sms_port
             sip_port=$(wan_sip_port "$i")
@@ -997,11 +997,11 @@ start_bridge_mode() {
             port_args="${port_args} -p ${sip_port}:5060/udp -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
             echo -e "  WAN        : SIP ${sip_port} RTP ${rtp_start}-${rtp_end}"
             if [ "${WAN_MESH:-0}" = "1" ]; then
-                # Un port SMS PAR opérateur : le relais distant doit joindre le
-                # container du BON opérateur, or son injection MT passe par le
-                # HLR local à son container. Un port unique livrerait tous les
-                # SMS au premier opérateur, qui ne connaît pas les abonnés des
-                # autres — « MSISDN not found in HLR », sans autre trace.
+                # Un port SMS PAR operateur : le relais distant doit joindre le
+                # container du BON operateur, or son injection MT passe par le
+                # HLR local a son container. Un port unique livrerait tous les
+                # SMS au premier operateur, qui ne connait pas les abonnes des
+                # autres - "MSISDN not found in HLR", sans autre trace.
                 sms_port=$(wan_sms_port "$i")
                 port_args="${port_args} -p ${sms_port}:7890/tcp"
                 echo -e "  WAN SMS    : ${sms_port} → relay 7890"
@@ -1064,7 +1064,7 @@ start_bridge_mode() {
         echo -e " ${GREEN}✓${NC}"
 
         # Feed HLR
-        echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${total_subs} abonnés)...${NC}"
+        echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${total_subs} abonnes)...${NC}"
         {
             echo "#!/bin/bash"
             echo "cat > /tmp/hlr_feed.vty << 'VTYCMDS'"
@@ -1087,11 +1087,11 @@ start_bridge_mode() {
             fi
             rm -f /tmp/hlr_feed.vty
         '
-        echo -e "  ${GREEN}✓ HLR Op${i} alimenté${NC}"
+        echo -e "  ${GREEN}✓ HLR Op${i} alimente${NC}"
 
-        # Attente dernier groupe — sautée en no-process
+        # Attente dernier groupe - sautee en no-process
         if [ "${BRIDGE_NO_PROCESS:-0}" = "1" ]; then
-            echo -e "  ${YELLOW}[no-process] mobile non lancé — attente 4247 sautée${NC}"
+            echo -e "  ${YELLOW}[no-process] mobile non lance - attente 4247 sautee${NC}"
         else
             echo -ne "  ${GREEN}[*] Attente groupe (${last_group_ip}:4247)${NC}"
             retry=0
@@ -1102,7 +1102,7 @@ start_bridge_mode() {
             echo -e " ${GREEN}OK${NC}"
             sleep 3
         fi
-        echo -e "  ${GREEN}✓${NC} ${container_name} prêt"
+        echo -e "  ${GREEN}✓${NC} ${container_name} pret"
         echo ""
     done
 
@@ -1122,9 +1122,9 @@ start_bridge_mode() {
         setup_wan_interop "$n_operators" "$WAN_N_REMOTE"
     fi
 
-    # ── Résumé ─────────────────────────────────────────────────────────────────
+    # ── Resume ─────────────────────────────────────────────────────────────────
     echo ""
-    echo -e "${GREEN}${BOLD}Stack multi-opérateurs démarrée !${NC}"
+    echo -e "${GREEN}${BOLD}Stack multi-operateurs demarree !${NC}"
     echo ""
     echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC}  PC=0.0.0"
     for i in $(seq 1 "$n_operators"); do
@@ -1135,7 +1135,7 @@ start_bridge_mode() {
     done
 
     echo ""
-    echo -e "  ${BOLD}Linphone (depuis l'hôte) :${NC}"
+    echo -e "  ${BOLD}Linphone (depuis l'hote) :${NC}"
     for i in $(seq 1 "$n_operators"); do
         local lsip bb_ip
         lsip=$(linphone_sip_port "$i"); bb_ip=$(op_backbone_ip "$i")
@@ -1145,7 +1145,7 @@ start_bridge_mode() {
 
     if [ "${WAN_MESH:-0}" = "1" ]; then
         echo ""
-        echo -e "  ${BOLD}WAN mesh :${NC} noeud ${CYAN}${WAN_NODE_ID}${NC}/${WAN_NODE_COUNT} — indicatif ${CYAN}$(wan_local_ind)${NC}"
+        echo -e "  ${BOLD}WAN mesh :${NC} noeud ${CYAN}${WAN_NODE_ID}${NC}/${WAN_NODE_COUNT} - indicatif ${CYAN}$(wan_local_ind)${NC}"
         for _r in "${WAN_NODE_LIST[@]}"; do
             [ "$_r" = "$WAN_NODE_ID" ] && continue
             echo -e "    ${CYAN}${WAN_IND[$_r]}${NC}10001 → MS 10001 op1 du noeud ${_r} (${WAN_IP[$_r]})"
@@ -1156,30 +1156,30 @@ start_bridge_mode() {
     fi
     echo ""
 
-    # --virtualbox : le « set » ne se limite pas à cette machine. Les VM sont
-    # créées avant (setup-vbox-interco.sh) ; on les démarre ici, une fois que le
-    # hub et les opérateurs locaux sont debout — un nœud qui monte avant le hub
-    # voit sa SCTP refusée.
+    # --virtualbox : le "set" ne se limite pas a cette machine. Les VM sont
+    # creees avant (setup-vbox-interco.sh) ; on les demarre ici, une fois que le
+    # hub et les operateurs locaux sont debout - un noeud qui monte avant le hub
+    # voit sa SCTP refusee.
     if [ "${VBOX_INTERCO:-0}" = "1" ]; then
         local _lab="$(dirname "$0")/tools/vbox-wan-lab.sh"
         if [ -x "$_lab" ] || [ -r "$_lab" ]; then
             echo ""
-            echo -e "${GREEN}[*] Démarrage des VM du WAN...${NC}"
-            bash "$_lab" start || echo -e "  ${YELLOW}⚠ démarrage des VM incomplet${NC}"
+            echo -e "${GREEN}[*] Demarrage des VM du WAN...${NC}"
+            bash "$_lab" start || echo -e "  ${YELLOW}⚠ demarrage des VM incomplet${NC}"
         fi
     fi
 
-    echo -e "\n${GREEN}${BOLD}Stack prête !${NC}"
+    echo -e "\n${GREEN}${BOLD}Stack prete !${NC}"
 
     # ── Mode QEMU : handoff vers start-direct.sh ──────────────────────────────
     if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
         local _qemu_container; _qemu_container=$(op_container 1)
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
-        echo -e "  ${CYAN}[*] mode=${HANDOFF_MODE} pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hôte, NO_MENU)${NC}"
+        echo -e "  ${CYAN}[*] mode=${HANDOFF_MODE} pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hote, NO_MENU)${NC}"
 
-        # Le start-direct lancé DANS le conteneur doit connaître son nœud : il
-        # revérifie (et corrige) l'identité SS7 avant de démarrer la pile, au
-        # lieu de dépendre de ce que start.sh a écrit dans les configs.
+        # Le start-direct lance DANS le conteneur doit connaitre son noeud : il
+        # reverifie (et corrige) l'identite SS7 avant de demarrer la pile, au
+        # lieu de dependre de ce que start.sh a ecrit dans les configs.
         local _node_args=""
         if [ "${WAN_MESH:-0}" = "1" ]; then
             _node_args="--node ${WAN_NODE_ID} --op 1 --hub-ip ${WAN_STP_TARGET}"
@@ -1191,11 +1191,11 @@ start_bridge_mode() {
             echo -e "  ${CYAN}[*] WAN mesh transmis au conteneur (noeud ${WAN_NODE_ID}, indicatif $(wan_local_ind))${NC}"
         elif [ "$WAN_ENABLED" = "true" ]; then
             _wan_env="WAN_REMOTE_IP='${WAN_REMOTE_IP}' WAN_PREFIX='${WAN_PREFIX}' WAN_N_REMOTE='${WAN_N_REMOTE:-$n_operators}'"
-            echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (préfixe ${WAN_PREFIX})${NC}"
+            echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (prefixe ${WAN_PREFIX})${NC}"
         fi
 
-        # Correction : on exécute directement start-direct.sh avec les bonnes variables
-        # pour que CALYPSO_MODE soit correctement passé et reconnu
+        # Correction : on execute directement start-direct.sh avec les bonnes variables
+        # pour que CALYPSO_MODE soit correctement passe et reconnu
         exec docker exec -ti "$_qemu_container" bash -c \
             "cd /opt/GSM/osmo_egprs && \
              ./start-direct.sh --stop && \
@@ -1214,11 +1214,11 @@ start_bridge_mode() {
 # Mode net-host
 # ══════════════════════════════════════════════════════════════════════════════
 start_host_mode() {
-    echo -e "${GREEN}Démarrage en mode net-host (1 opérateur)...${NC}"
+    echo -e "${GREEN}Demarrage en mode net-host (1 operateur)...${NC}"
     local src_ip gw_ip
     gw_ip=$(ip route get 1 | awk '{print $3; exit}')
     src_ip=$(ip route get 1 | awk '{print $7; exit}')
-    [ -z "$src_ip" ] && { echo -e "${RED}Impossible de détecter l'IP hôte.${NC}"; exit 1; }
+    [ -z "$src_ip" ] && { echo -e "${RED}Impossible de detecter l'IP hote.${NC}"; exit 1; }
     HOST_IP="$src_ip"
 
     local n_ms
@@ -1276,8 +1276,8 @@ start_host_mode() {
     local _hscript="/tmp/osmo-gnome-host.sh"
     cat > "$_hscript" <<'EOF'
 #!/usr/bin/env bash
-printf '\033]0;net-host — egprs\007'
-echo "=== net-host — egprs run.sh ==="
+printf '\033]0;net-host - egprs\007'
+echo "=== net-host - egprs run.sh ==="
 exec sudo docker exec -ti egprs /bin/bash -c "/root/run.sh; exec bash"
 EOF
     chmod +x "$_hscript"
@@ -1292,7 +1292,7 @@ EOF
 
 # ══════════════════════════════════════════════════════════════════════════════
 stop_all() {
-    echo -e "${YELLOW}Arrêt de tous les containers Osmocom...${NC}"
+    echo -e "${YELLOW}Arret de tous les containers Osmocom...${NC}"
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
     docker ps -a --filter "name=egprs"  --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
     for _chain in OSMO_WAN_INTEROP OSMO_WAN_MESH; do
@@ -1300,7 +1300,7 @@ stop_all() {
         iptables -t nat -F "$_chain" 2>/dev/null || true
         iptables -t nat -X "$_chain" 2>/dev/null || true
     done
-    echo -e "${GREEN}Arrêté.${NC}"
+    echo -e "${GREEN}Arrete.${NC}"
     disable_user_loopback
 }
 
@@ -1311,9 +1311,9 @@ choose_build_mode() {
     [ "${QUICK_EXPLICIT:-0}" = "1" ] && return 0
     local choice
     choice=$(wt_menu "Build de l'image" "Comment (re)construire l'image run ?" \
-        "quick"  "Quick — réutilise le cache docker (rapide)" \
-        "normal" "Normal — docker build --no-cache (image à neuf)") \
-        || { echo "Annulé."; exit 1; }
+        "quick"  "Quick - reutilise le cache docker (rapide)" \
+        "normal" "Normal - docker build --no-cache (image a neuf)") \
+        || { echo "Annule."; exit 1; }
     case "$choice" in
         quick)  QUICK=1 ;;
         normal) QUICK=0 ;;
@@ -1322,14 +1322,14 @@ choose_build_mode() {
 
 choose_ran_host() {
     local r
-    r=$(wt_menu "RAN — Pipeline QEMU Calypso" \
-        "Pipeline radio (conteneur de l'opérateur) :" \
-        "full-grgsm"   "gr-gsm = le DSP (défaut, validé)" \
+    r=$(wt_menu "RAN - Pipeline QEMU Calypso" \
+        "Pipeline radio (conteneur de l'operateur) :" \
+        "full-grgsm"   "gr-gsm = le DSP (defaut, valide)" \
         "start-clean"  "Pipeline historique (start-clean.sh)" \
         "full"         "full radio + vrai c54x (WIP)" \
         "shunt"        "DSP shunt canned (bissection FBSB)" \
         "bare"         "QEMU + osmocon only" \
-        "faketrx-qemu" "COMBINÉ : fake_trx vivant + Calypso QEMU" \
+        "faketrx-qemu" "COMBINE : fake_trx vivant + Calypso QEMU" \
         "free"         "menu complet run.sh (--menu)") || exit 1
 
     if [ "$r" = "faketrx-qemu" ]; then
@@ -1340,9 +1340,9 @@ choose_ran_host() {
 
     local e
     e=$(wt_menu "Chiffrement A5" "Chiffrement :" \
-        "1" "A5/1 — chiffrement legacy (défaut)" \
-        "0" "A5/0 — pas de chiffrement" \
-        "2" "A5/2 — (cassé, usage test)") || exit 1
+        "1" "A5/1 - chiffrement legacy (defaut)" \
+        "0" "A5/0 - pas de chiffrement" \
+        "2" "A5/2 - (casse, usage test)") || exit 1
     case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 0" ;; esac
     echo -e "  ${GREEN}[RAN] mode=${CYAN}${HANDOFF_MODE}${NC}${GREEN} pipeline=${CYAN}${HANDOFF_QEMU_CHOICE}${NC}${GREEN} chiffrement=${CYAN}${ENCRYPTION}${NC}"
 }
@@ -1350,9 +1350,9 @@ choose_ran_host() {
 choose_network_mode() {
     local choice
     choice=$(wt_menu "Que lancer ?" "Premier choix :" \
-        "qemu"    "PoC QEMU Calypso — qemu-src/run.sh (défaut)" \
-        "virtual" "Réseau VIRTUEL multi-opérateurs SS7 (config niveau 2)" \
-        "hw"      "SDR physique (net-host) — hw (in dev)") || { echo "Annulé."; exit 1; }
+        "qemu"    "PoC QEMU Calypso - qemu-src/run.sh (defaut)" \
+        "virtual" "Reseau VIRTUEL multi-operateurs SS7 (config niveau 2)" \
+        "hw"      "SDR physique (net-host) - hw (in dev)") || { echo "Annule."; exit 1; }
     case "$choice" in
         qemu)    NETWORK_MODE="qemu" ;;
         virtual) NETWORK_MODE="bridge" ;;
@@ -1366,37 +1366,37 @@ choose_network_mode() {
 # ══════════════════════════════════════════════════════════════════════════════
 # ── Options longues, extraites AVANT le mode positionnel ──────────────────────
 # start.sh a toujours pris son mode en $1 (qemu|virtual|hw|stop) et son build en
-# quick|normal. On garde ça intact : la pré-passe ne retire que les --wan* et
+# quick|normal. On garde ca intact : la pre-passe ne retire que les --wan* et
 # rend la main avec les positionnels d'origine.
 usage_wan() {
     cat <<'USAGE'
 Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
 
-  --wan                   active le WAN à N noeuds (1 à 9) et pose les questions :
+  --wan                   active le WAN a N noeuds (1 a 9) et pose les questions :
                             • nombre de noeuds
                             • IP publique de chaque noeud
-                            • indicatif de chaque noeud (préfixe d'appel)
-                            • numéro du noeud construit par CE lancement
-  --wan-nodes "1:IP:IND …"  même chose sans question (scriptable)
-  --wan-id N              numéro du noeud local (sinon déduit des IP locales)
-  --wan-conf FICHIER      table à lire/écrire (défaut /etc/osmo-wan.conf)
+                            • indicatif de chaque noeud (prefixe d'appel)
+                            • numero du noeud construit par CE lancement
+  --wan-nodes "1:IP:IND ..."  meme chose sans question (scriptable)
+  --wan-id N              numero du noeud local (sinon deduit des IP locales)
+  --wan-conf FICHIER      table a lire/ecrire (defaut /etc/osmo-wan.conf)
 
   --virtualbox[=N]        monte le WAN entre CETTE machine et des VM VirtualBox
                           (implique --wan). Cette machine devient un noeud, les
                           autres sont des VM sur un segment host-only.
-  --vbox-node N           numéro de noeud porté par cette machine (défaut 1)
-  --hub-node N            noeud qui héberge l'inter-STP, le hub SS7 (défaut 1).
+  --vbox-node N           numero de noeud porte par cette machine (defaut 1)
+  --hub-node N            noeud qui heberge l'inter-STP, le hub SS7 (defaut 1).
                           UN SEUL noeud du WAN doit le porter.
-  --build-stp             construit l'image légère osmocom-stp (Dockerfile.stp)
+  --build-stp             construit l'image legere osmocom-stp (Dockerfile.stp)
                           pour le hub. Sans elle, le hub tourne sur l'image
-                          complète, qui contient aussi osmo-stp.
+                          complete, qui contient aussi osmo-stp.
 
-  Sans --wan, rien ne change : aucun WAN n'est monté.
-  Avec --wan, la radio passe en HYBRIDE par défaut (1 faketrx + 1 QEMU Calypso).
+  Sans --wan, rien ne change : aucun WAN n'est monte.
+  Avec --wan, la radio passe en HYBRIDE par defaut (1 faketrx + 1 QEMU Calypso).
 
-  Composer <indicatif><numéro> joint ce numéro sur le noeud correspondant.
-    ex. noeud 1 = indicatif 11, noeud 2 = 22 → depuis 2, « 1110001 » appelle
-    le MS 10001 de l'opérateur 1 du noeud 1.
+  Composer <indicatif><numero> joint ce numero sur le noeud correspondant.
+    ex. noeud 1 = indicatif 11, noeud 2 = 22 → depuis 2, "1110001" appelle
+    le MS 10001 de l'operateur 1 du noeud 1.
 USAGE
 }
 
@@ -1438,16 +1438,16 @@ docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
 docker rm -f $(docker ps -aq --filter "name=egprs") 2>/dev/null || true
 docker network ls --filter "name=gsm-" -q | xargs -r docker network rm 2>/dev/null || true
 
-# Sélection du mode
+# Selection du mode
 case "${1:-}" in
     qemu)    NETWORK_MODE="qemu" ;;
     virtual) NETWORK_MODE="bridge" ;;
     hw)      NETWORK_MODE="host" ;;
     "")
         if [ "${WAN_MESH:-0}" = "1" ]; then
-            # --wan sans mode : on ne redemande pas « que lancer ? ». Un WAN se
-            # monte sur des opérateurs, donc mode virtuel, et le menu de build
-            # reste posé (quick/normal) s'il n'a pas été tranché en ligne.
+            # --wan sans mode : on ne redemande pas "que lancer ?". Un WAN se
+            # monte sur des operateurs, donc mode virtuel, et le menu de build
+            # reste pose (quick/normal) s'il n'a pas ete tranche en ligne.
             NETWORK_MODE="bridge"
             [ "${QUICK_EXPLICIT:-0}" = "1" ] || { check_whiptail; choose_build_mode; }
         elif [ "${OSMO_MULTI:-0}" = "1" ]; then

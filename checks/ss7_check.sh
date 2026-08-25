@@ -1,47 +1,47 @@
 #!/bin/bash
-# ss7_check.sh — Vérification SS7 pour architecture Inter-STP central
+# ss7_check.sh - Verification SS7 pour architecture Inter-STP central
 #
 # Architecture cible :
 #   - Inter-STP (0.23.0) central
-#   - Chaque opérateur a STP local (N.23.2) avec route par défaut vers inter-STP
+#   - Chaque operateur a STP local (N.23.2) avec route par defaut vers inter-STP
 #   - Routes dynamiques apprises via M3UA
 #
-# Ce qui est vérifié :
-#   1. Inter-STP : AS actifs pour chaque opérateur
-#   2. Inter-STP : ASP connectés
+# Ce qui est verifie :
+#   1. Inter-STP : AS actifs pour chaque operateur
+#   2. Inter-STP : ASP connectes
 #   3. Inter-STP : pas de PROHIB
-#   4. Chaque opérateur : ASP actif vers inter-STP
-#   5. Chaque opérateur : routes locales (MSC/BSC) actives
-#   6. Chaque opérateur : route par défaut (0.0.0/0) vers inter-STP
-#   7. Matrice de connectivité basique
+#   4. Chaque operateur : ASP actif vers inter-STP
+#   5. Chaque operateur : routes locales (MSC/BSC) actives
+#   6. Chaque operateur : route par defaut (0.0.0/0) vers inter-STP
+#   7. Matrice de connectivite basique
 #
-# DOUBLE MODE — docker ET natif (ISO, VM, machine nue)
+# DOUBLE MODE - docker ET natif (ISO, VM, machine nue)
 # ----------------------------------------------------
-# Toute la mécanique de détection et d'accès aux nœuds vit dans checks/_mode.sh ;
+# Toute la mecanique de detection et d'acces aux noeuds vit dans checks/_mode.sh ;
 # ici on ne fait qu'appeler ses fonctions. Les deux mondes :
 #
-#   docker : un conteneur osmo-operator-N par opérateur, hub = conteneur
-#            osmo-inter-stp ; on atteint tout par « docker exec ».
-#   natif  : un seul opérateur (sauf topologie netns), les VTY sont sur
+#   docker : un conteneur osmo-operator-N par operateur, hub = conteneur
+#            osmo-inter-stp ; on atteint tout par "docker exec".
+#   natif  : un seul operateur (sauf topologie netns), les VTY sont sur
 #            127.0.0.1 de CETTE machine. Le hub, lui, est SOIT cette machine
 #            (OSMO_ROLE=interstp dans /etc/osmo-role), SOIT une AUTRE machine du
-#            WAN — et dans ce second cas son VTY n'est PAS observable d'ici : le
-#            VTY Osmocom n'écoute que sur la boucle locale. On l'annonce alors
-#            « ignoré », on ne fabrique pas un « 0 AS actif » qui se lirait comme
-#            une panne alors que le hub tourne très bien ailleurs.
+#            WAN - et dans ce second cas son VTY n'est PAS observable d'ici : le
+#            VTY Osmocom n'ecoute que sur la boucle locale. On l'annonce alors
+#            "ignore", on ne fabrique pas un "0 AS actif" qui se lirait comme
+#            une panne alors que le hub tourne tres bien ailleurs.
 #
-# Les PORTS VTY sont les mêmes dans les deux mondes (4239 STP, 4254 MSC,
-# 4242 BSC, 4258 HLR) : seul l'hôte change, et c'est _mode.sh qui s'en occupe.
+# Les PORTS VTY sont les memes dans les deux mondes (4239 STP, 4254 MSC,
+# 4242 BSC, 4258 HLR) : seul l'hote change, et c'est _mode.sh qui s'en occupe.
 #
 # Usage :
 #   sudo ./ss7_check.sh [--verbose] [--quick] [--docker|--native]
 
 set -u
 
-# ── Bibliothèque commune (détection docker/natif, VTY, inventaire) ────────────
-# Chemin RELATIF au script : le dépôt tourne aussi bien depuis un clone que
-# depuis /opt/osmo_egprs sur l'ISO, et checks/ est copié en entier par
-# build-iso.sh — la bibliothèque est donc toujours à côté de ce fichier.
+# ── Bibliotheque commune (detection docker/natif, VTY, inventaire) ────────────
+# Chemin RELATIF au script : le depot tourne aussi bien depuis un clone que
+# depuis /opt/osmo_egprs sur l'ISO, et checks/ est copie en entier par
+# build-iso.sh - la bibliotheque est donc toujours a cote de ce fichier.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for _c in "$_here/_mode.sh" /opt/osmo_egprs/checks/_mode.sh; do
     [ -r "$_c" ] && { . "$_c"; break; }
@@ -65,13 +65,13 @@ for arg in "$@"; do
         --verbose|-v) VERBOSE=1 ;;
         --quick|-q)   QUICK=1 ;;
         # --docker / --native / --mode=X : forcer le monde au lieu de le
-        # détecter. osmo_mode_force rend 2 si l'argument n'est pas un mode, ce
-        # qui ne peut pas arriver ici puisque le motif du case l'a déjà filtré.
+        # detecter. osmo_mode_force rend 2 si l'argument n'est pas un mode, ce
+        # qui ne peut pas arriver ici puisque le motif du case l'a deja filtre.
         --docker|--native|--mode=*)
             osmo_mode_force "$arg" || { echo "mode inconnu : $arg" >&2; exit 1; } ;;
         -h|--help)
             echo "Usage : $0 [--verbose|-v] [--quick|-q] [--docker|--native]"
-            echo "  --docker / --native : force le mode ; sans option, détection automatique."
+            echo "  --docker / --native : force le mode ; sans option, detection automatique."
             exit 0 ;;
     esac
 done
@@ -86,7 +86,7 @@ SKIP=0
 ok()   { echo -e "  ${GREEN}✓${NC} $*"; PASS=$((PASS+1)); }
 fail() { echo -e "  ${RED}✗${NC} $*"; FAIL=$((FAIL+1)); }
 warn() { echo -e "  ${YELLOW}⚠${NC} $*"; WARN=$((WARN+1)); }
-skip() { echo -e "  ${YELLOW}—${NC} $*"; SKIP=$((SKIP+1)); }
+skip() { echo -e "  ${YELLOW}-${NC} $*"; SKIP=$((SKIP+1)); }
 info() { [[ $VERBOSE -eq 1 ]] && echo -e "    ${CYAN}│${NC} $*"; }
 
 banner() {
@@ -96,12 +96,12 @@ banner() {
 }
 
 # ── Fonction VTY ──────────────────────────────────────────────────────────────
-# Même contrat qu'avant : rend 1 sans rien écrire si le VTY ne répond pas,
-# sinon la sortie nettoyée. Le dialogue lui-même (nc/telnet, docker exec ou
+# Meme contrat qu'avant : rend 1 sans rien ecrire si le VTY ne repond pas,
+# sinon la sortie nettoyee. Le dialogue lui-meme (nc/telnet, docker exec ou
 # local, netns) est dans osmo_vty ; on garde ICI les temporisations de ce
-# script — les changer changerait la QUANTITÉ de sortie capturée, donc les
-# « grep -c » qui la comptent juste en dessous.
-: "${OSMO_VTY_OPEN:=1}"    # sleep avant d'écrire   (valeur historique de ss7_check)
+# script - les changer changerait la QUANTITE de sortie capturee, donc les
+# "grep -c" qui la comptent juste en dessous.
+: "${OSMO_VTY_OPEN:=1}"    # sleep avant d'ecrire   (valeur historique de ss7_check)
 : "${OSMO_VTY_READ:=1.5}"  # sleep de lecture       (idem)
 : "${OSMO_VTY_Q:=1}"       # nc -q1                 (idem)
 
@@ -113,27 +113,27 @@ vty_cmd() {
     local raw_output
     raw_output=$(osmo_vty "$node" "$port" enable "$cmd" end) || return 1
 
-    # Filtrer les lignes de bannière/prompt (motif et ordre identiques à avant).
+    # Filtrer les lignes de banniere/prompt (motif et ordre identiques a avant).
     printf '%s\n' "$raw_output" | osmo_vty_clean 'Free Software lives'
     return 0
 }
 
-# ── Vérification rapide de disponibilité VTY ──────────────────────────────────
+# ── Verification rapide de disponibilite VTY ──────────────────────────────────
 vty_available() {
     osmo_vty_up "$1" "$2"
 }
 
-# ── Détection du monde et inventaire ──────────────────────────────────────────
+# ── Detection du monde et inventaire ──────────────────────────────────────────
 MODE="$(osmo_mode)"
 
-# Opérateurs : conteneurs osmo-operator-N en docker ; en natif, OSMO_OP_IDS,
+# Operateurs : conteneurs osmo-operator-N en docker ; en natif, OSMO_OP_IDS,
 # puis les netns osmo-opN, puis N_OPERATORS de globals.conf, sinon 1.
 mapfile -t OPS < <(osmo_ops)
 N_OPS=${#OPS[@]}
 
 # Hub : conteneur osmo-inter-stp en docker ; en natif, cette machine SI elle
-# porte le rôle interstp. Sur un nœud opérateur natif, le hub est ailleurs :
-# osmo_hub rend 1 et osmo_hub_hint dit quoi lancer, et où.
+# porte le role interstp. Sur un noeud operateur natif, le hub est ailleurs :
+# osmo_hub rend 1 et osmo_hub_hint dit quoi lancer, et ou.
 HAS_INTER_STP=0
 HUB_NODE="$INTER_STP"
 if HUB_NODE="$(osmo_hub)"; then
@@ -142,20 +142,20 @@ else
     HUB_NODE="$INTER_STP"
 fi
 
-# HUB_EXPECTED — « un hub devrait exister » (≠ « je peux l'interroger »).
+# HUB_EXPECTED - "un hub devrait exister" (≠ "je peux l'interroger").
 # En docker les deux se confondent : pas de conteneur, pas de hub. En natif un
-# hub distant reste attendu dès que /etc/osmo-role donne un OSMO_HUB_IP : la
-# route par défaut du STP local vers ce hub, elle, est parfaitement vérifiable
-# d'ici, même si l'état interne du hub ne l'est pas.
+# hub distant reste attendu des que /etc/osmo-role donne un OSMO_HUB_IP : la
+# route par defaut du STP local vers ce hub, elle, est parfaitement verifiable
+# d'ici, meme si l'etat interne du hub ne l'est pas.
 HUB_EXPECTED=$HAS_INTER_STP
 if [ "$MODE" != docker ] && [ "$HUB_EXPECTED" -eq 0 ] && osmo_hub_ip >/dev/null 2>&1; then
     HUB_EXPECTED=1
 fi
 
-# Nombre d'AS/ASP attendus sur le hub. En docker c'est le nombre d'opérateurs
+# Nombre d'AS/ASP attendus sur le hub. En docker c'est le nombre d'operateurs
 # LOCAUX, qui sont exactement ceux qui s'attachent au hub. En natif le hub sert
-# des opérateurs DISTANTS : aucun inventaire local ne dit combien il devrait y
-# en avoir — on juge alors sur la présence, pas sur un total inventé.
+# des operateurs DISTANTS : aucun inventaire local ne dit combien il devrait y
+# en avoir - on juge alors sur la presence, pas sur un total invente.
 EXPECT_AS=0
 [ "$MODE" = docker ] && EXPECT_AS=$N_OPS
 
@@ -167,8 +167,8 @@ else
     MODE_LABEL="natif (cette machine)"
 fi
 
-# Ligne de cadre : la largeur est calculée en CARACTÈRES (${#s}) et non en
-# octets — « printf %-58s » compte les octets et décale d'un cran par accent.
+# Ligne de cadre : la largeur est calculee en CARACTERES (${#s}) et non en
+# octets - "printf %-58s" compte les octets et decale d'un cran par accent.
 boxline() {
     local s="$1" n
     n=$(( 58 - ${#s} )); [ "$n" -lt 0 ] && n=0
@@ -177,16 +177,16 @@ boxline() {
 
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-boxline "          SS7 Health Check — $(date '+%H:%M:%S')"
+boxline "          SS7 Health Check - $(date '+%H:%M:%S')"
 boxline "          mode : ${MODE_LABEL}"
-boxline "          ${N_OPS} opérateur(s)  inter-stp=${HAS_INTER_STP}"
+boxline "          ${N_OPS} operateur(s)  inter-stp=${HAS_INTER_STP}"
 echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 
 if [ "$N_OPS" -eq 0 ] && [ "$HAS_INTER_STP" -eq 0 ]; then
     if [ "$MODE" = docker ]; then
-        echo -e "${RED}Aucun container trouvé${NC}"
+        echo -e "${RED}Aucun container trouve${NC}"
     else
-        echo -e "${RED}Aucun opérateur ni inter-STP sur cette machine${NC}"
+        echo -e "${RED}Aucun operateur ni inter-STP sur cette machine${NC}"
     fi
     exit 1
 fi
@@ -195,18 +195,18 @@ fi
 # CHECK 1 : Inter-STP (hub central)
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$HAS_INTER_STP" -eq 1 ]; then
-    banner "INTER-STP (hub SS7) — 0.23.0"
+    banner "INTER-STP (hub SS7) - 0.23.0"
 
     if ! vty_available "$HUB_NODE" 4239; then
         fail "VTY inter-STP (4239) inaccessible"
     else
         ok "VTY accessible"
 
-        # Vérifier que l'inter-STP voit tous les opérateurs comme AS
+        # Verifier que l'inter-STP voit tous les operateurs comme AS
         as_output=$(vty_cmd "$HUB_NODE" 4239 "show cs7 instance 0 as all")
         n_as_total=$(echo "$as_output" | grep -cE 'as-op[0-9]+' || true)
         n_as_active=$(echo "$as_output" | grep -cE 'AS_ACTIVE' || true)
-        info "AS déclarés sur le hub : ${n_as_total}"
+        info "AS declares sur le hub : ${n_as_total}"
 
         if [ "$EXPECT_AS" -gt 0 ]; then
             if [ "$n_as_active" -eq "$EXPECT_AS" ]; then
@@ -217,37 +217,37 @@ if [ "$HAS_INTER_STP" -eq 1 ]; then
                 fail "AS : aucun actif"
             fi
         elif [ "$n_as_active" -gt 0 ]; then
-            # Natif : les opérateurs sont des machines distantes, le total
+            # Natif : les operateurs sont des machines distantes, le total
             # attendu n'est pas connaissable d'ici.
             ok "AS : ${n_as_active} actif(s) (total attendu inconnu en natif)"
         else
             fail "AS : aucun actif"
         fi
 
-        # Vérifier les ASP connectés
+        # Verifier les ASP connectes
         asp_output=$(vty_cmd "$HUB_NODE" 4239 "show cs7 instance 0 asp")
         n_asp_active=$(echo "$asp_output" | grep -cE 'ASP_ACTIVE' || true)
 
         if [ "$EXPECT_AS" -gt 0 ]; then
             if [ "$n_asp_active" -eq "$EXPECT_AS" ]; then
-                ok "ASP : ${n_asp_active}/${EXPECT_AS} connectés (tous)"
+                ok "ASP : ${n_asp_active}/${EXPECT_AS} connectes (tous)"
             else
-                warn "ASP : ${n_asp_active}/${EXPECT_AS} connectés"
+                warn "ASP : ${n_asp_active}/${EXPECT_AS} connectes"
             fi
         elif [ "$n_asp_active" -gt 0 ]; then
-            ok "ASP : ${n_asp_active} connecté(s) (total attendu inconnu en natif)"
+            ok "ASP : ${n_asp_active} connecte(s) (total attendu inconnu en natif)"
         else
-            warn "ASP : aucun connecté"
+            warn "ASP : aucun connecte"
         fi
 
-        # Vérifier l'absence de PROHIB (routes bloquées)
+        # Verifier l'absence de PROHIB (routes bloquees)
         route_output=$(vty_cmd "$HUB_NODE" 4239 "show cs7 instance 0 route")
         n_prohib=$(echo "$route_output" | grep -ciE 'prohib' || true)
 
         if [ "$n_prohib" -eq 0 ]; then
             ok "Routes : aucun PROHIB"
         else
-            fail "Routes : ${n_prohib} PROHIB détectées"
+            fail "Routes : ${n_prohib} PROHIB detectees"
         fi
     fi
 else
@@ -255,29 +255,29 @@ else
     if [ "$MODE" = docker ]; then
         skip "Container ${INTER_STP} absent"
     else
-        # Pas de faux échec : le hub est peut-être parfaitement vivant, mais son
-        # VTY n'écoute que sur SA boucle locale. La phrase vient de _mode.sh et
-        # nomme l'IP réelle du hub quand /etc/osmo-role la donne.
+        # Pas de faux echec : le hub est peut-etre parfaitement vivant, mais son
+        # VTY n'ecoute que sur SA boucle locale. La phrase vient de _mode.sh et
+        # nomme l'IP reelle du hub quand /etc/osmo-role la donne.
         skip "$(osmo_hub_hint)"
     fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CHECK 2 : Chaque opérateur
+# CHECK 2 : Chaque operateur
 # ══════════════════════════════════════════════════════════════════════════════
 for op in ${OPS[@]+"${OPS[@]}"}; do
     op_id="$op"
-    # osmo_node garde l'étiquette « osmo-operator-N » même en natif : c'est le
-    # nom d'affichage que les autres checks corrèlent.
+    # osmo_node garde l'etiquette "osmo-operator-N" meme en natif : c'est le
+    # nom d'affichage que les autres checks correlent.
     container="$(osmo_node "$op")"
-    banner "OPÉRATEUR ${op_id} (${container}) — STP ${op_id}.23.2"
+    banner "OPERATEUR ${op_id} (${container}) - STP ${op_id}.23.2"
 
     # ── STP local (4239) ─────────────────────────────────────────────────
     echo -e "  ${BOLD}STP local :${NC}"
     if ! vty_available "$op" 4239; then
         fail "STP VTY (4239) inaccessible"
     else
-        # Vérifier la connexion vers l'inter-STP
+        # Verifier la connexion vers l'inter-STP
         as_out=$(vty_cmd "$op" 4239 "show cs7 instance 0 as all")
         inter_state=$(echo "$as_out" | grep -oP 'as-inter\s+\K(AS_\w+)' || echo "ABSENT")
 
@@ -286,12 +286,12 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
         elif [[ "$inter_state" == "ABSENT" ]] && [ "$HUB_EXPECTED" -eq 1 ]; then
             fail "as-inter absent (pas de connexion au hub)"
         elif [[ "$inter_state" == "ABSENT" ]]; then
-            skip "as-inter : ignoré (aucun inter-STP connu depuis ce nœud)"
+            skip "as-inter : ignore (aucun inter-STP connu depuis ce noeud)"
         else
             warn "as-inter : ${inter_state}"
         fi
 
-        # Vérifier les ASP locaux (MSC/BSC)
+        # Verifier les ASP locaux (MSC/BSC)
         asp_out=$(vty_cmd "$op" 4239 "show cs7 instance 0 asp")
         n_asp_ok=$(echo "$asp_out" | grep -cE 'ASP_ACTIVE' || true)
 
@@ -303,33 +303,33 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
             fail "ASP locaux : aucun actif"
         fi
 
-        # Vérifier la route par défaut vers l'inter-STP (élément clé).
-        # Vérifiable dès qu'un hub est ATTENDU : le hub distant d'un lab natif
-        # se voit dans la table de routage du STP local, même si son VTY à lui
-        # est hors de portée.
+        # Verifier la route par defaut vers l'inter-STP (element cle).
+        # Verifiable des qu'un hub est ATTENDU : le hub distant d'un lab natif
+        # se voit dans la table de routage du STP local, meme si son VTY a lui
+        # est hors de portee.
         route_out=$(vty_cmd "$op" 4239 "show cs7 instance 0 route")
         has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0.*avail' || true)
 
         if [ "$has_default" -gt 0 ] && [ "$HUB_EXPECTED" -eq 1 ]; then
-            ok "Route par défaut → inter-STP : présente et avail"
+            ok "Route par defaut → inter-STP : presente et avail"
         elif [ "$HUB_EXPECTED" -eq 1 ]; then
-            fail "Route par défaut → inter-STP absente ou non avail"
+            fail "Route par defaut → inter-STP absente ou non avail"
         elif [ "$MODE" != docker ]; then
-            skip "Route par défaut → inter-STP : ignoré (natif, aucun hub déclaré ici)"
+            skip "Route par defaut → inter-STP : ignore (natif, aucun hub declare ici)"
         fi
 
-        # Vérifier l'absence de PROHIB
+        # Verifier l'absence de PROHIB
         n_prohib=$(echo "$route_out" | grep -ciE 'prohib' || true)
         if [ "$n_prohib" -gt 0 ]; then
-            fail "Routes PROHIB détectées : ${n_prohib}"
+            fail "Routes PROHIB detectees : ${n_prohib}"
         fi
 
         # Compter les routes dynamiques (juste pour info)
         n_dyn=$(echo "$route_out" | grep -c 'dyn' || true)
-        info "Routes dynamiques apprises : ${n_dyn} (normal: devrait augmenter avec le nombre d'opérateurs)"
+        info "Routes dynamiques apprises : ${n_dyn} (normal: devrait augmenter avec le nombre d'operateurs)"
     fi
 
-    # En mode quick, on passe au prochain opérateur
+    # En mode quick, on passe au prochain operateur
     if [ "$QUICK" -eq 1 ]; then
         continue
     fi
@@ -343,10 +343,10 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
         msc_active=$(echo "$msc_asp" | grep -cE 'ASP_ACTIVE' || true)
         [ "$msc_active" -gt 0 ] && ok "MSC→STP : ASP_ACTIVE" || fail "MSC→STP : pas de ASP actif"
 
-        # SCCP — osmo_qgrep, et non « grep -q » : en bout de tube, grep -q sort
+        # SCCP - osmo_qgrep, et non "grep -q" : en bout de tube, grep -q sort
         # au premier match et tue le producteur en SIGPIPE (141 sous pipefail).
         msc_sccp=$(vty_cmd "$op" 4254 "show cs7 instance 0 sccp users")
-        echo "$msc_sccp" | osmo_qgrep -E 'SSN 254' && ok "SCCP SSN 254 (MSC-A) enregistré" || fail "SCCP SSN 254 absent"
+        echo "$msc_sccp" | osmo_qgrep -E 'SSN 254' && ok "SCCP SSN 254 (MSC-A) enregistre" || fail "SCCP SSN 254 absent"
     fi
 
     # ── BSC (4242) ───────────────────────────────────────────────────────
@@ -360,7 +360,7 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
 
         # SCCP
         bsc_sccp=$(vty_cmd "$op" 4242 "show cs7 instance 0 sccp users")
-        echo "$bsc_sccp" | osmo_qgrep -E 'SSN 254' && ok "SCCP SSN 254 (BSC) enregistré" || fail "SCCP SSN 254 absent"
+        echo "$bsc_sccp" | osmo_qgrep -E 'SSN 254' && ok "SCCP SSN 254 (BSC) enregistre" || fail "SCCP SSN 254 absent"
 
         # BTS state (optionnel)
         bsc_bts=$(vty_cmd "$op" 4242 "show bts 0" 2>/dev/null || echo "")
@@ -376,20 +376,20 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
     else
         hlr_gsup=$(vty_cmd "$op" 4258 "show gsup-connections")
         vlr_conn=$(echo "$hlr_gsup" | grep -cE "VLR" || true)
-        [ "$vlr_conn" -gt 0 ] && ok "GSUP : VLR connecté" || fail "GSUP : VLR absent"
+        [ "$vlr_conn" -gt 0 ] && ok "GSUP : VLR connecte" || fail "GSUP : VLR absent"
     fi
 done
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CHECK 3 : Matrice de connectivité simple
+# CHECK 3 : Matrice de connectivite simple
 # ══════════════════════════════════════════════════════════════════════════════
-# La matrice croise les opérateurs LOCAUX entre eux via le hub local : elle a du
-# sens en docker, et en natif multi-opérateur (netns). Sur un natif mono-
-# opérateur elle se réduirait à une case « self » — on l'annonce ignorée plutôt
+# La matrice croise les operateurs LOCAUX entre eux via le hub local : elle a du
+# sens en docker, et en natif multi-operateur (netns). Sur un natif mono-
+# operateur elle se reduirait a une case "self" - on l'annonce ignoree plutot
 # que de la dessiner vide, et on renvoie vers le check qui, lui, sait regarder
 # entre machines.
 if [ "$HAS_INTER_STP" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
-    banner "MATRICE DE CONNECTIVITÉ (via inter-STP)"
+    banner "MATRICE DE CONNECTIVITE (via inter-STP)"
 
     printf "  %-8s" ""
     for j in "${OPS[@]}"; do printf "  Op%-3s" "$j"; done
@@ -399,7 +399,7 @@ if [ "$HAS_INTER_STP" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
         src_id="$op"
         printf "  Op%-5s" "${src_id}"
 
-        # On ne teste que la connectivité de base : l'opérateur a-t-il une route par défaut ?
+        # On ne teste que la connectivite de base : l'operateur a-t-il une route par defaut ?
         route_out=$(vty_cmd "$op" 4239 "show cs7 instance 0 route" 2>/dev/null || echo "")
         has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0.*avail' || true)
 
@@ -407,7 +407,7 @@ if [ "$HAS_INTER_STP" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
             if [ "$j" -eq "$src_id" ]; then
                 printf "  ${CYAN}%-5s${NC}" "self"
             elif [ "$has_default" -gt 0 ]; then
-                # Si route par défaut, on suppose que la connectivité est possible via l'inter-STP
+                # Si route par defaut, on suppose que la connectivite est possible via l'inter-STP
                 printf "  ${GREEN}%-5s${NC}" "via"
             else
                 printf "  ${RED}%-5s${NC}" "FAIL"
@@ -417,25 +417,25 @@ if [ "$HAS_INTER_STP" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
         echo ""
     done
     echo ""
-    echo "  Note: 'via' signifie que l'opérateur a une route par défaut vers l'inter-STP"
-    echo "  Les routes dynamiques spécifiques sont apprises au fur et à mesure"
+    echo "  Note: 'via' signifie que l'operateur a une route par defaut vers l'inter-STP"
+    echo "  Les routes dynamiques specifiques sont apprises au fur et a mesure"
 elif [ "$MODE" != docker ]; then
-    banner "MATRICE DE CONNECTIVITÉ (via inter-STP)"
-    skip "ignoré (natif) : ${N_OPS} opérateur(s) local(aux) — la connectivité entre opérateurs passe par le WAN, voir checks/wan_ss7_check.sh"
+    banner "MATRICE DE CONNECTIVITE (via inter-STP)"
+    skip "ignore (natif) : ${N_OPS} operateur(s) local(aux) - la connectivite entre operateurs passe par le WAN, voir checks/wan_ss7_check.sh"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RÉSUMÉ
+# RESUME
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
 echo -e "$(printf '═%.0s' {1..60})"
 
 if [ "$FAIL" -eq 0 ]; then
-    echo -e "  ${GREEN}${BOLD}SS7 OK${NC}  —  ${GREEN}${PASS} pass${NC}  ${YELLOW}${WARN} warn${NC}  ${SKIP} skip"
+    echo -e "  ${GREEN}${BOLD}SS7 OK${NC}  -  ${GREEN}${PASS} pass${NC}  ${YELLOW}${WARN} warn${NC}  ${SKIP} skip"
 elif [ "$FAIL" -le 3 ]; then
-    echo -e "  ${YELLOW}${BOLD}SS7 DÉGRADÉ${NC}  —  ${GREEN}${PASS} pass${NC}  ${RED}${FAIL} fail${NC}  ${YELLOW}${WARN} warn${NC}  ${SKIP} skip"
+    echo -e "  ${YELLOW}${BOLD}SS7 DEGRADE${NC}  -  ${GREEN}${PASS} pass${NC}  ${RED}${FAIL} fail${NC}  ${YELLOW}${WARN} warn${NC}  ${SKIP} skip"
 else
-    echo -e "  ${RED}${BOLD}SS7 KO${NC}  —  ${GREEN}${PASS} pass${NC}  ${RED}${FAIL} fail${NC}  ${YELLOW}${WARN} warn${NC}  ${SKIP} skip"
+    echo -e "  ${RED}${BOLD}SS7 KO${NC}  -  ${GREEN}${PASS} pass${NC}  ${RED}${FAIL} fail${NC}  ${YELLOW}${WARN} warn${NC}  ${SKIP} skip"
 fi
 echo -e "$(printf '═%.0s' {1..60})"
 echo ""

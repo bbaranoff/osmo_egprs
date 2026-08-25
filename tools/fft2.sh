@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/fft2.sh — FFT du 2e cfile. Reutilise tools/fft.sh avec un autre CFILE.
+# tools/fft2.sh - FFT du 2e cfile. Reutilise tools/fft.sh avec un autre CFILE.
 #
 # tools/fft.sh  = dsp_iq.cfile = MS  (entree DSP Calypso : le mobile qui repond a la BTS)
 # tools/fft2.sh = record.cfile = BTS (ce que la BTS emet)

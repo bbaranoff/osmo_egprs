@@ -1,5 +1,5 @@
 #!/bin/bash
-# send-mt-sms.sh — Envoi de SMS MT local via proto-smsc-sendmt
+# send-mt-sms.sh - Envoi de SMS MT local via proto-smsc-sendmt
 # Usage : ./send-mt-sms.sh <imsi> <message> [from_number]
 set -euo pipefail
 
@@ -21,4 +21,4 @@ sms-encode-text "$MESSAGE" \
     | gen-sms-deliver-pdu "$FROM" \
     | proto-smsc-sendmt "$SC_ADDRESS" "$DEST_IMSI" "$SENDMT_SOCKET"
 
-echo "MT SMS envoyé → IMSI=$DEST_IMSI"
+echo "MT SMS envoye → IMSI=$DEST_IMSI"

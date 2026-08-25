@@ -1,27 +1,27 @@
 #!/bin/bash
 # =============================================================================
-#  install.sh — installation native, par modules
+#  install.sh - installation native, par modules
 # =============================================================================
 #
-#  Même architecture que run.sh : ce fichier n'est qu'un moteur. Chaque étape
-#  vit dans install_modules/NN-<slug>.sh et respecte le contrat décrit dans
+#  Meme architecture que run.sh : ce fichier n'est qu'un moteur. Chaque etape
+#  vit dans install_modules/NN-<slug>.sh et respecte le contrat decrit dans
 #  install_modules/_lib/inst.sh.
 #
 #      sudo ./install.sh                tout
-#      ./install.sh --list              les étapes, sans rien faire
-#      ./install.sh --dry-run           déroule sans effet de bord
-#      sudo ./install.sh --only deps    une seule étape
-#      sudo ./install.sh --skip build   tout sauf celle-là
-#      ./install.sh --check             ce qui est déjà installé
+#      ./install.sh --list              les etapes, sans rien faire
+#      ./install.sh --dry-run           deroule sans effet de bord
+#      sudo ./install.sh --only deps    une seule etape
+#      sudo ./install.sh --skip build   tout sauf celle-la
+#      ./install.sh --check             ce qui est deja installe
 #
-#  Où : GSM_ROOT (défaut /opt/GSM) reçoit sources et binaires.
+#  Ou : GSM_ROOT (defaut /opt/GSM) recoit sources et binaires.
 #
-#  SI VOUS DÉCOUVREZ LE PROJET, PRÉFÉREZ DOCKER : `./tools/make-docker-image.sh` produit une image
-#  complète et reproductible. Cette installation native s'adresse à ceux qui
+#  SI VOUS DECOUVREZ LE PROJET, PREFEREZ DOCKER : `./tools/make-docker-image.sh` produit une image
+#  complete et reproductible. Cette installation native s'adresse a ceux qui
 #  veulent travailler sur les sources.
 #
-#  La liste des paquets n'est pas dupliquée ici : elle est EXTRAITE du
-#  Dockerfile, qui reste la référence. Les deux ne peuvent donc pas diverger.
+#  La liste des paquets n'est pas dupliquee ici : elle est EXTRAITE du
+#  Dockerfile, qui reste la reference. Les deux ne peuvent donc pas diverger.
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -70,11 +70,11 @@ for s in "${INST_ORDER[@]}"; do
 done
 
 if [ "$ACTION" = list ]; then
-    printf 'Étapes — %d, dans cet ordre\n\n' "${#selected[@]}"
+    printf 'Etapes - %d, dans cet ordre\n\n' "${#selected[@]}"
     for s in "${selected[@]}"; do
         printf '  %-10s %-38s %s%s\n' "$s" "${INST_DESC[$s]}" \
             "$([ "${INST_REQUIRED[$s]}" = 1 ] && echo obligatoire || echo optionnelle)" \
-            "$([ -n "${INST_DEPS[$s]}" ] && echo "  après: ${INST_DEPS[$s]}")"
+            "$([ -n "${INST_DEPS[$s]}" ] && echo "  apres: ${INST_DEPS[$s]}")"
     done
     printf '\nGSM_ROOT = %s\n' "$GSM_ROOT"
     exit 0
@@ -85,20 +85,20 @@ if [ "$ACTION" = check ]; then
     for s in "${selected[@]}"; do
         p="$(inst_prefix "$s")"
         if declare -F "${p}_done" >/dev/null; then
-            if "${p}_done" >/dev/null 2>&1; then end " OK " "$C_OK" "${INST_DESC[$s]}" "déjà installé"
-            else end "----" "$C_SK" "${INST_DESC[$s]}" "à faire"; rc=1; fi
+            if "${p}_done" >/dev/null 2>&1; then end " OK " "$C_OK" "${INST_DESC[$s]}" "deja installe"
+            else end "----" "$C_SK" "${INST_DESC[$s]}" "a faire"; rc=1; fi
         else
-            end " ?  " "$C_DIM" "${INST_DESC[$s]}" "pas de contrôle"
+            end " ?  " "$C_DIM" "${INST_DESC[$s]}" "pas de controle"
         fi
     done
     exit $rc
 fi
 
-# root : exigé seulement si une étape retenue le demande
+# root : exige seulement si une etape retenue le demande
 need_root=0
 for s in "${selected[@]}"; do [ "${INST_ROOT[$s]}" = 1 ] && need_root=1; done
 if [ $DRY -eq 0 ] && [ $need_root -eq 1 ] && [ "$(id -u)" -ne 0 ]; then
-    printf 'Cette installation écrit dans %s, /usr/local et /etc/osmocom.\n' "$GSM_ROOT" >&2
+    printf 'Cette installation ecrit dans %s, /usr/local et /etc/osmocom.\n' "$GSM_ROOT" >&2
     printf 'Relancez avec sudo, ou inspectez sans rien modifier :  ./install.sh --dry-run\n' >&2
     exit 2
 fi
@@ -114,21 +114,21 @@ for s in "${selected[@]}"; do
         case "${STATE[$d]:-absent}" in ok|skip) ;; *) dep_ko="$d"; break;; esac
     done
     if [ -n "$dep_ko" ]; then
-        end "SKIP" "$C_SK" "${INST_DESC[$s]}" "dépend de $dep_ko, non satisfaite"
+        end "SKIP" "$C_SK" "${INST_DESC[$s]}" "depend de $dep_ko, non satisfaite"
         STATE[$s]=skip; nb_skip=$((nb_skip+1)); continue
     fi
 
     begin "${INST_DESC[$s]}"
 
     if declare -F "${p}_done" >/dev/null && "${p}_done" >>"$log" 2>&1; then
-        end "SKIP" "$C_SK" "${INST_DESC[$s]}" "déjà installé"
+        end "SKIP" "$C_SK" "${INST_DESC[$s]}" "deja installe"
         STATE[$s]=skip; nb_skip=$((nb_skip+1)); continue
     fi
 
     if declare -F "${p}_check" >/dev/null; then
         "${p}_check" >>"$log" 2>&1; rc=$?
         if [ $rc -eq $INST_RC_FAIL ]; then
-            end "FAIL" "$C_KO" "${INST_DESC[$s]}" "${_INST_REASON:-prérequis non satisfait}"
+            end "FAIL" "$C_KO" "${INST_DESC[$s]}" "${_INST_REASON:-prerequis non satisfait}"
             [ -n "$_INST_HINT" ] && printf '       %s→ %s%s\n' "$C_DIM" "$_INST_HINT" "$C_Z"
             printf '       %sjournal : %s%s\n' "$C_DIM" "$log" "$C_Z"
             nb_fail=$((nb_fail+1)); STATE[$s]=fail
@@ -138,14 +138,14 @@ for s in "${selected[@]}"; do
     fi
 
     if [ $DRY -eq 1 ]; then
-        end " -- " "$C_DIM" "${INST_DESC[$s]}" "simulé"; STATE[$s]=ok; continue
+        end " -- " "$C_DIM" "${INST_DESC[$s]}" "simule"; STATE[$s]=ok; continue
     fi
 
     "${p}_run" >>"$log" 2>&1; rc=$?
     case $rc in
-        $INST_RC_DONE) end "SKIP" "$C_SK" "${INST_DESC[$s]}" "${_INST_REASON:-rien à faire}"
+        $INST_RC_DONE) end "SKIP" "$C_SK" "${INST_DESC[$s]}" "${_INST_REASON:-rien a faire}"
                        STATE[$s]=skip; nb_skip=$((nb_skip+1)); continue ;;
-        $INST_RC_FAIL) end "FAIL" "$C_KO" "${INST_DESC[$s]}" "${_INST_REASON:-échec}"
+        $INST_RC_FAIL) end "FAIL" "$C_KO" "${INST_DESC[$s]}" "${_INST_REASON:-echec}"
                        [ -n "$_INST_HINT" ] && printf '       %s→ %s%s\n' "$C_DIM" "$_INST_HINT" "$C_Z"
                        printf '       %sjournal : %s%s\n' "$C_DIM" "$log" "$C_Z"
                        nb_fail=$((nb_fail+1)); STATE[$s]=fail
@@ -153,10 +153,10 @@ for s in "${selected[@]}"; do
                        continue ;;
     esac
 
-    # installer n'est pas avoir installé : on contrôle après coup
+    # installer n'est pas avoir installe : on controle apres coup
     if declare -F "${p}_verify" >/dev/null; then
         if ! "${p}_verify" >>"$log" 2>&1; then
-            end "FAIL" "$C_KO" "${INST_DESC[$s]}" "faite, mais le contrôle échoue : ${_INST_REASON:-}"
+            end "FAIL" "$C_KO" "${INST_DESC[$s]}" "faite, mais le controle echoue : ${_INST_REASON:-}"
             [ -n "$_INST_HINT" ] && printf '       %s→ %s%s\n' "$C_DIM" "$_INST_HINT" "$C_Z"
             printf '       %sjournal : %s%s\n' "$C_DIM" "$log" "$C_Z"
             nb_fail=$((nb_fail+1)); STATE[$s]=fail
@@ -168,9 +168,9 @@ for s in "${selected[@]}"; do
     end " OK " "$C_OK" "${INST_DESC[$s]}"; STATE[$s]=ok; nb_ok=$((nb_ok+1))
 done
 
-printf '\n%d ok · %d ignorés · %d échecs\n' "$nb_ok" "$nb_skip" "$nb_fail"
+printf '\n%d ok · %d ignores · %d echecs\n' "$nb_ok" "$nb_skip" "$nb_fail"
 if [ $nb_fail -eq 0 ] && [ $DRY -eq 0 ]; then
-    printf '\n  %svérifier%s   ./install.sh --check\n'          "$C_DIM" "$C_Z"
+    printf '\n  %sverifier%s   ./install.sh --check\n'          "$C_DIM" "$C_Z"
     printf '  %slancer%s     ./run.sh --list   puis   ./run.sh\n\n' "$C_DIM" "$C_Z"
 fi
 [ $nb_fail -gt 0 ] && exit 1

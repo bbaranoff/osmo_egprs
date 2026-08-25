@@ -1,6 +1,6 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/firewall-wan.sh — Ouvre les ports nécessaires pour l'interop WAN
+# network/firewall-wan.sh - Ouvre les ports necessaires pour l'interop WAN
 #
 # Usage : sudo ./network/firewall-wan.sh <remote_ip> [n_operators]
 # ══════════════════════════════════════════════════════════════════════════════
@@ -14,10 +14,10 @@ RTP_WAN_BASE=20000
 RTP_PER_OP=500
 SMS_RELAY_PORT=7890
 
-echo "=== Firewall WAN Interop — Autorisation ${REMOTE_IP} ==="
+echo "=== Firewall WAN Interop - Autorisation ${REMOTE_IP} ==="
 echo ""
 
-# Détection du firewall
+# Detection du firewall
 if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
     FW="ufw"
 elif command -v firewall-cmd &>/dev/null; then
@@ -26,7 +26,7 @@ else
     FW="iptables"
 fi
 
-echo "Firewall détecté : ${FW}"
+echo "Firewall detecte : ${FW}"
 echo ""
 
 for i in $(seq 1 "$N_OPS"); do
@@ -46,7 +46,7 @@ for i in $(seq 1 "$N_OPS"); do
             firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${REMOTE_IP} port port=${rtp_start}-${rtp_end} protocol=udp accept"
             ;;
         iptables)
-            # -C ... || -A : idempotent, pas de doublon si relancé à chaque WAN.
+            # -C ... || -A : idempotent, pas de doublon si relance a chaque WAN.
             iptables -C INPUT -s "$REMOTE_IP" -p udp --dport "$sip_port" -j ACCEPT 2>/dev/null \
                 || iptables -A INPUT -s "$REMOTE_IP" -p udp --dport "$sip_port" -j ACCEPT
             iptables -C INPUT -s "$REMOTE_IP" -p udp --dport "${rtp_start}:${rtp_end}" -j ACCEPT 2>/dev/null \

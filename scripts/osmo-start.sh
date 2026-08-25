@@ -1,17 +1,17 @@
 #!/bin/bash
-# osmo-start.sh — Démarrage séquencé du Core Osmocom
+# osmo-start.sh - Demarrage sequence du Core Osmocom
 #
-# Ordre de dépendance :
+# Ordre de dependance :
 #   STP (4239) → HLR (4258) → MGW (4243)
 #                    ↓
 #               MSC (4254) → BSC (4242)
 #                    ↓
 #          GGSN (4260) → SGSN (4245) → PCU (4239 bts)
 #
-# Chaque service attend le VTY du précédent avant de démarrer.
-# BTS-TRX et SIP-connector sont gérés par run.sh (dépendent de fake_trx / Asterisk).
+# Chaque service attend le VTY du precedent avant de demarrer.
+# BTS-TRX et SIP-connector sont geres par run.sh (dependent de fake_trx / Asterisk).
 #
-# Appelé par : run.sh (étape 3)
+# Appele par : run.sh (etape 3)
 
 set -e
 
@@ -36,20 +36,20 @@ wait_port() {
     echo -e " ${GREEN}OK${NC} (${elapsed}s)"
 }
 
-# ── Helper : démarrer un service et vérifier ──────────────────────────────────
+# ── Helper : demarrer un service et verifier ──────────────────────────────────
 start_svc() {
     local svc="$1" vty_port="$2" label="$3" timeout="${4:-30}"
 
     echo -e "  ${CYAN}${label}${NC}"
     systemctl start "$svc" || {
-        echo -e "    ${RED}✗ systemctl start ${svc} échoué${NC}"
+        echo -e "    ${RED}✗ systemctl start ${svc} echoue${NC}"
         journalctl -u "$svc" -n 20 --no-pager >&2
         return 1
     }
 
     if [ -n "$vty_port" ]; then
         wait_port 127.0.0.1 "$vty_port" "$label VTY" "$timeout" || {
-            echo -e "    ${YELLOW}[WARN] VTY :${vty_port} non accessible après ${timeout}s${NC}" >&2
+            echo -e "    ${YELLOW}[WARN] VTY :${vty_port} non accessible apres ${timeout}s${NC}" >&2
             journalctl -u "$svc" -n 10 --no-pager >&2
             return 1
         }
@@ -58,10 +58,10 @@ start_svc() {
 
 # ══════════════════════════════════════════════════════════════════════════════
 
-echo -e "${GREEN}=== Core Osmocom — Op${OPERATOR_ID} ===${NC}"
+echo -e "${GREEN}=== Core Osmocom - Op${OPERATOR_ID} ===${NC}"
 echo ""
 
-# ── 1. Réseau TUN (APN0 pour GGSN) ───────────────────────────────────────────
+# ── 1. Reseau TUN (APN0 pour GGSN) ───────────────────────────────────────────
 echo -e "${CYAN}[1/4] Interface TUN${NC}"
 if ip link show apn0 > /dev/null 2>&1; then
     ip link del dev apn0
@@ -73,23 +73,23 @@ echo -e "  ${GREEN}✓${NC} apn0 up"
 
 # ── 2. Signalisation (STP → HLR → MGW) ───────────────────────────────────────
 #
-# STP doit être prêt en premier : tout le SS7 passe par lui.
-# HLR doit être prêt avant MSC : MSC se connecte au HLR au démarrage.
-# MGW doit être prêt avant MSC : MSC ouvre un MGCP vers MGW.
+# STP doit etre pret en premier : tout le SS7 passe par lui.
+# HLR doit etre pret avant MSC : MSC se connecte au HLR au demarrage.
+# MGW doit etre pret avant MSC : MSC ouvre un MGCP vers MGW.
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
 echo -e "${CYAN}[2/4] Signalisation (STP → HLR → MGW)${NC}"
 
 start_svc osmo-stp  4239 "OsmoSTP"  30 || true
 start_svc osmo-hlr  4258 "OsmoHLR"  30 || {
-    echo -e "  ${RED}[ERR] HLR indispensable pour MSC — abandon${NC}"
+    echo -e "  ${RED}[ERR] HLR indispensable pour MSC - abandon${NC}"
     exit 1
 }
 start_svc osmo-mgw  4243 "OsmoMGW"  20 || true
 
 # ── 3. Core Network (MSC → BSC) ──────────────────────────────────────────────
 #
-# MSC doit être prêt avant BSC : BSC se connecte au MSC via A-interface.
+# MSC doit etre pret avant BSC : BSC se connecte au MSC via A-interface.
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
 echo -e "${CYAN}[3/4] Core Network (MSC → BSC)${NC}"
@@ -109,13 +109,13 @@ sleep 0.5
 chmod 777 /tmp/pcu_bts 2>/dev/null || true
 
 # NOTE : osmo-bts-trx et osmo-sip-connector sont intentionnellement
-# absents ici. run.sh les démarre dans l'ordre correct :
-#   fake_trx → wait_udp 5700 → osmo-bts-trx  (évite la race condition TRX)
-#   Asterisk → osmo-sip-connector             (évite le MNCC connect avant SIP UP)
+# absents ici. run.sh les demarre dans l'ordre correct :
+#   fake_trx → wait_udp 5700 → osmo-bts-trx  (evite la race condition TRX)
+#   Asterisk → osmo-sip-connector             (evite le MNCC connect avant SIP UP)
 
-# ── Résumé ────────────────────────────────────────────────────────────────────
+# ── Resume ────────────────────────────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}=== Vérification ===${NC}"
+echo -e "${GREEN}=== Verification ===${NC}"
 SERVICES="osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc osmo-ggsn osmo-sgsn osmo-pcu"
 for svc in $SERVICES; do
     if systemctl is-active --quiet "$svc"; then
@@ -126,4 +126,4 @@ for svc in $SERVICES; do
 done
 
 echo ""
-echo -e "${GREEN}Core Osmocom prêt. BTS et SIP connector gérés par run.sh.${NC}"
+echo -e "${GREEN}Core Osmocom pret. BTS et SIP connector geres par run.sh.${NC}"

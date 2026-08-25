@@ -1,33 +1,33 @@
 # =============================================================================
-#  60-bts — osmo-bts-trx : la station de base
+#  60-bts - osmo-bts-trx : la station de base
 # =============================================================================
 #
-#  RÔLE        Lance osmo-bts-trx sur la cfg TRX. Il parle TRXD au transceiver
-#              (UDP 5700+ côté TRX, 5800+ côté BTS) et OML/RSL au BSC.
-#              Legacy : run.sh.legacy L2002-2009 — trois lignes, aucune
-#              vérification : une BTS qui n'arrive pas à joindre le BSC ou le
+#  ROLE        Lance osmo-bts-trx sur la cfg TRX. Il parle TRXD au transceiver
+#              (UDP 5700+ cote TRX, 5800+ cote BTS) et OML/RSL au BSC.
+#              Legacy : run.sh.legacy L2002-2009 - trois lignes, aucune
+#              verification : une BTS qui n'arrive pas a joindre le BSC ou le
 #              transceiver mourait en silence, et le mobile ne voyait jamais de
 #              cellule sans que rien ne l'explique.
 #
-#  PRÉREQUIS   Transceiver prêt (module trx-ipc, ou sauté si on s'en passe),
-#              cœur Osmocom démarré (le BSC accepte l'OML), cfg lisible.
+#  PREREQUIS   Transceiver pret (module trx-ipc, ou saute si on s'en passe),
+#              coeur Osmocom demarre (le BSC accepte l'OML), cfg lisible.
 #
-#  SUCCÈS      Processus vivant ET VTY de la BTS (4241) joignable.
-#              POURQUOI CE CRITÈRE : osmo-bts-trx sort tout de suite sur une
-#              cfg invalide (phy inconnue, unit-id refusé) ; le VTY n'écoute
-#              qu'après l'initialisation complète des phy/trx. C'est observable
-#              sans dépendre d'une chaîne de journal, donc robuste aux versions.
+#  SUCCES      Processus vivant ET VTY de la BTS (4241) joignable.
+#              POURQUOI CE CRITERE : osmo-bts-trx sort tout de suite sur une
+#              cfg invalide (phy inconnue, unit-id refuse) ; le VTY n'ecoute
+#              qu'apres l'initialisation complete des phy/trx. C'est observable
+#              sans dependre d'une chaine de journal, donc robuste aux versions.
 #
-#  CE QU'ON N'A PAS PU FIGER : le marqueur d'établissement RSL dans bts.log.
-#  Aucun bts.log réel n'existe sur cette machine ; poser un `log_has` sur une
-#  chaîne devinée aurait produit un faux échec permanent. On observe donc le
-#  RSL de façon INFORMATIVE (mod_say), sans en faire une condition.
+#  CE QU'ON N'A PAS PU FIGER : le marqueur d'etablissement RSL dans bts.log.
+#  Aucun bts.log reel n'existe sur cette machine ; poser un `log_has` sur une
+#  chaine devinee aurait produit un faux echec permanent. On observe donc le
+#  RSL de facon INFORMATIVE (mod_say), sans en faire une condition.
 #
-#  JOURNAL     $BTS_LOG (défaut $LOG_DIR/bts.log)
+#  JOURNAL     $BTS_LOG (defaut $LOG_DIR/bts.log)
 #
-#  ATTENTION   osmo-bts-trx est aussi une unité systemd sur cette image, et
-#              $OSMOCOM_CFG/status.sh l'arrête (module core). Si une unité est
-#              active, mod_bts_status la voit et le module est sauté : il n'y
+#  ATTENTION   osmo-bts-trx est aussi une unite systemd sur cette image, et
+#              $OSMOCOM_CFG/status.sh l'arrete (module core). Si une unite est
+#              active, mod_bts_status la voit et le module est saute : il n'y
 #              aura jamais deux BTS concurrentes.
 # -----------------------------------------------------------------------------
 
@@ -53,20 +53,20 @@ mod_bts_check() {
         return $MOD_RC_FAIL
     }
     [ -r "$BTS_CFG" ] || {
-        mod_hint "attendu : <OSMOCOM_CFG>/osmo-bts-trx.cfg — ou posez BTS_CFG=<chemin>"
+        mod_hint "attendu : <OSMOCOM_CFG>/osmo-bts-trx.cfg - ou posez BTS_CFG=<chemin>"
         mod_fail "configuration de la BTS illisible : $BTS_CFG"
         return $MOD_RC_FAIL
     }
-    # Le BSC doit écouter l'OML, sinon la BTS boucle sur des reconnexions.
+    # Le BSC doit ecouter l'OML, sinon la BTS boucle sur des reconnexions.
     # Non bloquant : c'est une information utile, pas une raison de ne pas
-    # lancer (la BTS retente toute seule dès que le BSC arrive).
-    have_port "${OSMO_VTY_BSC:-4242}" || mod_say "AVERTISSEMENT : le VTY du BSC (${OSMO_VTY_BSC:-4242}) ne répond pas — l'OML risque de boucler"
+    # lancer (la BTS retente toute seule des que le BSC arrive).
+    have_port "${OSMO_VTY_BSC:-4242}" || mod_say "AVERTISSEMENT : le VTY du BSC (${OSMO_VTY_BSC:-4242}) ne repond pas - l'OML risque de boucler"
     mod_say "binaire=$OSMO_BTS_TRX cfg=$BTS_CFG"
     mod_ok
 }
 
 # -x : nom EXACT. `pgrep -f osmo-bts` attraperait osmo-bts-virtual ou une ligne
-# de commande qui mentionne le binaire (un tail, un grep de l'opérateur).
+# de commande qui mentionne le binaire (un tail, un grep de l'operateur).
 mod_bts_status() { pgrep -x osmo-bts-trx >/dev/null 2>&1; }
 
 mod_bts_start() {
@@ -77,34 +77,34 @@ mod_bts_start() {
     mod_ok
 }
 
-# BARRIÈRE NEUVE — le legacy ne vérifiait rien du tout.
+# BARRIERE NEUVE - le legacy ne verifiait rien du tout.
 mod_bts_wait() {
     local pid; pid="$(cat "${RUN_DIR:-/tmp/calypso}/bts.pid" 2>/dev/null || echo 0)"
 
     if ! wait_until "${MOD_TIMEOUT[bts]}" "VTY de la BTS ($OSMO_VTY_BTS)" have_port "$OSMO_VTY_BTS"; then
         modb_tail "$BTS_LOG" 25
         if [ "$pid" != 0 ] && ! kill -0 "$pid" 2>/dev/null; then
-            mod_hint "causes fréquentes : phy/instance absente de $BTS_CFG, ou unit-id déjà pris par une autre BTS"
-            mod_fail "osmo-bts-trx s'est arrêté pendant son initialisation"
+            mod_hint "causes frequentes : phy/instance absente de $BTS_CFG, ou unit-id deja pris par une autre BTS"
+            mod_fail "osmo-bts-trx s'est arrete pendant son initialisation"
         else
-            mod_hint "détail : $BTS_LOG"
-            mod_fail "osmo-bts-trx tourne mais n'expose pas son VTY après ${MOD_TIMEOUT[bts]}s"
+            mod_hint "detail : $BTS_LOG"
+            mod_fail "osmo-bts-trx tourne mais n'expose pas son VTY apres ${MOD_TIMEOUT[bts]}s"
         fi
         return $MOD_RC_FAIL
     fi
 
     if [ "$pid" != 0 ] && ! kill -0 "$pid" 2>/dev/null; then
         modb_tail "$BTS_LOG" 25
-        mod_hint "une BTS résiduelle (unité systemd ?) tient le VTY : systemctl stop osmo-bts-trx"
-        mod_fail "le VTY $OSMO_VTY_BTS répond, mais ce n'est PAS notre processus (il est mort)"
+        mod_hint "une BTS residuelle (unite systemd ?) tient le VTY : systemctl stop osmo-bts-trx"
+        mod_fail "le VTY $OSMO_VTY_BTS repond, mais ce n'est PAS notre processus (il est mort)"
         return $MOD_RC_FAIL
     fi
 
-    # Observation informative, jamais bloquante (cf. en-tête).
+    # Observation informative, jamais bloquante (cf. en-tete).
     if grep -qi 'rsl' "$BTS_LOG" 2>/dev/null; then
-        mod_say "RSL mentionné dans $BTS_LOG (lien vers le BSC en cours d'établissement)"
+        mod_say "RSL mentionne dans $BTS_LOG (lien vers le BSC en cours d'etablissement)"
     else
-        mod_say "aucune mention de RSL dans $BTS_LOG pour l'instant — surveillez l'OML côté BSC"
+        mod_say "aucune mention de RSL dans $BTS_LOG pour l'instant - surveillez l'OML cote BSC"
     fi
     mod_ok
 }

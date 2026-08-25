@@ -1,30 +1,30 @@
 # =============================================================================
-#  65-virtphy — la couche 1 du mobile, côté Um virtuel
+#  65-virtphy - la couche 1 du mobile, cote Um virtuel
 # =============================================================================
 #
-#  RÔLE
-#    Équivalent de trxcon pour la chaîne multicast : il expose la même socket
-#    L1CTL au mobile, mais côté réseau il rejoint les groupes multicast
+#  ROLE
+#    Equivalent de trxcon pour la chaine multicast : il expose la meme socket
+#    L1CTL au mobile, mais cote reseau il rejoint les groupes multicast
 #    d'osmo-bts-virtual au lieu de parler TRXD.
 #
 #        mobile <--L1CTL /tmp/osmocom_l2_N--> virtphy <--multicast UDP--> osmo-bts-virtual
 #
-#    Une instance par mobile ($N_MS). EXCLUSIF de trxcon : même socket, même
-#    rôle — c'est PHY_MODE qui tranche.
+#    Une instance par mobile ($N_MS). EXCLUSIF de trxcon : meme socket, meme
+#    role - c'est PHY_MODE qui tranche.
 #
-#  PRÉREQUIS
-#    PHY_MODE=virtphy, et osmo-bts-virtual démarré (c'est lui qui publie sur le
+#  PREREQUIS
+#    PHY_MODE=virtphy, et osmo-bts-virtual demarre (c'est lui qui publie sur le
 #    groupe ; virtphy seul ne produit rien et ne le dit pas).
 #
-#  CRITÈRE DE SUCCÈS (barrière)
+#  CRITERE DE SUCCES (barriere)
 #    Pour CHAQUE instance : le processus vit ET la socket L1CTL existe. C'est
-#    exactement ce que l'ancien lancement remplaçait par « sleep 2 » avec le
-#    commentaire « laisser virtphy créer les sockets » — la sonde dit la même
+#    exactement ce que l'ancien lancement remplacait par "sleep 2" avec le
+#    commentaire "laisser virtphy creer les sockets" - la sonde dit la meme
 #    chose, mais elle est vraie.
 #
 #  JOURNAL     $LOG_DIR/virtphy-<n>.log
 #
-#  ORDRE       après osmo-bts-virtual, avant mobile.
+#  ORDRE       apres osmo-bts-virtual, avant mobile.
 # -----------------------------------------------------------------------------
 . "$(dirname "${BASH_SOURCE[0]}")/_lib/radio.sh"
 
@@ -46,7 +46,7 @@ mod_virtphy_check() {
         return $MOD_RC_FAIL; }
 
     if pgrep -x trxcon >/dev/null 2>&1; then
-        mod_fail "trxcon tourne déjà sur les mêmes sockets L1CTL"
+        mod_fail "trxcon tourne deja sur les memes sockets L1CTL"
         mod_hint "les deux couches 1 sont exclusives : ./run.sh --stop, ou PHY_MODE=faketrx"
         return $MOD_RC_FAIL
     fi
@@ -55,8 +55,8 @@ mod_virtphy_check() {
     for ((n=1; n<=N_MS; n++)); do
         s="$(radio_l2_sock "$n")"
         if [ -S "$s" ] && ! pgrep -f "$VIRTPHY_BIN.*$s" >/dev/null 2>&1; then
-            mod_fail "socket L1CTL orpheline : $s (aucun virtphy derrière)"
-            mod_hint "rm -f $s — ou ./run.sh --stop pour nettoyer proprement"
+            mod_fail "socket L1CTL orpheline : $s (aucun virtphy derriere)"
+            mod_hint "rm -f $s - ou ./run.sh --stop pour nettoyer proprement"
             return $MOD_RC_FAIL
         fi
     done
@@ -79,17 +79,17 @@ mod_virtphy_start() {
     mod_ok
 }
 
-# BARRIÈRE — une socket par instance, et l'instance encore vivante derrière.
+# BARRIERE - une socket par instance, et l'instance encore vivante derriere.
 mod_virtphy_wait() {
     local n s
     for ((n=1; n<=N_MS; n++)); do
         s="$(radio_l2_sock "$n")"
         wait_until "${MOD_TIMEOUT[virtphy]}" "socket L1CTL de ms$n ($s)" \
             have_unix "$s" || {
-                mod_hint "fin de $(radio_log "virtphy-$n") : socket non créée (droits sur ${s%/*} ?)"
+                mod_hint "fin de $(radio_log "virtphy-$n") : socket non creee (droits sur ${s%/*} ?)"
                 return $MOD_RC_FAIL; }
         radio_alive "virtphy-$n" || {
-            mod_fail "virtphy ms$n a créé sa socket puis s'est arrêté"
+            mod_fail "virtphy ms$n a cree sa socket puis s'est arrete"
             mod_hint "fin de $(radio_log "virtphy-$n") ; multicast indisponible ?"
             return $MOD_RC_FAIL; }
     done

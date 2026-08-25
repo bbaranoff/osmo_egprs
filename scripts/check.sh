@@ -4,14 +4,14 @@ sudo docker exec -it osmo-inter-stp telnet 127.0.0.1 4239
 # show cs7 instance 0 as
 # show cs7 instance 0 route
 
-# ── OPÉRATEUR 1 — STP intra ──────────────────────────────────────────────────
+# ── OPERATEUR 1 - STP intra ──────────────────────────────────────────────────
 sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4239
 # show cs7 instance 0 asp
 # show cs7 instance 0 as
 # show cs7 instance 0 sccp users
 # show cs7 instance 0 sccp connections
 
-# ── OPÉRATEUR 1 — MSC ────────────────────────────────────────────────────────
+# ── OPERATEUR 1 - MSC ────────────────────────────────────────────────────────
 sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4254
 # en
 # show cs7 instance 0 asp
@@ -20,7 +20,7 @@ sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4254
 # show subscriber all
 # show connection all
 
-# ── OPÉRATEUR 1 — BSC ────────────────────────────────────────────────────────
+# ── OPERATEUR 1 - BSC ────────────────────────────────────────────────────────
 sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4242
 # en
 # show cs7 instance 0 asp
@@ -29,7 +29,7 @@ sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4242
 # show bts 0
 # show trx 0 0
 
-# ── OPÉRATEUR 2 — même chose ──────────────────────────────────────────────────
+# ── OPERATEUR 2 - meme chose ──────────────────────────────────────────────────
 sudo docker exec -it osmo-operator-2 telnet 127.0.0.1 4239
 sudo docker exec -it osmo-operator-2 telnet 127.0.0.1 4254
 sudo docker exec -it osmo-operator-2 telnet 127.0.0.1 4242

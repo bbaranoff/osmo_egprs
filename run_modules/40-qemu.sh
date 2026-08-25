@@ -1,28 +1,28 @@
 # =============================================================================
-#  40-qemu — l'émulateur Calypso (ARM7TDMI + DSP TMS320C54x)
+#  40-qemu - l'emulateur Calypso (ARM7TDMI + DSP TMS320C54x)
 # =============================================================================
-MOD_REGISTER qemu "Émulateur Calypso (QEMU)"
+MOD_REGISTER qemu "Emulateur Calypso (QEMU)"
 MOD_REQUIRED[qemu]=1
 MOD_DEPS[qemu]="prereqs"
 MOD_PROFILES[qemu]="calypso hybrid"
 MOD_TIMEOUT[qemu]=30
 
-# Plafond du journal, en octets. Le modèle émet des sondes très bavardes : quand
-# rien ne répond en face (pas de TRX, pas de BTS), le DSP boucle à vide et
-# `POST-BOOTSTUB-RET` seul produit ~2,8 Mo/s — 337 Mo en deux minutes, mesuré.
-# Un garde-fou tronque le fichier au-delà de cette taille, plutôt que de remplir
+# Plafond du journal, en octets. Le modele emet des sondes tres bavardes : quand
+# rien ne repond en face (pas de TRX, pas de BTS), le DSP boucle a vide et
+# `POST-BOOTSTUB-RET` seul produit ~2,8 Mo/s - 337 Mo en deux minutes, mesure.
+# Un garde-fou tronque le fichier au-dela de cette taille, plutot que de remplir
 # le disque de lignes sans valeur de diagnostic.
 : "${QEMU_LOG_MAX:=$((64 * 1024 * 1024))}"
 
 mod_qemu_check() {
-    [ -x "${QEMU_BIN:-}" ] || { mod_fail "binaire QEMU absent : ${QEMU_BIN:-<non défini>}"
+    [ -x "${QEMU_BIN:-}" ] || { mod_fail "binaire QEMU absent : ${QEMU_BIN:-<non defini>}"
                                 mod_hint "compilez-le : ./configure --target-list=arm-softmmu && ninja -C build qemu-system-arm"
                                 return $MOD_RC_FAIL; }
-    [ -r "${FIRMWARE_ELF:-}" ] || { mod_fail "firmware ARM introuvable : ${FIRMWARE_ELF:-<non défini>}"; return $MOD_RC_FAIL; }
+    [ -r "${FIRMWARE_ELF:-}" ] || { mod_fail "firmware ARM introuvable : ${FIRMWARE_ELF:-<non defini>}"; return $MOD_RC_FAIL; }
     local r
     for r in "$DSP_PROM0" "$DSP_PROM1" "$DSP_PROM2" "$DSP_PROM3" "$DSP_DROM" "$DSP_PDROM"; do
         [ -r "$r" ] || { mod_fail "ROM du DSP manquante : $r"
-                         mod_hint "les six binaires du DSP sont indispensables au démarrage"
+                         mod_hint "les six binaires du DSP sont indispensables au demarrage"
                          return $MOD_RC_FAIL; }
     done
     mod_ok
@@ -30,13 +30,13 @@ mod_qemu_check() {
 
 mod_qemu_status() { have_proc "qemu-system-arm.*calypso"; }
 
-# Garde-fou de journal : tronque le fichier dès qu'il dépasse le plafond.
-# Tourne en arrière-plan et meurt avec QEMU.
+# Garde-fou de journal : tronque le fichier des qu'il depasse le plafond.
+# Tourne en arriere-plan et meurt avec QEMU.
 _qemu_log_guard() {
     local f="$1" max="$2" qpid="$3"
     while kill -0 "$qpid" 2>/dev/null; do
         if [ -f "$f" ] && [ "$(stat -c %s "$f" 2>/dev/null || echo 0)" -gt "$max" ]; then
-            printf '\n--- journal tronqué : plafond de %s octets atteint (QEMU_LOG_MAX) ---\n' "$max" > "$f"
+            printf '\n--- journal tronque : plafond de %s octets atteint (QEMU_LOG_MAX) ---\n' "$max" > "$f"
         fi
         sleep 5
     done
@@ -61,35 +61,35 @@ mod_qemu_start() {
     mod_ok
 }
 
-# BARRIÈRE — démarré n'est pas prêt.
-# Le socket du moniteur seul est un critère trop faible : il existe dès que QEMU
-# a ouvert son écoute, même si le DSP boucle à vide. On exige donc deux choses :
-#   1. le moniteur RÉPOND (QEMU est vivant et sert son protocole) ;
-#   2. le DSP a réellement PROGRESSÉ (le compteur d'instructions avance entre
-#      deux relevés) — sinon le modèle est planté et rien ne le signalerait.
+# BARRIERE - demarre n'est pas pret.
+# Le socket du moniteur seul est un critere trop faible : il existe des que QEMU
+# a ouvert son ecoute, meme si le DSP boucle a vide. On exige donc deux choses :
+#   1. le moniteur REPOND (QEMU est vivant et sert son protocole) ;
+#   2. le DSP a reellement PROGRESSE (le compteur d'instructions avance entre
+#      deux releves) - sinon le modele est plante et rien ne le signalerait.
 mod_qemu_wait() {
     local sock="${RUN_DIR}/qemu-monitor.sock" qlog="${LOG_DIR}/qemu.log"
 
     wait_until "${MOD_TIMEOUT[qemu]}" "socket du moniteur QEMU" have_unix "$sock" || return $MOD_RC_FAIL
 
-    # Le processus est-il toujours là ? Un QEMU qui meurt à l'init laisse sa socket.
+    # Le processus est-il toujours la ? Un QEMU qui meurt a l'init laisse sa socket.
     local qpid; qpid="$(cat "${RUN_DIR}/qemu.pid" 2>/dev/null || echo 0)"
     if ! kill -0 "$qpid" 2>/dev/null; then
-        mod_hint "regardez la fin de $qlog : QEMU s'est arrêté pendant l'initialisation"
-        mod_fail "QEMU a démarré puis s'est arrêté"
+        mod_hint "regardez la fin de $qlog : QEMU s'est arrete pendant l'initialisation"
+        mod_fail "QEMU a demarre puis s'est arrete"
         return $MOD_RC_FAIL
     fi
 
-    # Le DSP progresse-t-il ? On compare la taille du journal à 1,5 s d'intervalle.
-    # C'est grossier mais suffisant pour distinguer « vivant » de « figé », et ça
-    # ne dépend d'aucune sonde particulière.
+    # Le DSP progresse-t-il ? On compare la taille du journal a 1,5 s d'intervalle.
+    # C'est grossier mais suffisant pour distinguer "vivant" de "fige", et ca
+    # ne depend d'aucune sonde particuliere.
     local a b
     a="$(stat -c %s "$qlog" 2>/dev/null || echo 0)"
     sleep 1.5
     b="$(stat -c %s "$qlog" 2>/dev/null || echo 0)"
     if [ "$a" = "$b" ]; then
-        mod_hint "le modèle ne produit aucune trace : vérifiez les ROM du DSP et le firmware"
-        mod_fail "QEMU tourne mais le DSP semble figé"
+        mod_hint "le modele ne produit aucune trace : verifiez les ROM du DSP et le firmware"
+        mod_fail "QEMU tourne mais le DSP semble fige"
         return $MOD_RC_FAIL
     fi
     mod_ok

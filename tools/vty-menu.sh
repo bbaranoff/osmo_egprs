@@ -2,14 +2,14 @@
 
 # Sauvegarde de la configuration actuelle du terminal
 OLD_SETTINGS=$(stty -g)
-# Sauvegarde des couleurs initiales (si supporté)
+# Sauvegarde des couleurs initiales (si supporte)
 INITIAL_BG=$(printf '\e]11;?\a')
 
-# Palette de couleurs "Nord Theme" (Plus élégant)
+# Palette de couleurs "Nord Theme" (Plus elegant)
 set_kernel_profile() {
     # On change le fond et le texte
-    echo -ne "\e]11;#2E3440\a" # Fond bleu-gris foncé
-    echo -ne "\e]10;#D8DEE9\a" # Texte blanc cassé
+    echo -ne "\e]11;#2E3440\a" # Fond bleu-gris fonce
+    echo -ne "\e]10;#D8DEE9\a" # Texte blanc casse
     clear
 }
 
@@ -19,18 +19,18 @@ reset_terminal_profile() {
     echo -ne "\e]111\a" # Reset Background
     echo -ne "\e]112\a" # Reset cursor color
     
-    # 2. Commande système pour reset le terminal
+    # 2. Commande systeme pour reset le terminal
     tput reset
     tput sgr0
     
-    # 3. Restauration des paramètres stty
+    # 3. Restauration des parametres stty
     stty "$OLD_SETTINGS"
     
     clear
-    echo "--- Session SDR terminée, profil restauré ---"
+    echo "--- Session SDR terminee, profil restaure ---"
 }
 
-# Thème Whiptail harmonisé
+# Theme Whiptail harmonise
 export NEWT_COLORS='
   root=,rgb:2e/34/40
   window=rgb:d8/de/e9,rgb:3b/42/52
@@ -51,7 +51,7 @@ connect_vty() {
     [[ $? -ne 0 ]] && { echo -e "\n[!] Service hors ligne."; sleep 1; }
 }
 
-# ... (garder le début du fichier identique) ...
+# ... (garder le debut du fichier identique) ...
 
 menu_services() {
     local OP=$1
@@ -87,7 +87,7 @@ menu_services() {
     done
 }
 
-# --- BOUCLE PRINCIPALE SÉCURISÉE ---
+# --- BOUCLE PRINCIPALE SECURISEE ---
 while true; do
     MAIN_TYPE=$(whiptail --title " OSMO-SDR STACK MANAGER " --menu "Select Category :" 15 60 3 \
         "CORE" "Global Infrastructure (Inter-STP)" \
@@ -97,18 +97,18 @@ while true; do
     [[ -z "$MAIN_TYPE" || "$MAIN_TYPE" == "EXIT" ]] && break
 
     if [[ "$MAIN_TYPE" == "CORE" ]]; then
-        # Vérification si l'inter-stp est en vie
+        # Verification si l'inter-stp est en vie
         if docker ps --format '{{.Names}}' | grep -q "osmo-inter-stp"; then
             docker exec -ti osmo-inter-stp telnet 127.0.0.1 4239
         else
-            whiptail --msgbox "Erreur : osmo-inter-stp n'est pas lancé." 10 50
+            whiptail --msgbox "Erreur : osmo-inter-stp n'est pas lance." 10 50
         fi
     else
-        # On récupère les opérateurs actifs
+        # On recupere les operateurs actifs
         OPS=$(docker ps --format "{{.Names}}" | grep "osmo-operator" | sort)
         
         if [[ -z "$OPS" ]]; then
-            whiptail --msgbox "Aucun opérateur détecté ! Vérifiez start.sh" 10 50
+            whiptail --msgbox "Aucun operateur detecte ! Verifiez start.sh" 10 50
             continue
         fi
 

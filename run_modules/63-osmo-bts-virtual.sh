@@ -1,30 +1,30 @@
 # =============================================================================
-#  63-osmo-bts-virtual — la BTS côté Um virtuel (variante « virtual » d'osmo-bts)
+#  63-osmo-bts-virtual - la BTS cote Um virtuel (variante "virtual" d'osmo-bts)
 # =============================================================================
 #
-#  RÔLE
-#    Même fonction que 62-osmo-bts-trx — porter l'Abis vers le BSC — mais sans
-#    aucune couche physique : l'interface Um est remplacée par deux groupes
+#  ROLE
+#    Meme fonction que 62-osmo-bts-trx - porter l'Abis vers le BSC - mais sans
+#    aucune couche physique : l'interface Um est remplacee par deux groupes
 #    multicast UDP, sur lesquels virtphy publie et souscrit.
 #
 #        mobile <--L1CTL--> virtphy <--multicast UDP--> osmo-bts-virtual <--OML/RSL--> osmo-bsc
 #
-#    Ni transceiver, ni trxcon : c'est TOUTE la différence avec la chaîne TRXD.
+#    Ni transceiver, ni trxcon : c'est TOUTE la difference avec la chaine TRXD.
 #
-#  PRÉREQUIS
-#    PHY_MODE=virtphy (sinon le module est désactivé), $BTS_VIRTUAL_CFG lisible,
+#  PREREQUIS
+#    PHY_MODE=virtphy (sinon le module est desactive), $BTS_VIRTUAL_CFG lisible,
 #    et EXCLUSION avec osmo-bts-trx : les deux variantes partagent la VTY 4241 et
 #    l'unit-id IPA, elles ne peuvent pas coexister.
 #
-#  CRITÈRE DE SUCCÈS (barrière)
-#    1. la VTY $BTS_VTY_PORT répond ;
+#  CRITERE DE SUCCES (barriere)
+#    1. la VTY $BTS_VTY_PORT repond ;
 #    2. le processus tient $BTS_STAB_SECS secondes sans motif fatal.
-#    Même forme que pour la variante TRXD, avec d'autres motifs : ici il n'y a
-#    pas d'horloge de transceiver à perdre, mais un socket multicast à ouvrir.
+#    Meme forme que pour la variante TRXD, avec d'autres motifs : ici il n'y a
+#    pas d'horloge de transceiver a perdre, mais un socket multicast a ouvrir.
 #
 #  JOURNAL     $LOG_DIR/osmo-bts-virtual.log
 #
-#  ORDRE       avant virtphy — c'est la BTS qui publie sur le groupe multicast.
+#  ORDRE       avant virtphy - c'est la BTS qui publie sur le groupe multicast.
 # -----------------------------------------------------------------------------
 . "$(dirname "${BASH_SOURCE[0]}")/_lib/radio.sh"
 
@@ -48,27 +48,27 @@ mod_osmo_bts_virtual_check() {
         return $MOD_RC_FAIL; }
     [ -r "$BTS_VIRTUAL_CFG" ] || {
         mod_fail "configuration illisible : $BTS_VIRTUAL_CFG"
-        mod_hint "posez BTS_VIRTUAL_CFG, ou déployez /etc/osmocom/osmo-bts-virtual.cfg"
+        mod_hint "posez BTS_VIRTUAL_CFG, ou deployez /etc/osmocom/osmo-bts-virtual.cfg"
         return $MOD_RC_FAIL; }
 
     if pgrep -x osmo-bts-trx >/dev/null 2>&1; then
-        mod_fail "osmo-bts-trx tourne déjà (VTY $BTS_VTY_PORT occupée)"
+        mod_fail "osmo-bts-trx tourne deja (VTY $BTS_VTY_PORT occupee)"
         mod_hint "les deux BTS sont exclusives : ./run.sh --stop, ou PHY_MODE=faketrx"
         return $MOD_RC_FAIL
     fi
     if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet osmo-bts-trx 2>/dev/null; then
-        mod_fail "l'unité systemd osmo-bts-trx est active — elle tient la VTY $BTS_VTY_PORT"
+        mod_fail "l'unite systemd osmo-bts-trx est active - elle tient la VTY $BTS_VTY_PORT"
         mod_hint "systemctl stop osmo-bts-trx"
         return $MOD_RC_FAIL
     fi
 
-    # Le plan multicast, pour le journal : virtphy doit viser les mêmes groupes.
+    # Le plan multicast, pour le journal : virtphy doit viser les memes groupes.
     local bg bp mg mp
     bg="$(radio_cfg_val "$BTS_VIRTUAL_CFG" "virtual-um bts-mcast-group")"
     bp="$(radio_cfg_val "$BTS_VIRTUAL_CFG" "virtual-um bts-mcast-port")"
     mg="$(radio_cfg_val "$BTS_VIRTUAL_CFG" "virtual-um ms-mcast-group")"
     mp="$(radio_cfg_val "$BTS_VIRTUAL_CFG" "virtual-um ms-mcast-port")"
-    mod_say "multicast BTS -> ${bg:-239.193.23.1}:${bp:-23001} · MS -> ${mg:-239.193.23.2}:${mp:-23002} (défauts si vide)"
+    mod_say "multicast BTS -> ${bg:-239.193.23.1}:${bp:-23001} · MS -> ${mg:-239.193.23.2}:${mp:-23002} (defauts si vide)"
     mod_ok
 }
 
@@ -84,17 +84,17 @@ mod_osmo_bts_virtual_start() {
     mod_ok
 }
 
-# BARRIÈRE — VTY puis fenêtre de stabilité.
+# BARRIERE - VTY puis fenetre de stabilite.
 mod_osmo_bts_virtual_wait() {
     local log; log="$(radio_log osmo-bts-virtual)"
 
     wait_until "${MOD_TIMEOUT[osmo-bts-virtual]}" "VTY du BTS virtuel ($BTS_VTY_PORT)" \
         have_port "$BTS_VTY_PORT" || {
-            mod_hint "fin de $log ; VTY déjà prise par osmo-bts-trx ? ss -tlnp | grep :$BTS_VTY_PORT"
+            mod_hint "fin de $log ; VTY deja prise par osmo-bts-trx ? ss -tlnp | grep :$BTS_VTY_PORT"
             return $MOD_RC_FAIL; }
 
     radio_stable osmo-bts-virtual "$log" "$BTS_STAB_SECS" "$BTS_VIRT_FATAL_RE" || {
-        mod_hint "multicast indisponible ? vérifiez que l'interface de bouclage porte une route multicast (ip route show table local)"
+        mod_hint "multicast indisponible ? verifiez que l'interface de bouclage porte une route multicast (ip route show table local)"
         return $MOD_RC_FAIL; }
     mod_ok
 }

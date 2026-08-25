@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/fft_global.sh — FFT "jolie" d'un cfile LOCAL passe en argument (fichier statique).
+# tools/fft_global.sh - FFT "jolie" d'un cfile LOCAL passe en argument (fichier statique).
 #
 # Derive de tools/fft.sh (osmo_egprs) mais SANS docker / ring / tail-live : lit
 # directement un cfile sur l'hote, le balaye en boucle, et affiche
@@ -105,7 +105,7 @@ gs = fig.add_gridspec(2, 2, width_ratios=[40, 1], height_ratios=[1, 1.4],
 axp = fig.add_subplot(gs[0, 0])
 axw = fig.add_subplot(gs[1, 0], sharex=axp)
 cax = fig.add_subplot(gs[1, 1])
-fig.suptitle(f"FFT — {os.path.basename(CFILE)}  |  ARFCN={ARFCN}  Fs={RATE/1e6:.4f} MHz  fmt={FORMAT}",
+fig.suptitle(f"FFT - {os.path.basename(CFILE)}  |  ARFCN={ARFCN}  Fs={RATE/1e6:.4f} MHz  fmt={FORMAT}",
              fontsize=11, color="#7fd")
 (line,) = axp.plot(freqs, np.full(NFFT,-120), lw=0.5, color="#39f")
 axp.set_xlim(freqs[0],freqs[-1]); axp.set_ylim(-130,-30)
@@ -141,6 +141,6 @@ if SAVE:
 else:
     ani = FuncAnimation(fig, update, interval=int(REFRESH*1000),
                         blit=False, cache_frame_data=False)
-    print("FFT — ferme la fenetre pour quitter.")
+    print("FFT - ferme la fenetre pour quitter.")
     plt.show()
 PYEOF

@@ -1,4 +1,4 @@
-# 60-binaires — dépôt des exécutables dans /usr/local/bin, comme le fait le Dockerfile.
+# 60-binaires - depot des executables dans /usr/local/bin, comme le fait le Dockerfile.
 INST_REGISTER binaires "Installation des binaires"
 INST_DEPS[binaires]="build"
 
@@ -15,11 +15,11 @@ inst_binaires_run() {
         if [ -x "$GSM_ROOT/osmocom-bb/$path" ]; then
             install -m755 "$GSM_ROOT/osmocom-bb/$path" "/usr/local/bin/$name" && n=$((n+1))
         else
-            inst_say "absent, ignoré : $path"
+            inst_say "absent, ignore : $path"
         fi
     done <<< "$_BINS"
-    [ $n -eq 0 ] && { inst_fail "aucun binaire trouvé à installer — la compilation a-t-elle abouti ?"; return $INST_RC_FAIL; }
-    inst_say "$n binaires installés"
+    [ $n -eq 0 ] && { inst_fail "aucun binaire trouve a installer - la compilation a-t-elle abouti ?"; return $INST_RC_FAIL; }
+    inst_say "$n binaires installes"
     inst_ok
 }
 inst_binaires_verify() {

@@ -1,6 +1,6 @@
 #!/bin/bash
-# smsc-start.sh — Lance le proto-smsc-daemon + le relay interop
-# Fix: attente HLR GSUP robuste + vérification socket sendmt avec retry
+# smsc-start.sh - Lance le proto-smsc-daemon + le relay interop
+# Fix: attente HLR GSUP robuste + verification socket sendmt avec retry
 
 set -euo pipefail
 
@@ -15,7 +15,7 @@ RELAY_PORT="${RELAY_PORT:-7890}"
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'
 
 echo -e "${GREEN}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  SMS Gateway — Opérateur ${OPERATOR_ID}                       ║${NC}"
+echo -e "${GREEN}║  SMS Gateway - Operateur ${OPERATOR_ID}                       ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
 echo -e "  HLR        : ${CYAN}${HLR_IP}${NC}"
 echo -e "  IPA name   : ${CYAN}${SMSC_IPA_NAME}${NC}"
@@ -27,7 +27,7 @@ echo -e "  Routing    : ${CYAN}${ROUTING_CONF}${NC}"
 rm -f "$SENDMT_SOCKET"
 mkdir -p /var/log/osmocom
 
-# ── Attente HLR GSUP (port 4222) — robuste ──────────────────────────────────
+# ── Attente HLR GSUP (port 4222) - robuste ──────────────────────────────────
 echo -ne "${YELLOW}[SMSC] Attente OsmoHLR GSUP (4222)"
 retries=60
 while [ $retries -gt 0 ]; do
@@ -35,7 +35,7 @@ while [ $retries -gt 0 ]; do
         echo -e " ${GREEN}✓${NC}"
         break
     fi
-    # Fallback: vérifier aussi via ss
+    # Fallback: verifier aussi via ss
     if ss -tln 2>/dev/null | grep -q ":4222 "; then
         echo -e " ${GREEN}✓${NC}"
         break
@@ -45,8 +45,8 @@ while [ $retries -gt 0 ]; do
     retries=$(( retries - 1 ))
 done
 if [ $retries -eq 0 ]; then
-    echo -e " ${RED}TIMEOUT — HLR non disponible${NC}"
-    echo -e "${YELLOW}[SMSC] Tentative de démarrage quand même...${NC}"
+    echo -e " ${RED}TIMEOUT - HLR non disponible${NC}"
+    echo -e "${YELLOW}[SMSC] Tentative de demarrage quand meme...${NC}"
 fi
 
 sleep 3
@@ -54,11 +54,11 @@ sleep 3
 # ── 1. proto-smsc-daemon (background) ────────────────────────────────────────
 echo -e "${GREEN}[1/2] proto-smsc-daemon${NC}"
 
-# Vérifier que le binaire existe
+# Verifier que le binaire existe
 if ! command -v proto-smsc-daemon >/dev/null 2>&1; then
     echo -e "  ${RED}proto-smsc-daemon introuvable dans PATH${NC}"
     echo -e "  ${YELLOW}SMS local uniquement via MSC VTY${NC}"
-    # Lancer quand même le relay pour les SMS entrants via TCP
+    # Lancer quand meme le relay pour les SMS entrants via TCP
 else
     proto-smsc-daemon "$HLR_IP" "$SMSC_IPA_NAME" "$MO_LOG" "$SENDMT_SOCKET" &
     DAEMON_PID=$!
@@ -75,18 +75,18 @@ else
         sleep 1
     done
     if [ ! -S "$SENDMT_SOCKET" ]; then
-        echo -e " ${YELLOW}non créé (les MT SMS ne fonctionneront pas)${NC}"
+        echo -e " ${YELLOW}non cree (les MT SMS ne fonctionneront pas)${NC}"
     fi
 fi
 
 # ── 2. Relay interop (background) ────────────────────────────────────────────
 echo -e "${GREEN}[2/2] sms-interop-relay${NC}"
 
-# Vérifier que le script existe
+# Verifier que le script existe
 RELAY_SCRIPT="/etc/osmocom/sms-interop-relay.py"
 if [ ! -f "$RELAY_SCRIPT" ]; then
     echo -e "  ${RED}${RELAY_SCRIPT} introuvable${NC}"
-    echo -e "  ${YELLOW}SMS inter-opérateur désactivé${NC}"
+    echo -e "  ${YELLOW}SMS inter-operateur desactive${NC}"
 else
     python3 "$RELAY_SCRIPT" \
         --config "$ROUTING_CONF" \
@@ -96,7 +96,7 @@ else
     RELAY_PID=$!
     echo -e "  PID: ${CYAN}${RELAY_PID}${NC}"
 
-    # Vérifier que le port TCP est en écoute
+    # Verifier que le port TCP est en ecoute
     echo -ne "  Relay TCP ${RELAY_PORT}"
     for i in $(seq 1 15); do
         if ss -tlnp 2>/dev/null | grep -q ":${RELAY_PORT} "; then
@@ -110,13 +110,13 @@ fi
 
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  SMS Gateway actif — Op${OPERATOR_ID}${NC}"
+echo -e "${GREEN}  SMS Gateway actif - Op${OPERATOR_ID}${NC}"
 echo -e "${GREEN}  MT local : send-mt-sms.sh <imsi> 'msg'${NC}"
 echo -e "${GREEN}  MO log   : tail -f ${MO_LOG}${NC}"
 echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
 
 cleanup() {
-    echo -e "\n${YELLOW}[SMSC] Arrêt...${NC}"
+    echo -e "\n${YELLOW}[SMSC] Arret...${NC}"
     [ -n "${DAEMON_PID:-}" ] && kill $DAEMON_PID 2>/dev/null || true
     [ -n "${RELAY_PID:-}" ] && kill $RELAY_PID 2>/dev/null || true
     rm -f "$SENDMT_SOCKET"
@@ -132,9 +132,9 @@ elif [ -n "${DAEMON_PID:-}" ]; then
 elif [ -n "${RELAY_PID:-}" ]; then
     wait $RELAY_PID 2>/dev/null || true
 else
-    # Aucun processus à attendre — juste dormir
+    # Aucun processus a attendre - juste dormir
     while true; do sleep 60; done
 fi
 
-echo -e "${YELLOW}[SMSC] Processus terminé, arrêt...${NC}"
+echo -e "${YELLOW}[SMSC] Processus termine, arret...${NC}"
 cleanup

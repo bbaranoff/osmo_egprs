@@ -1,49 +1,49 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  generate_configs.sh — le SEUL endroit où la configuration du réseau est
-#                        décidée, et le seul qui sait substituer les gabarits.
+#  generate_configs.sh - le SEUL endroit ou la configuration du reseau est
+#                        decidee, et le seul qui sait substituer les gabarits.
 # =============================================================================
 #
 #  POURQUOI CE FICHIER EXISTE
 #  --------------------------
-#  La mécanique est inchangée : les fichiers de `configs/` contiennent des
-#  marqueurs `__MCC__`, `__ARFCN__`, `__KI__`… qu'une fonction remplace au
-#  démarrage. Ce qui change, c'est qu'il n'y a plus DEUX implémentations de
-#  cette fonction — `start.sh` en portait une copie de 132 lignes et
-#  `lib/gabarits.sh` une autre de 70, identiques au formatage près, qui
-#  dérivaient donc en silence. Elles vivent ici, une fois.
+#  La mecanique est inchangee : les fichiers de `configs/` contiennent des
+#  marqueurs `__MCC__`, `__ARFCN__`, `__KI__`... qu'une fonction remplace au
+#  demarrage. Ce qui change, c'est qu'il n'y a plus DEUX implementations de
+#  cette fonction - `start.sh` en portait une copie de 132 lignes et
+#  `lib/gabarits.sh` une autre de 70, identiques au formatage pres, qui
+#  derivaient donc en silence. Elles vivent ici, une fois.
 #
-#  Et surtout : les valeurs n'étaient calculées NULLE PART de façon visible.
-#  ARFCN, BSIC, IMSI, IMEI, Ki étaient des formules enfouies au milieu de la
+#  Et surtout : les valeurs n'etaient calculees NULLE PART de facon visible.
+#  ARFCN, BSIC, IMSI, IMEI, Ki etaient des formules enfouies au milieu de la
 #  substitution (`arfcn=$(( 512 + op_id * 2 ))`). Pour changer l'ARFCN il
-#  fallait trouver et éditer la formule. Désormais ces formules ne sont plus
-#  que des DÉFAUTS : `globals.conf`, à la racine, les expose toutes et gagne.
+#  fallait trouver et editer la formule. Desormais ces formules ne sont plus
+#  que des DEFAUTS : `globals.conf`, a la racine, les expose toutes et gagne.
 #
 #  DEUX USAGES
 #  -----------
 #    ./generate_configs.sh [--force] [--show] [CLE=VALEUR ...]
-#         écrit/complète globals.conf à la racine, puis affiche l'effectif.
-#         Sans --force, un globals.conf existant n'est JAMAIS écrasé : c'est
-#         ton fichier, on ne réécrit pas par-dessus tes réglages.
+#         ecrit/complete globals.conf a la racine, puis affiche l'effectif.
+#         Sans --force, un globals.conf existant n'est JAMAIS ecrase : c'est
+#         ton fichier, on ne reecrit pas par-dessus tes reglages.
 #
 #    . ./generate_configs.sh
-#         charge globals.conf et définit apply_config_templates().
-#         C'est ce que font start.sh (hôte) et lib/gabarits.sh.
+#         charge globals.conf et definit apply_config_templates().
+#         C'est ce que font start.sh (hote) et lib/gabarits.sh.
 #
 #  QUI APPELLE QUOI
 #  ----------------
-#    start.sh          -> exécute ce script (génère globals.conf) puis le source
-#    start-direct.sh   -> source globals.conf (docker : la conf est déjà là)
+#    start.sh          -> execute ce script (genere globals.conf) puis le source
+#    start-direct.sh   -> source globals.conf (docker : la conf est deja la)
 #    lib/gabarits.sh   -> source ce script pour apply_config_templates()
 #
-#  MULTI-OPÉRATEUR
+#  MULTI-OPERATEUR
 #  ---------------
-#  En mode `virtual` (N_OPERATORS > 1) chaque opérateur a besoin de valeurs
-#  DISTINCTES. Une valeur posée dans globals.conf s'applique alors à TOUS —
-#  ce qui est presque toujours faux pour ARFCN, LAC, IMSI… Laisse-les vides
-#  (le défaut) pour garder la dérivation par opérateur, et ne fixe que ce que
-#  tu veux vraiment figer. Le script te prévient si tu figes un champ
-#  per-opérateur avec N_OPERATORS > 1.
+#  En mode `virtual` (N_OPERATORS > 1) chaque operateur a besoin de valeurs
+#  DISTINCTES. Une valeur posee dans globals.conf s'applique alors a TOUS -
+#  ce qui est presque toujours faux pour ARFCN, LAC, IMSI... Laisse-les vides
+#  (le defaut) pour garder la derivation par operateur, et ne fixe que ce que
+#  tu veux vraiment figer. Le script te previent si tu figes un champ
+#  per-operateur avec N_OPERATORS > 1.
 #
 #  SPDX-License-Identifier: GPL-2.0-or-later
 # =============================================================================
@@ -51,72 +51,72 @@
 _GC_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _GC_FILE="$_GC_HERE/globals.conf"
 
-# ── Les réglages exposés, avec leur défaut historique ────────────────────────
+# ── Les reglages exposes, avec leur defaut historique ────────────────────────
 # Format : CLE|VALEUR-PAR-DEFAUT|PER-OP|COMMENTAIRE
-#   PER-OP=1 -> la valeur est normalement dérivée du numéro d'opérateur ;
-#               la figer n'a de sens qu'avec un seul opérateur.
+#   PER-OP=1 -> la valeur est normalement derivee du numero d'operateur ;
+#               la figer n'a de sens qu'avec un seul operateur.
 _gc_table() {
 cat <<'TABLE'
-#SECTION|Identité du réseau
+#SECTION|Identite du reseau
 MCC|001|0|Mobile Country Code (3 chiffres)
 MNC|01|0|Mobile Network Code (2 chiffres)
-OP_NAME|OsmoQEMU|0|Nom court et long du réseau
-#SECTION|Sécurité et carte SIM
-ENCRYPTION|a5 1|0|Chiffrement : « a5 1 » (défaut), « a5 0 » (aucun), « a5 0 1 3 »…
-SIM_ALGO|comp128|0|Algorithme d'authentification (comp128, xor…)
-KI||1|Ki de la SIM, 16 octets hexa espacés
+OP_NAME|OsmoQEMU|0|Nom court et long du reseau
+#SECTION|Securite et carte SIM
+ENCRYPTION|a5 1|0|Chiffrement : "a5 1" (defaut), "a5 0" (aucun), "a5 0 1 3"...
+SIM_ALGO|comp128|0|Algorithme d'authentification (comp128, xor...)
+KI||1|Ki de la SIM, 16 octets hexa espaces
 IMSI||1|IMSI du mobile
 IMEI||1|IMEI du mobile
 #SECTION|Radio
-ARFCN||1|Canal radio (à accorder avec BAND)
+ARFCN||1|Canal radio (a accorder avec BAND)
 BAND|DCS1800|0|Bande : GSM900, DCS1800, PCS1900, GSM850
 BSIC||1|Base Station Identity Code, 0..63
 LAC||1|Location Area Code
 CELL_ID||1|Cell identity
 IPA_UNIT_ID||1|Identifiant IPA du BTS
-MS_MAX_POWER|15|0|Puissance max autorisée au mobile (0..15)
-RXLEV_ACCESS_MIN|0|0|Niveau reçu minimal pour accéder à la cellule
-CELL_RESEL_HYST|4|0|Hystérésis de resélection de cellule (dB)
-T3109|5|0|Timer T3109 du BSC (s) — libération de canal
+MS_MAX_POWER|15|0|Puissance max autorisee au mobile (0..15)
+RXLEV_ACCESS_MIN|0|0|Niveau recu minimal pour acceder a la cellule
+CELL_RESEL_HYST|4|0|Hysteresis de reselection de cellule (dB)
+T3109|5|0|Timer T3109 du BSC (s) - liberation de canal
 #SECTION|GPRS
 BVCI||1|BSSGP Virtual Connection Id
 NSEI||1|Network Service Entity Id
 NSVCI||1|NS Virtual Connection Id
-APN|internet|0|Nom du point d'accès
+APN|internet|0|Nom du point d'acces
 #SECTION|Services
-SMS_SC||1|Numéro du centre SMS
+SMS_SC||1|Numero du centre SMS
 #SECTION|Dimensionnement
-MS_COUNT|2|0|Nombre de mobiles simulés
-N_OPERATORS|1|0|Nombre d'opérateurs (mode « virtual »)
-HOST_IP|127.0.0.1|0|Adresse de l'hôte vue par la pile
+MS_COUNT|2|0|Nombre de mobiles simules
+N_OPERATORS|1|0|Nombre d'operateurs (mode "virtual")
+HOST_IP|127.0.0.1|0|Adresse de l'hote vue par la pile
 TABLE
 }
 
-# ── Écriture de globals.conf ─────────────────────────────────────────────────
+# ── Ecriture de globals.conf ─────────────────────────────────────────────────
 _gc_write() {
     local force=$1
     if [ -f "$_GC_FILE" ] && [ "$force" != "1" ]; then
-        printf '  globals.conf existe déjà — conservé (--force pour régénérer)\n'
+        printf '  globals.conf existe deja - conserve (--force pour regenerer)\n'
         return 0
     fi
     {
         printf '# ═══════════════════════════════════════════════════════════════\n'
-        printf '#  globals.conf — la configuration du réseau, en un seul endroit.\n'
+        printf '#  globals.conf - la configuration du reseau, en un seul endroit.\n'
         printf '# ═══════════════════════════════════════════════════════════════\n'
         printf '#\n'
-        printf '#  Édite ce fichier à la main : il ne sera JAMAIS réécrit par un run.\n'
-        printf '#  Seul « ./generate_configs.sh --force » le régénère.\n'
+        printf '#  Edite ce fichier a la main : il ne sera JAMAIS reecrit par un run.\n'
+        printf '#  Seul "./generate_configs.sh --force" le regenere.\n'
         printf '#\n'
-        printf '#  CE FICHIER FAIT AUTORITÉ — SUR LES VARIABLES QU'"'"'IL DÉCLARE, ET SUR\n'
-        printf '#  ELLES SEULES. Il est lu en dernier : les %s réglages ci-dessous\n' "$(_gc_table | grep -vc '^#SECTION')"
-        printf '#  écrasent leur homonyme dans l'"'"'environnement. Tout le reste (CALYPSO_*,\n'
-        printf '#  LOG_DIR, MODE…) passe au travers, intact. Deux façons de le modifier :\n'
+        printf '#  CE FICHIER FAIT AUTORITE - SUR LES VARIABLES QU'"'"'IL DECLARE, ET SUR\n'
+        printf '#  ELLES SEULES. Il est lu en dernier : les %s reglages ci-dessous\n' "$(_gc_table | grep -vc '^#SECTION')"
+        printf '#  ecrasent leur homonyme dans l'"'"'environnement. Tout le reste (CALYPSO_*,\n'
+        printf '#  LOG_DIR, MODE...) passe au travers, intact. Deux facons de le modifier :\n'
         printf '#      vim globals.conf\n'
         printf '#      ./generate_configs.sh ARFCN=520\n'
         printf '#\n'
-        printf '#  Un champ VIDE = valeur calculée automatiquement. Les champs notés\n'
-        printf '#  [auto/opérateur] se déduisent du numéro d'"'"'opérateur : ne les fige\n'
-        printf '#  que si N_OPERATORS=1, sinon tous les opérateurs se marchent dessus.\n'
+        printf '#  Un champ VIDE = valeur calculee automatiquement. Les champs notes\n'
+        printf '#  [auto/operateur] se deduisent du numero d'"'"'operateur : ne les fige\n'
+        printf '#  que si N_OPERATORS=1, sinon tous les operateurs se marchent dessus.\n'
         printf '# ═══════════════════════════════════════════════════════════════\n'
         local key def perop comment
         while IFS='|' read -r key def perop comment; do
@@ -127,14 +127,14 @@ _gc_write() {
                 continue
             fi
             printf '# %s%s\n' "$comment" \
-                "$([ "$perop" = 1 ] && printf '  [auto/opérateur]')"
+                "$([ "$perop" = 1 ] && printf '  [auto/operateur]')"
             case "$def" in
                 *" "*|"") printf '%s="%s"\n' "$key" "$def" ;;
                 *)        printf '%s=%s\n'   "$key" "$def" ;;
             esac
         done < <(_gc_table)
     } > "$_GC_FILE"
-    printf '  globals.conf écrit (%s réglages)\n' \
+    printf '  globals.conf ecrit (%s reglages)\n' \
            "$(_gc_table | grep -vc '^#SECTION')"
 }
 
@@ -142,7 +142,7 @@ _gc_write() {
 _gc_set() {
     local key="${1%%=*}" val="${1#*=}"
     _gc_table | grep -q "^${key}|" || {
-        printf '  ⚠ réglage inconnu : %s (voir --show)\n' "$key" >&2; return 1; }
+        printf '  ⚠ reglage inconnu : %s (voir --show)\n' "$key" >&2; return 1; }
     [ -f "$_GC_FILE" ] || _gc_write 1 >/dev/null
     local q; case "$val" in *" "*|"") q="\"$val\"" ;; *) q="$val" ;; esac
     if grep -qE "^${key}=" "$_GC_FILE"; then
@@ -154,17 +154,17 @@ _gc_set() {
 }
 
 # ── Chargement ───────────────────────────────────────────────────────────────
-# Charge globals.conf, puis COMPLÈTE avec les défauts de la table.
+# Charge globals.conf, puis COMPLETE avec les defauts de la table.
 #
-# L'ordre compte : le fichier est lu d'abord et fait autorité sur les variables
-# qu'il déclare ; ensuite, toute clé encore vide reçoit son défaut d'usine.
+# L'ordre compte : le fichier est lu d'abord et fait autorite sur les variables
+# qu'il declare ; ensuite, toute cle encore vide recoit son defaut d'usine.
 #
-# Ce filet n'est pas décoratif. Sans lui, un globals.conf ABSENT — clone frais,
-# fichier volontairement gitignoré, suppression accidentelle — laissait BAND,
-# SIM_ALGO, APN, T3109… vides, et la substitution les écrivait tels quels dans
-# les configs : « band » sans valeur, « ki  <hexa> » sans algorithme. osmo-bsc
-# refuse alors de démarrer, et rien dans le journal ne dit pourquoi. Constaté
-# en vrai le 2026-08-03. Les défauts appartiennent au SCRIPT ; globals.conf
+# Ce filet n'est pas decoratif. Sans lui, un globals.conf ABSENT - clone frais,
+# fichier volontairement gitignore, suppression accidentelle - laissait BAND,
+# SIM_ALGO, APN, T3109... vides, et la substitution les ecrivait tels quels dans
+# les configs : "band" sans valeur, "ki  <hexa>" sans algorithme. osmo-bsc
+# refuse alors de demarrer, et rien dans le journal ne dit pourquoi. Constate
+# en vrai le 2026-08-03. Les defauts appartiennent au SCRIPT ; globals.conf
 # n'est qu'une couche de surcharge par-dessus.
 gc_load() {
     [ -f "$_GC_FILE" ] && . "$_GC_FILE"
@@ -176,8 +176,8 @@ gc_load() {
     return 0
 }
 
-# ── La substitution des gabarits — implémentation UNIQUE ─────────────────────
-#  Signature inchangée, pour rester compatible avec les deux appelants :
+# ── La substitution des gabarits - implementation UNIQUE ─────────────────────
+#  Signature inchangee, pour rester compatible avec les deux appelants :
 #    apply_config_templates DEST CONTAINER_IP GATEWAY_IP OP_ID \
 #                           PC_MSC PC_STP PC_BSC MCC MNC OP_NAME \
 #                           INTER_STP INTER_STP_SHUTDOWN N_OPERATORS
@@ -200,7 +200,7 @@ apply_config_templates() {
     done
     # scripts/ en entier : c'est le comportement de start.sh, le plus permissif
     # des deux qui coexistaient. lib/gabarits.sh en copiait une liste blanche,
-    # qui omettait silencieusement tout script ajouté depuis.
+    # qui omettait silencieusement tout script ajoute depuis.
     cp scripts/* "$dest/osmocom/" 2>/dev/null || true
     chmod +x "$dest/osmocom"/*.sh 2>/dev/null || true
 
@@ -215,10 +215,10 @@ apply_config_templates() {
     local rctx_msc rctx_stp rctx_bsc rctx_inter
     rctx_msc=$(op_rctx_msc "$op_id");   rctx_stp=$(op_rctx_stp "$op_id")
     rctx_bsc=$(op_rctx_bsc "$op_id")
-    # RCTX_INTER_OVERRIDE : posé par build-iso.sh quand l'image est un NOEUD DE
-    # WAN. Le routing context identifie l'AS auprès du hub ; la formule locale
-    # (op*100+50) donne la même valeur sur tous les noeuds, donc plusieurs AS
-    # indiscernables sur le même hub. Vide = formule d'origine, rien ne change.
+    # RCTX_INTER_OVERRIDE : pose par build-iso.sh quand l'image est un NOEUD DE
+    # WAN. Le routing context identifie l'AS aupres du hub ; la formule locale
+    # (op*100+50) donne la meme valeur sur tous les noeuds, donc plusieurs AS
+    # indiscernables sur le meme hub. Vide = formule d'origine, rien ne change.
     rctx_inter="${RCTX_INTER_OVERRIDE:-$(op_rctx_inter "$op_id")}"
 
     # ── Les valeurs. globals.conf gagne ; sinon, la formule historique. ──────
@@ -237,7 +237,7 @@ apply_config_templates() {
 
     local inter_local_ip rtp_start rtp_end sip_host_port
     # Idem : sur un noeud de WAN, l'adresse source de l'ASP n'est pas une IP du
-    # plan docker mais celle du segment — ou 0.0.0.0 quand elle vient du DHCP.
+    # plan docker mais celle du segment - ou 0.0.0.0 quand elle vient du DHCP.
     inter_local_ip="${INTER_LOCAL_IP_OVERRIDE:-$(op_backbone_ip "$op_id")}"
     rtp_start=$(linphone_rtp_start "$op_id"); rtp_end=$(linphone_rtp_end "$op_id")
     sip_host_port=$(linphone_sip_port "$op_id")
@@ -285,25 +285,75 @@ apply_config_templates() {
        || grep -qE "^${op_id}0000? = " "$_src" 2>/dev/null; then
         _generate_sms_routing_conf_fallback "$op_id" "$n_operators" >  "$_src"
     fi
+
+    # ── L'adressage SS7 du noeud : rendu a set-node-id.sh ────────────────────
+    # Les gabarits portent les defauts d'une machine SEULE (point-code 1.1.2,
+    # ASP vers 127.0.0.1, shutdown). Sur un noeud de WAN ils sont faux - et ils
+    # revenaient ici a CHAQUE regeneration : l'adressage pose par set_stp_ip.sh
+    # etait efface au demarrage suivant sans que rien ne le signale. L'interco
+    # retombait alors que le fichier venait d'etre "regenere proprement".
+    #
+    # set-node-id.sh (ce que set_stp_ip.sh appelle lui-meme) est le seul endroit
+    # qui tienne d'accord les trois fichiers - osmo-stp, osmo-msc, osmo-bsc - et
+    # leurs point codes croises. On le rejoue APRES la substitution plutot que
+    # de dupliquer ici un sed qui divergerait le jour ou le plan changerait.
+    _apply_node_ss7_addressing "$dest"
+}
+
+# Rejoue l'adressage SS7 du noeud sur les configs fraichement generees.
+#   $1 = repertoire destination (celui qui contient osmocom/)
+# Sans effet - et silencieux - quand la machine n'est pas un noeud de WAN, quand
+# le script est absent, ou quand OSMO_NO_STP_IP=1 le demande explicitement.
+_apply_node_ss7_addressing() {
+    local dest="$1"
+    local role_file="${ROLE_FILE:-/etc/osmo-role}"
+    local here="${GEN_HERE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+
+    [ "${OSMO_NO_STP_IP:-0}" = "1" ] && return 0
+    [ -d "$dest/osmocom" ] || return 0
+    [ -r "$role_file" ]    || return 0
+
+    local role node hub
+    role="$(awk -F= '/^OSMO_ROLE=/{gsub(/[ \r\t]/,"",$2);v=$2}    END{print v}' "$role_file")"
+    node="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$role_file")"
+    hub="$(awk  -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2}  END{print v}' "$role_file")"
+
+    # Le hub n'a pas de config d'operateur a corriger : la sienne sort de
+    # helpers/create_interop.sh, qui recoit deja son adresse d'ecoute.
+    [ "$role" = "operator" ] || return 0
+    [[ "$node" =~ ^[1-9]$ ]] || return 0
+
+    local setid="$here/network/set-node-id.sh"
+    [ -r "$setid" ] || return 0
+
+    local args=(--node "$node" --op "${OPS_PER_NODE:-1}" --native --conf-dir "$dest/osmocom")
+    [ -n "$hub" ] && args+=(--hub-ip "$hub")
+
+    if bash "$setid" "${args[@]}" >/dev/null 2>&1; then
+        echo "  ✓ adressage SS7 du noeud ${node} reapplique (set-node-id.sh)"
+    else
+        echo "  ⚠ adressage SS7 du noeud ${node} NON reapplique - l'ASP inter-STP" >&2
+        echo "    gardera les defauts du gabarit (127.0.0.1, shutdown)." >&2
+    fi
 }
 
 # ── Affichage de l'effectif ──────────────────────────────────────────────────
 _gc_show() {
     local key def perop comment val src
-    printf '\n  %-13s %-26s %s\n' "RÉGLAGE" "VALEUR EFFECTIVE" "ORIGINE"
+    printf '\n  %-13s %-26s %s\n' "REGLAGE" "VALEUR EFFECTIVE" "ORIGINE"
     printf '  %-13s %-26s %s\n' "-------" "----------------" "-------"
     while IFS='|' read -r key def perop comment; do
         [ -n "$key" ] && [ "$key" != "#SECTION" ] || continue
         val="${!key:-}"
         if [ -n "$val" ]; then src="globals.conf / env"
-        elif [ "$perop" = 1 ]; then src="dérivé de l'opérateur"; val="(auto)"
-        else src="défaut"; val="$def"; fi
+        elif [ "$perop" = 1 ]; then src="derive de l'operateur"; val="(auto)"
+        else src="defaut"; val="$def"; fi
         printf '  %-13s %-26s %s\n' "$key" "$val" "$src"
     done < <(_gc_table)
     printf '\n'
 }
 
-# ── Garde-fou multi-opérateur ────────────────────────────────────────────────
+# ── Garde-fou multi-operateur ────────────────────────────────────────────────
 _gc_warn_perop() {
     [ "${N_OPERATORS:-1}" -gt 1 ] 2>/dev/null || return 0
     local key def perop comment figes=""
@@ -311,13 +361,13 @@ _gc_warn_perop() {
         [ "$key" != "#SECTION" ] && [ "$perop" = 1 ] && [ -n "${!key:-}" ] && figes="$figes $key"
     done < <(_gc_table)
     [ -n "$figes" ] || return 0
-    printf '\n  ⚠ N_OPERATORS=%s mais ces champs par-opérateur sont FIGÉS :%s\n' \
+    printf '\n  ⚠ N_OPERATORS=%s mais ces champs par-operateur sont FIGES :%s\n' \
            "$N_OPERATORS" "$figes"
-    printf '    Tous les opérateurs partageront la même valeur — collision garantie\n'
-    printf '    sur la radio et/ou les identités. Videz-les dans globals.conf.\n\n'
+    printf '    Tous les operateurs partageront la meme valeur - collision garantie\n'
+    printf '    sur la radio et/ou les identites. Videz-les dans globals.conf.\n\n'
 }
 
-# ── Mode exécuté ─────────────────────────────────────────────────────────────
+# ── Mode execute ─────────────────────────────────────────────────────────────
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     force=0; show=0; _gc_sets=()
     for a in "$@"; do
@@ -338,5 +388,5 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit 0
 fi
 
-# ── Mode sourcé ──────────────────────────────────────────────────────────────
+# ── Mode source ──────────────────────────────────────────────────────────────
 gc_load

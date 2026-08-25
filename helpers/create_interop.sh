@@ -1,13 +1,13 @@
 #!/bin/bash
-# create_interop.sh — Génère la configuration inter-STP (hub SS7 central)
+# create_interop.sh - Genere la configuration inter-STP (hub SS7 central)
 #
-# Paramètres :
-#   $1  n_operators   Nombre d'opérateurs (1..24)
-#   $2  outfile       Chemin fichier config de sortie (défaut: osmo-stp-interop.cfg)
+# Parametres :
+#   $1  n_operators   Nombre d'operateurs (1..24)
+#   $2  outfile       Chemin fichier config de sortie (defaut: osmo-stp-interop.cfg)
 #
 # Point codes ITU 3-8-3 :
 #   Inter-STP : 0.0.0
-#   Op N STP  : 1.N.2    (cluster = N, 8 bits → max 255, limité à 24)
+#   Op N STP  : 1.N.2    (cluster = N, 8 bits → max 255, limite a 24)
 #   Op N MSC  : 1.N.1
 #   Op N BSC  : 1.N.3
 #
@@ -21,15 +21,41 @@ set -e
 #   create_interop.sh --wan <n_noeuds> <ops_par_noeud> <outfile>
 #
 # Le hub d'origine ne dessert qu'UNE machine : ses point codes 1.<op>.<role> se
-# recalculent à l'identique sur chaque noeud d'un WAN, donc trois noeuds reliés
-# au même hub présenteraient trois fois 1.1.2. Un point code est une ADRESSE :
-# la collision n'est pas un détail de nommage, elle rend le routage SS7 faux.
+# recalculent a l'identique sur chaque noeud d'un WAN, donc trois noeuds relies
+# au meme hub presenteraient trois fois 1.1.2. Un point code est une ADRESSE :
+# la collision n'est pas un detail de nommage, elle rend le routage SS7 faux.
 #
 # Le plan WAN encode le noeud DANS le point code :
 #   PC = 1.<noeud><op>.<role>     noeud 1 op 1 → 1.11.2 ; noeud 3 op 2 → 1.32.2
 #   RCTX = noeud*1000 + op*100 + 50
-# Lisible à l'oeil (le premier chiffre est le noeud), unique, et le champ
-# central du 3-8-3 tient jusqu'à 9 noeuds × 9 opérateurs.
+# Lisible a l'oeil (le premier chiffre est le noeud), unique, et le champ
+# central du 3-8-3 tient jusqu'a 9 noeuds × 9 operateurs.
+# ── Adresse d'ecoute du hub ──────────────────────────────────────────────────
+# Ce fichier est REGENERE a chaque demarrage du hub (start-interstp.sh). Tant
+# que l'adresse etait ecrite 0.0.0.0 en dur ici, toute correction posee ailleurs
+# - set_stp_ip.sh en particulier - etait effacee au redemarrage suivant, sans
+# que rien ne le signale : le hub repartait en multi-homing.
+#
+# Et 0.0.0.0 n'est pas neutre : SCTP annonce alors TOUTES les adresses de la
+# machine dans son INIT (NAT 10.0.2.x, alias 172.20.x, host-only 192.168.56.x).
+# Le pair essaie des chemins qui, vus de lui, ne menent nulle part ; l'ASP monte
+# puis retombe, en boucle. Une adresse unique et juste vaut mieux qu'un
+# multi-homing dont trois branches sur quatre sont mortes.
+#
+# HUB_LISTEN_IP (ou --listen-ip) impose l'adresse. Vide = 0.0.0.0, l'ancien
+# comportement, conserve pour les montages d'une seule machine.
+HUB_LISTEN_IP="${HUB_LISTEN_IP:-0.0.0.0}"
+_ci_args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --listen-ip)   HUB_LISTEN_IP="${2:-0.0.0.0}"; shift 2 ;;
+        --listen-ip=*) HUB_LISTEN_IP="${1#*=}"; shift ;;
+        *)             _ci_args+=("$1"); shift ;;
+    esac
+done
+[ "${#_ci_args[@]}" -gt 0 ] && set -- "${_ci_args[@]}"
+[ -n "$HUB_LISTEN_IP" ] || HUB_LISTEN_IP="0.0.0.0"
+
 WAN_MODE=0
 if [ "${1:-}" = "--wan" ]; then
     WAN_MODE=1
@@ -37,20 +63,20 @@ if [ "${1:-}" = "--wan" ]; then
     ops_per_node="${3:-1}"
     outfile="${4:-osmo-stp-interop.cfg}"
     if ! [[ "$n_nodes" =~ ^[1-9]$ ]] || ! [[ "$ops_per_node" =~ ^[1-9]$ ]]; then
-        echo "Erreur : --wan <1-9 noeuds> <1-9 opérateurs>" >&2; exit 1
+        echo "Erreur : --wan <1-9 noeuds> <1-9 operateurs>" >&2; exit 1
     fi
 else
     n_operators="${1:-2}"
     outfile="${2:-osmo-stp-interop.cfg}"
     if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 24 ]; then
-        echo "Erreur : n_operators doit être 1..24" >&2
+        echo "Erreur : n_operators doit etre 1..24" >&2
         exit 1
     fi
 fi
 
 cat > "$outfile" <<'EOFCONFIG'
 !
-! osmo-stp-interop.cfg — Configuration inter-STP centrale
+! osmo-stp-interop.cfg - Configuration inter-STP centrale
 !
 ! PC 0.0.0 : hub de routage SS7
 !
@@ -81,9 +107,13 @@ cs7 instance 0
 
  listen m3ua 2908
   accept-asp-connections dynamic-permitted
-  local-ip 0.0.0.0
+  local-ip __LISTEN_IP__
 !
 EOFCONFIG
+
+# Heredoc quote : le gabarit sort tel quel, on substitue ensuite. Le marqueur
+# n'existe que dans l'entete, la boucle WAN qui suit n'en pose pas.
+sed -i "s|__LISTEN_IP__|${HUB_LISTEN_IP}|" "$outfile"
 
 if [ "$WAN_MODE" = "1" ]; then
     for n in $(seq 1 "$n_nodes"); do
@@ -141,12 +171,12 @@ cat >> "$outfile" <<'EOF'
 EOF
 
 if [ "$WAN_MODE" = "1" ]; then
-    echo "✓ Config inter-STP WAN générée : $outfile" >&2
-    echo "  PC hub  : 0.0.0   Noeuds : $n_nodes × $ops_per_node opérateur(s)" >&2
+    echo "✓ Config inter-STP WAN generee : $outfile" >&2
+    echo "  PC hub  : 0.0.0   Noeuds : $n_nodes × $ops_per_node operateur(s)" >&2
     echo "  PC noeuds : 1.<noeud><op>.<role>   RCTX : noeud*1000 + op*100 + 50" >&2
     echo "  Routes  : $(( n_nodes * ops_per_node * 2 )) (masque 7.255.7)" >&2
 else
-    echo "✓ Config inter-STP générée : $outfile" >&2
-    echo "  PC hub     : 0.0.0   Opérateurs : $n_operators" >&2
+    echo "✓ Config inter-STP generee : $outfile" >&2
+    echo "  PC hub     : 0.0.0   Operateurs : $n_operators" >&2
     echo "  Routes     : $((n_operators * 2)) (masque 7.255.7)" >&2
 fi

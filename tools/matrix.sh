@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/matrix.sh <burst|si> — MATRICE DYNAMIQUE du treillis 51-multiframe (cote mobile).
+# tools/matrix.sh <burst|si> - MATRICE DYNAMIQUE du treillis 51-multiframe (cote mobile).
 #
 # Deux vues "temps/canal" complementaires des 2 FFT (frequence) :
 #   tools/matrix.sh burst  -> dynamique des BURSTS (TRXD ts0 DL :5702) :
@@ -44,7 +44,7 @@ SI_CODE = {"?":1,"SI1":2,"SI2":3,"SI3":4,"SI4":5,"SI2bis":6,"SI2ter":7,"SI13":8,
            "PAGING-REQ-1":9,"PAGING-REQ-2":9,"PAGING-REQ-3":9,
            "IMM-ASSIGN":10,"IMM-ASSIGN-EXT":10,"IMM-ASSIGN-REJ":10}
 # LAPDm (SDCCH/SACCH) detecte par octet de controle : on tag "DEDIE"
-SI_LABELS = ["·","?","SI1","SI2","SI3","SI4","SI2b","SI2t","SI13","PAG","IMM","DÉDIÉ"]
+SI_LABELS = ["·","?","SI1","SI2","SI3","SI4","SI2b","SI2t","SI13","PAG","IMM","DEDIE"]
 SI_COLORS = ["#101018","#888","#1f77b4","#2ca02c","#17becf","#9467bd","#8c564b","#e377c2",
              "#7f7f7f","#ff7f0e","#d62728","#ffd700"]
 
@@ -92,7 +92,7 @@ plt.style.use("dark_background")
 fig, ax = plt.subplots(figsize=(12,7))
 title = ("BURSTS ts%d (·=vide  bleu=dummy/idle  rouge=ACTIF)" % TS) if MODE=="burst" \
         else "SI / L2 decodes (type par couleur)"
-fig.suptitle("Matrice dynamique 51-multiframe — %s  [%s]" % (title, os.environ.get("CONTAINER","")),
+fig.suptitle("Matrice dynamique 51-multiframe - %s  [%s]" % (title, os.environ.get("CONTAINER","")),
              color="#7fd", fontsize=11)
 if MODE=="burst":
     cmap = ListedColormap(["#101018","#1f77b4","#d62728"]); norm = BoundaryNorm([-.5,.5,1.5,2.5], cmap.N)
@@ -114,6 +114,6 @@ def update(_):
     with lock: im.set_data(mat.copy())
     return (im,)
 ani = FuncAnimation(fig, update, interval=250, blit=False, cache_frame_data=False)
-print("[matrix:%s] fenetre live — ferme pour quitter." % MODE, flush=True)
+print("[matrix:%s] fenetre live - ferme pour quitter." % MODE, flush=True)
 plt.show()
 PYEOF

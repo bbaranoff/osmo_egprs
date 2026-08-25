@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tools/fft.sh — FFT "jolie" du flux I/Q Calypso, lue DIRECTEMENT dans le docker.
+# tools/fft.sh - FFT "jolie" du flux I/Q Calypso, lue DIRECTEMENT dans le docker.
 #
 # Lit /tmp/record.cfile (le ring record CONTINU, ecrit par record_drain.py qui
-# draine iq_record.fifo en O_RDWR — DECOUPLE de la boucle relay temps-reel) DANS
+# draine iq_record.fifo en O_RDWR - DECOUPLE de la boucle relay temps-reel) DANS
 # le container, le rapatrie en fc32 (complex64), et affiche sur le X de l'HOTE :
 # PSD moyennee (Welch maison) + waterfall defilant. Boucle (FuncAnimation).
 #
@@ -20,15 +20,15 @@
 #
 set -euo pipefail
 export CONTAINER="${CONTAINER:-osmo-operator-1}"
-export FFT_SRC="${FFT_SRC:-tail}"   # tail (defaut, NON-perturbant) | sweep — lisent record.cfile
+export FFT_SRC="${FFT_SRC:-tail}"   # tail (defaut, NON-perturbant) | sweep - lisent record.cfile
 # NB: le mode 'fifo' (tap LIVE de /tmp/iq_fft.fifo) a ete RETIRE : ouvrir ce
 # fifo en lecture force l'IPC device a l'ecrire, ce qui perturbe la boucle relay
 # temps-reel et COUPE le decode grgsm (si-bridge 'fini') -> camping fige. On lit
 # desormais record.cfile, alimente par record_drain.py (decouple, always-on).
 export CFILE="${CFILE:-/dev/shm/dsp_iq.cfile}"    # entree DSP shunt = MS (le mobile qui repond a la BTS ; cfile fc32 en /dev/shm RAM). Fichier qui GRANDIT -> tail-c lit le frais. (override CFILE=/dev/shm/record.cfile = BTS)
 export RATE="${RATE:-1083333}"      # 4 SPS natif = 26e6/24
-export NSAMP="${NSAMP:-32768}"      # complex samples par fenetre (256 KB) — court = ca gigote
-export REFRESH="${REFRESH:-0.25}"   # periode de rafraichissement (s) — court = fluide
+export NSAMP="${NSAMP:-32768}"      # complex samples par fenetre (256 KB) - court = ca gigote
+export REFRESH="${REFRESH:-0.25}"   # periode de rafraichissement (s) - court = fluide
 export ARFCN="${ARFCN:-514}"        # juste pour le titre (DCS1800)
 export DISPLAY="${DISPLAY:-:0}"
 export FFT_SAVE=""
@@ -68,7 +68,7 @@ WROWS = 120                        # lignes du waterfall
 win = np.hanning(NFFT).astype(np.float32)
 freqs = np.fft.fftshift(np.fft.fftfreq(NFFT, 1.0/RATE)) / 1e3   # kHz
 
-SRC  = os.environ.get("FFT_SRC","tail")    # tail (defaut) | sweep — lisent record.cfile
+SRC  = os.environ.get("FFT_SRC","tail")    # tail (defaut) | sweep - lisent record.cfile
 if SRC not in ("sweep","tail"): SRC = "tail"   # 'fifo' retire (tap live nocif)
 BS   = 4096; NBLK = max(1, NBYTES//BS)
 
@@ -158,7 +158,7 @@ gs = fig.add_gridspec(2, 2, width_ratios=[40, 1], height_ratios=[1, 1.4],
 axp = fig.add_subplot(gs[0, 0])
 axw = fig.add_subplot(gs[1, 0], sharex=axp)   # x partage -> aligne avec la PSD
 cax = fig.add_subplot(gs[1, 1])               # colorbar dans sa colonne (n'affecte pas axw)
-fig.suptitle(f"Calypso I/Q live — {CONT}:{CFILE}  |  ARFCN={ARFCN}  Fs={RATE/1e6:.4f} MHz",
+fig.suptitle(f"Calypso I/Q live - {CONT}:{CFILE}  |  ARFCN={ARFCN}  Fs={RATE/1e6:.4f} MHz",
              fontsize=11, color="#7fd")
 (line,) = axp.plot(freqs, np.full(NFFT,-120), lw=0.5, color="#39f")
 axp.set_xlim(freqs[0],freqs[-1]); axp.set_ylim(-130,-30)
@@ -194,6 +194,6 @@ if SAVE:
 else:
     ani = FuncAnimation(fig, update, interval=int(REFRESH*1000),
                         blit=False, cache_frame_data=False)
-    print("FFT live — ferme la fenetre pour quitter.")
+    print("FFT live - ferme la fenetre pour quitter.")
     plt.show()
 PYEOF

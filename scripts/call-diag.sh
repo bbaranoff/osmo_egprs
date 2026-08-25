@@ -1,8 +1,8 @@
 #!/bin/bash
-# call-diag.sh — Diagnostic chemin d'appel MS → Asterisk echo test
+# call-diag.sh - Diagnostic chemin d'appel MS → Asterisk echo test
 # Usage: sudo docker exec -ti osmo-operator-1 bash /scripts/call-diag.sh
 #
-# Vérifie chaque maillon : MSC → MNCC → osmo-sip-connector → Asterisk
+# Verifie chaque maillon : MSC → MNCC → osmo-sip-connector → Asterisk
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
@@ -33,8 +33,8 @@ if [ -S /tmp/msc_mncc ]; then
     ok "Socket MNCC existe"
     ls -la /tmp/msc_mncc | sed 's/^/       /'
 else
-    fail "Socket MNCC ABSENT — MSC ne crée pas le socket MNCC external"
-    echo "       Vérifier que osmo-msc.cfg contient : mncc external /tmp/msc_mncc"
+    fail "Socket MNCC ABSENT - MSC ne cree pas le socket MNCC external"
+    echo "       Verifier que osmo-msc.cfg contient : mncc external /tmp/msc_mncc"
 fi
 echo ""
 
@@ -44,14 +44,14 @@ if pgrep -f "osmo-sip-connector" >/dev/null 2>&1; then
     ok "Processus actif"
     pgrep -fa "osmo-sip-connector" | head -1 | sed 's/^/       /'
     
-    # Vérifier qu'il écoute bien sur 5061
+    # Verifier qu'il ecoute bien sur 5061
     if ss -tlnp 2>/dev/null | grep -q ":5061 "; then
-        ok "Écoute sur :5061 (côté SIP)"
+        ok "Ecoute sur :5061 (cote SIP)"
     else
-        warn "Pas en écoute sur :5061"
+        warn "Pas en ecoute sur :5061"
     fi
 else
-    fail "osmo-sip-connector NON LANCÉ"
+    fail "osmo-sip-connector NON LANCE"
     echo ""
     echo "       C'est le pont MNCC ↔ SIP. Sans lui, aucun appel ne passe."
     echo "       Fix: systemctl start osmo-sip-connector"
@@ -65,21 +65,21 @@ if pgrep -f "asterisk" >/dev/null 2>&1; then
     ok "Processus actif"
     
     if ss -ulnp 2>/dev/null | grep -q ":5060 "; then
-        ok "Écoute SIP sur :5060/udp"
+        ok "Ecoute SIP sur :5060/udp"
     else
-        fail "Pas en écoute sur :5060/udp"
+        fail "Pas en ecoute sur :5060/udp"
     fi
     
-    # Vérifier les endpoints PJSIP
+    # Verifier les endpoints PJSIP
     echo "       Endpoints PJSIP:"
     asterisk -rx "pjsip show endpoints" 2>/dev/null | grep -E "Endpoint:|Contact:" | head -10 | sed 's/^/       /' || warn "Impossible de lister les endpoints"
     
-    # Vérifier que le dialplan a le 600
+    # Verifier que le dialplan a le 600
     echo ""
     echo "       Dialplan 600:"
     asterisk -rx "dialplan show 600@gsm_in" 2>/dev/null | head -10 | sed 's/^/       /' || warn "Extension 600 introuvable dans gsm_in"
 else
-    fail "Asterisk NON LANCÉ"
+    fail "Asterisk NON LANCE"
     echo "       Fix: asterisk -cvvv &"
 fi
 echo ""
@@ -138,18 +138,18 @@ MSC_OUT=$( (echo "enable"; echo "show subscriber all"; sleep 1; echo "exit") \
     | grep -vE "^(Trying|Connected|Escape|Welcome|OsmoMSC)" || true)
 
 if echo "$MSC_OUT" | grep -qiE "IMSI|subscriber"; then
-    ok "Abonnés enregistrés sur le MSC:"
+    ok "Abonnes enregistres sur le MSC:"
     echo "$MSC_OUT" | grep -iE "IMSI|MSISDN|LAC" | head -10 | sed 's/^/       /'
 else
-    warn "Aucun abonné enregistré sur le MSC"
-    echo "       Les MS ne sont pas encore attachés au réseau"
-    echo "       Vérifier : dans le VTY mobile → show ms"
-    echo "       L'état doit être 'NORMAL service'"
+    warn "Aucun abonne enregistre sur le MSC"
+    echo "       Les MS ne sont pas encore attaches au reseau"
+    echo "       Verifier : dans le VTY mobile → show ms"
+    echo "       L'etat doit etre 'NORMAL service'"
 fi
 echo ""
 
-# ── Résumé ───────────────────────────────────────────────────────────────────
-echo -e "${BOLD}═══ Chaîne d'appel echo test ═══${NC}"
+# ── Resume ───────────────────────────────────────────────────────────────────
+echo -e "${BOLD}═══ Chaine d'appel echo test ═══${NC}"
 echo ""
 echo "  mobile (call 1 600)"
 echo "    ↓ TCH via fake_trx"
@@ -166,7 +166,7 @@ echo "  osmo-sip-connector (5061 → 5060)"
 if pgrep -f "osmo-sip-connector" >/dev/null 2>&1; then
     echo -e "    ${GREEN}✓${NC} sip-connector"
 else
-    echo -e "    ${RED}✗ sip-connector MANQUANT ← PROBLÈME PROBABLE${NC}"
+    echo -e "    ${RED}✗ sip-connector MANQUANT ← PROBLEME PROBABLE${NC}"
 fi
 
 echo "  Asterisk (gsm_in context, exten 600 → Echo())"
@@ -178,6 +178,6 @@ fi
 
 echo "    ↓ RTP via OsmoMGW"
 echo "  osmo-bts-trx → fake_trx → trxcon → mobile"
-echo "    ↓ l1phy décode TCH-FR"
+echo "    ↓ l1phy decode TCH-FR"
 echo "  ALSA → PulseAudio → HP"
 echo ""

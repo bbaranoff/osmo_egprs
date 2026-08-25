@@ -1,44 +1,44 @@
 # =============================================================================
-#  66-mobile — le mobile Osmocom (couches 2 et 3, layer23)
+#  66-mobile - le mobile Osmocom (couches 2 et 3, layer23)
 # =============================================================================
 #
-#  RÔLE
-#    Le dernier maillon : la pile L2/L3 du téléphone. Il ne connaît qu'une seule
-#    chose de tout ce qui précède — une socket L1CTL — et se moque de savoir qui
+#  ROLE
+#    Le dernier maillon : la pile L2/L3 du telephone. Il ne connait qu'une seule
+#    chose de tout ce qui precede - une socket L1CTL - et se moque de savoir qui
 #    la sert :
 #
 #        osmocon (firmware Calypso sous QEMU)  ┐
-#        trxcon  (chaîne TRXD)                 ├─> socket L1CTL ─> mobile ─> VTY 4247
-#        virtphy (chaîne multicast)            ┘
+#        trxcon  (chaine TRXD)                 ├─> socket L1CTL ─> mobile ─> VTY 4247
+#        virtphy (chaine multicast)            ┘
 #
-#    Dans le profil « faketrx » ce producteur est trxcon ou virtphy selon
-#    PHY_MODE : les deux sont déclarés en prérequis, et le moteur traite celui
-#    qui est désactivé comme satisfait.
+#    Dans le profil "faketrx" ce producteur est trxcon ou virtphy selon
+#    PHY_MODE : les deux sont declares en prerequis, et le moteur traite celui
+#    qui est desactive comme satisfait.
 #
-#  PÉRIMÈTRE — NE PAS CONFONDRE AVEC 70-l2
-#    70-l2.sh lance le client de couche 2 de la chaîne de l'émulateur (profils
-#    calypso/hybrid), derrière osmocon. Celui-ci est le mobile du profil
-#    « faketrx ». Les deux se disputeraient la VTY 4247 : ils ne partagent
+#  PERIMETRE - NE PAS CONFONDRE AVEC 70-l2
+#    70-l2.sh lance le client de couche 2 de la chaine de l'emulateur (profils
+#    calypso/hybrid), derriere osmocon. Celui-ci est le mobile du profil
+#    "faketrx". Les deux se disputeraient la VTY 4247 : ils ne partagent
 #    aucun profil.
 #
-#  PRÉREQUIS
+#  PREREQUIS
 #    $MOBILE_CFG lisible. Le module en EXTRAIT la socket L1CTL (`layer2-socket`)
-#    et le port VTY (`line vty` / `bind`) plutôt que de les supposer : c'est la
-#    conf qui fait foi, et c'est là qu'est l'erreur classique — osmocon expose
+#    et le port VTY (`line vty` / `bind`) plutot que de les supposer : c'est la
+#    conf qui fait foi, et c'est la qu'est l'erreur classique - osmocon expose
 #    /tmp/osmocom_l2 (sans suffixe), trxcon et virtphy exposent
 #    /tmp/osmocom_l2_<n>. Une conf qui vise la mauvaise reste muette pour
 #    toujours.
 #
-#  CRITÈRE DE SUCCÈS (barrière)
-#    Le processus vit ET sa VTY répond. La VTY n'est pas décorative : elle
-#    n'ouvre qu'après l'initialisation complète de la pile, donc elle distingue
-#    « lancé » de « prêt à recevoir des commandes ». La suite (sélection de
-#    cellule, LU) n'est PAS un critère de démarrage : elle dépend du réseau,
+#  CRITERE DE SUCCES (barriere)
+#    Le processus vit ET sa VTY repond. La VTY n'est pas decorative : elle
+#    n'ouvre qu'apres l'initialisation complete de la pile, donc elle distingue
+#    "lance" de "pret a recevoir des commandes". La suite (selection de
+#    cellule, LU) n'est PAS un critere de demarrage : elle depend du reseau,
 #    pas de ce module.
 #
 #  JOURNAL     $LOG_DIR/mobile.log
 #
-#  ORDRE       en dernier — après trxcon ou virtphy.
+#  ORDRE       en dernier - apres trxcon ou virtphy.
 # -----------------------------------------------------------------------------
 . "$(dirname "${BASH_SOURCE[0]}")/_lib/radio.sh"
 
@@ -47,14 +47,14 @@ MOD_REQUIRED[mobile]=1
 MOD_PROFILES[mobile]="faketrx"
 MOD_TIMEOUT[mobile]=60
 
-# DÉPENDANCE CROISÉE : la socket L1CTL vient de trxcon OU de virtphy selon
-# PHY_MODE. On déclare les deux ; celui qui est désactivé compte comme satisfait.
+# DEPENDANCE CROISEE : la socket L1CTL vient de trxcon OU de virtphy selon
+# PHY_MODE. On declare les deux ; celui qui est desactive compte comme satisfait.
 MOD_DEPS[mobile]="trxcon virtphy"
 
 : "${MOBILE_BIN:=mobile}"
 : "${MOBILE_CFG:=${OSMOCOM_HOME:-$HOME/.osmocom}/bb/mobile_group1.cfg}"
 : "${MOBILE_L1CTL_TIMEOUT:=60}"
-# Catégories de trace du mobile (séparateur « : », pas « , »).
+# Categories de trace du mobile (separateur ":", pas ",").
 : "${MOBILE_DEBUG:=DCS:DNB:DPLMN:DRR:DMM:DSIM:DCC:DMNCC:DSS:DLSMS:DPAG:DSUM:DSAP:DMOB:DPRIM}"
 MOD_LOG[mobile]="${LOG_DIR}/mobile.log"
 
@@ -64,7 +64,7 @@ _mobile_vty_port() {
     awk '/^[[:space:]]*line vty/{v=1; next}
          v && /^[[:space:]]*bind[[:space:]]/{print $3; exit}' "$MOBILE_CFG" 2>/dev/null
 }
-# Sockets L1CTL réellement présentes — sert à rendre l'échec actionnable.
+# Sockets L1CTL reellement presentes - sert a rendre l'echec actionnable.
 _mobile_sockets_present() {
     local s found=""
     for s in "$L2_SOCK_BASE" "$L2_SOCK_BASE"_*; do
@@ -80,42 +80,42 @@ mod_mobile_check() {
         return $MOD_RC_FAIL; }
     [ -r "$MOBILE_CFG" ] || {
         mod_fail "configuration illisible : $MOBILE_CFG"
-        mod_hint "posez MOBILE_CFG, ou déployez cfgs/mobile_group1.cfg dans ${OSMOCOM_HOME:-\$HOME/.osmocom}/bb/"
+        mod_hint "posez MOBILE_CFG, ou deployez cfgs/mobile_group1.cfg dans ${OSMOCOM_HOME:-\$HOME/.osmocom}/bb/"
         return $MOD_RC_FAIL; }
 
     local s v; s="$(_mobile_l2_sock)"; v="$(_mobile_vty_port)"
     [ -n "$s" ] || {
-        mod_fail "aucune directive « layer2-socket » dans $MOBILE_CFG"
-        mod_hint "ajoutez « layer2-socket <chemin> » sous le bloc « ms 1 »"
+        mod_fail "aucune directive "layer2-socket" dans $MOBILE_CFG"
+        mod_hint "ajoutez "layer2-socket <chemin>" sous le bloc "ms 1""
         return $MOD_RC_FAIL; }
-    # COHÉRENCE — l'erreur la plus coûteuse de la chaîne, attrapée AVANT le
-    # lancement plutôt qu'après soixante secondes d'attente muette : la conf
+    # COHERENCE - l'erreur la plus couteuse de la chaine, attrapee AVANT le
+    # lancement plutot qu'apres soixante secondes d'attente muette : la conf
     # nomme une socket que personne ne servira. On ne condamne que si elle
-    # n'existe pas déjà (quelqu'un d'autre peut légitimement la servir).
+    # n'existe pas deja (quelqu'un d'autre peut legitimement la servir).
     local exp; exp="$(radio_l2_sock 1)"
     if [ "$s" != "$exp" ] && [ ! -S "$s" ]; then
         mod_fail "la conf vise $s, mais la couche 1 du profil expose $exp"
-        mod_hint "corrigez « layer2-socket $exp » dans $MOBILE_CFG, ou posez L2_SOCK_BASE=${s%_*}"
+        mod_hint "corrigez "layer2-socket $exp" dans $MOBILE_CFG, ou posez L2_SOCK_BASE=${s%_*}"
         return $MOD_RC_FAIL
     fi
 
     mod_say "socket L1CTL attendue : $s"
-    mod_say "VTY déclarée : ${v:-$MOBILE_VTY_PORT (défaut, aucun « bind » dans la conf)}"
+    mod_say "VTY declaree : ${v:-$MOBILE_VTY_PORT (defaut, aucun "bind" dans la conf)}"
     mod_ok
 }
 
 mod_mobile_status() { pgrep -f "$MOBILE_BIN -c $MOBILE_CFG" >/dev/null 2>&1; }
 
 # Le mobile doit attendre SA socket : la lancer avant, c'est un mobile qui sort
-# en erreur « cannot connect » sans rien laisser d'exploitable. Cette attente est
-# une synchronisation de démarrage, bornée, pas un `sleep`.
+# en erreur "cannot connect" sans rien laisser d'exploitable. Cette attente est
+# une synchronisation de demarrage, bornee, pas un `sleep`.
 mod_mobile_start() {
     radio_dirs
     local log s; log="$(radio_log mobile)"; s="$(_mobile_l2_sock)"
 
     if ! wait_until "$MOBILE_L1CTL_TIMEOUT" "socket L1CTL $s" have_unix "$s"; then
-        mod_fail "socket L1CTL jamais apparue : $s (présentes :$(_mobile_sockets_present) )"
-        mod_hint "alignez « layer2-socket » de $MOBILE_CFG sur son producteur — osmocon expose ${L2_SOCK_BASE}, trxcon/virtphy exposent ${L2_SOCK_BASE}_<n>"
+        mod_fail "socket L1CTL jamais apparue : $s (presentes :$(_mobile_sockets_present) )"
+        mod_hint "alignez "layer2-socket" de $MOBILE_CFG sur son producteur - osmocon expose ${L2_SOCK_BASE}, trxcon/virtphy exposent ${L2_SOCK_BASE}_<n>"
         return $MOD_RC_FAIL
     fi
 
@@ -126,29 +126,29 @@ mod_mobile_start() {
     mod_ok
 }
 
-# BARRIÈRE — la VTY n'ouvre qu'une fois la pile initialisée.
+# BARRIERE - la VTY n'ouvre qu'une fois la pile initialisee.
 mod_mobile_wait() {
     local log vty; log="$(radio_log mobile)"
     vty="$(_mobile_vty_port)"; [ -n "$vty" ] || vty="$MOBILE_VTY_PORT"
 
     wait_until "${MOD_TIMEOUT[mobile]}" "VTY du mobile ($vty)" have_port "$vty" || {
-        mod_hint "fin de $log ; port déjà pris par un autre mobile ? ss -tlnp | grep :$vty"
+        mod_hint "fin de $log ; port deja pris par un autre mobile ? ss -tlnp | grep :$vty"
         return $MOD_RC_FAIL; }
 
     radio_alive mobile || {
-        mod_fail "le mobile a ouvert sa VTY puis s'est arrêté"
+        mod_fail "le mobile a ouvert sa VTY puis s'est arrete"
         mod_hint "fin de $log"
         return $MOD_RC_FAIL; }
 
-    # Renseignement : la suite (cellule trouvée, LU) dépend du réseau, elle ne
-    # peut pas conditionner le démarrage de ce module.
-    mod_say "prêt — suivre la sélection de cellule : telnet 127.0.0.1 $vty, puis « show ms »"
+    # Renseignement : la suite (cellule trouvee, LU) depend du reseau, elle ne
+    # peut pas conditionner le demarrage de ce module.
+    mod_say "pret - suivre la selection de cellule : telnet 127.0.0.1 $vty, puis "show ms""
     mod_ok
 }
 
-# Arrêt CIBLÉ : le motif inclut le fichier de conf. Un `pkill -f mobile` — six
-# lettres sans ancrage, comme le faisait l'ancien teardown — emporte tout ce qui
-# contient « mobile » dans sa ligne de commande, y compris ce qui n'est pas à
+# Arret CIBLE : le motif inclut le fichier de conf. Un `pkill -f mobile` - six
+# lettres sans ancrage, comme le faisait l'ancien teardown - emporte tout ce qui
+# contient "mobile" dans sa ligne de commande, y compris ce qui n'est pas a
 # nous.
 mod_mobile_stop() {
     radio_kill mobile "$MOBILE_BIN -c $MOBILE_CFG"

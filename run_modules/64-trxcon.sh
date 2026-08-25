@@ -1,10 +1,10 @@
 # =============================================================================
-#  64-trxcon — la couche 1 du mobile, côté TRXD
+#  64-trxcon - la couche 1 du mobile, cote TRXD
 # =============================================================================
 #
-#  RÔLE
-#    Ce que fait le firmware Calypso dans la chaîne QEMU, trxcon le fait en
-#    logiciel sur l'hôte : il parle TRXD au transceiver d'un côté, et expose une
+#  ROLE
+#    Ce que fait le firmware Calypso dans la chaine QEMU, trxcon le fait en
+#    logiciel sur l'hote : il parle TRXD au transceiver d'un cote, et expose une
 #    socket L1CTL au mobile de l'autre.
 #
 #        mobile <--L1CTL /tmp/osmocom_l2_N--> trxcon <--TRXD $BB_BASE_PORT--> fake_trx
@@ -12,18 +12,18 @@
 #    Une instance par mobile ($N_MS), chacune avec son port bande de base
 #    ($BB_BASE_PORT + 3·(n-1)) et sa socket.
 #
-#  PRÉREQUIS
-#    Le transceiver écoute déjà (module fake-trx) : trxcon qui ne trouve
-#    personne reste muet, il ne meurt pas — d'où l'ordre imposé.
+#  PREREQUIS
+#    Le transceiver ecoute deja (module fake-trx) : trxcon qui ne trouve
+#    personne reste muet, il ne meurt pas - d'ou l'ordre impose.
 #
-#  CRITÈRE DE SUCCÈS (barrière)
+#  CRITERE DE SUCCES (barriere)
 #    Pour CHAQUE instance : le processus vit ET la socket L1CTL existe. C'est
-#    précisément la socket que le mobile attend ; la voir apparaître remplace le
-#    « sleep 2 » qui tenait lieu de synchronisation.
+#    precisement la socket que le mobile attend ; la voir apparaitre remplace le
+#    "sleep 2" qui tenait lieu de synchronisation.
 #
 #  JOURNAL     $LOG_DIR/trxcon-<n>.log
 #
-#  ORDRE       après fake-trx, avant mobile.
+#  ORDRE       apres fake-trx, avant mobile.
 # -----------------------------------------------------------------------------
 . "$(dirname "${BASH_SOURCE[0]}")/_lib/radio.sh"
 
@@ -35,7 +35,7 @@ MOD_ENABLED_IF[trxcon]='[ "${PHY_MODE:-faketrx}" != "virtphy" ]'
 MOD_TIMEOUT[trxcon]=30
 
 : "${TRXCON_BIN:=trxcon}"
-: "${TRXCON_FN_ADVANCE:=100}"     # -F : avance de trame, valeur du lancement éprouvé
+: "${TRXCON_FN_ADVANCE:=100}"     # -F : avance de trame, valeur du lancement eprouve
 : "${TRXCON_EXTRA_ARGS:=}"
 MOD_LOG[trxcon]="${LOG_DIR}/trxcon.log"
 
@@ -48,15 +48,15 @@ mod_trxcon_check() {
         mod_hint "installez osmocom-bb (host/trxcon), ou posez TRXCON_BIN"
         return $MOD_RC_FAIL; }
 
-    # Une socket laissée par un run précédent fait croire au mobile que la L1
-    # est prête, alors que plus personne n'est derrière. On refuse de partir
-    # sur cet état ambigu — le stop du module les nettoie normalement.
+    # Une socket laissee par un run precedent fait croire au mobile que la L1
+    # est prete, alors que plus personne n'est derriere. On refuse de partir
+    # sur cet etat ambigu - le stop du module les nettoie normalement.
     local n s
     for ((n=1; n<=N_MS; n++)); do
         s="$(radio_l2_sock "$n")"
         if [ -S "$s" ] && ! pgrep -f "$TRXCON_BIN.*$s" >/dev/null 2>&1; then
-            mod_fail "socket L1CTL orpheline : $s (aucun trxcon derrière)"
-            mod_hint "rm -f $s — ou ./run.sh --stop pour nettoyer proprement"
+            mod_fail "socket L1CTL orpheline : $s (aucun trxcon derriere)"
+            mod_hint "rm -f $s - ou ./run.sh --stop pour nettoyer proprement"
             return $MOD_RC_FAIL
         fi
     done
@@ -83,17 +83,17 @@ mod_trxcon_start() {
     mod_ok
 }
 
-# BARRIÈRE — une socket par instance, et l'instance encore vivante derrière.
+# BARRIERE - une socket par instance, et l'instance encore vivante derriere.
 mod_trxcon_wait() {
     local n s
     for ((n=1; n<=N_MS; n++)); do
         s="$(radio_l2_sock "$n")"
         wait_until "${MOD_TIMEOUT[trxcon]}" "socket L1CTL de ms$n ($s)" \
             have_unix "$s" || {
-                mod_hint "fin de $(radio_log "trxcon-$n") : port bande de base déjà pris, ou transceiver injoignable"
+                mod_hint "fin de $(radio_log "trxcon-$n") : port bande de base deja pris, ou transceiver injoignable"
                 return $MOD_RC_FAIL; }
         radio_alive "trxcon-$n" || {
-            mod_fail "trxcon ms$n a créé sa socket puis s'est arrêté"
+            mod_fail "trxcon ms$n a cree sa socket puis s'est arrete"
             mod_hint "fin de $(radio_log "trxcon-$n")"
             return $MOD_RC_FAIL; }
     done

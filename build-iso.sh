@@ -1,17 +1,17 @@
 #!/bin/bash
-# build-iso.sh — Génère une ISO bootable en utilisant build.sh et start.sh
+# build-iso.sh - Genere une ISO bootable en utilisant build.sh et start.sh
 # Aucun docker build direct dans ce script, tout passe par les scripts existants.
 set -euo pipefail
 
-# Couleurs définies AVANT tout : sous `set -u`, la première ligne colorée d'un
-# script qui les déclare plus bas échoue sur « variable sans liaison » — et le
+# Couleurs definies AVANT tout : sous `set -u`, la premiere ligne coloree d'un
+# script qui les declare plus bas echoue sur "variable sans liaison" - et le
 # message ne parle ni de couleurs ni de l'endroit fautif.
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
 
 VERSION="${OSMO_ISO_VERSION:-v2}"
 OUTPUT="osmo_egprs-${VERSION}.iso"
-# Répertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
+# Repertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
 # space left on device" car le rootfs est volumineux). Overridable via OSMO_ISO_WORK.
 WORK="${OSMO_ISO_WORK:-/var/tmp}/iso-build-$$"
 ROOTFS="$WORK/rootfs"
@@ -20,34 +20,37 @@ LABEL="OSMO_EGPRS_V2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 NO_CACHE=""
-# ── WAN : jamais par défaut. Avec --wan, l'ISO EST un noeud du WAN ───────────
-# La table est figée dans /etc/osmo-wan.conf de l'image ; au démarrage
+# ── WAN : jamais par defaut. Avec --wan, l'ISO EST un noeud du WAN ───────────
+# La table est figee dans /etc/osmo-wan.conf de l'image ; au demarrage
 # start-direct.sh la voit (WAN_AUTO=1) et l'applique sans qu'on repasse --wan.
 #
-# UNE SEULE ISO pour les N machines : chacune se reconnaît à son IP dans la
-# table (wan_nodes_detect_self). --wan-id ne sert qu'à forcer un noeud quand
-# l'IP ne suffit pas (DHCP non fixé, NAT).
+# UNE SEULE ISO pour les N machines : chacune se reconnait a son IP dans la
+# table (wan_nodes_detect_self). --wan-id ne sert qu'a forcer un noeud quand
+# l'IP ne suffit pas (DHCP non fixe, NAT).
 ISO_WAN=0
 ISO_WAN_NODES=""
 ISO_WAN_ID=""
 ISO_WAN_OPS=1
 
-# ── RÔLE DE L'IMAGE ──────────────────────────────────────────────────────────
-# Une seule chaîne de construction, deux produits :
+# ── ROLE DE L'IMAGE ──────────────────────────────────────────────────────────
+# Une seule chaine de construction, deux produits :
 #
 #   --role operator --node N   →  osmo-operator-N.iso
-#       Un noeud du WAN : coeur GSM complet, ses point codes à lui, son ASP
-#       attaché au hub. C'est l'image historique, plus l'identité de noeud.
+#       Un noeud du WAN : coeur GSM complet, ses point codes a lui, son ASP
+#       attache au hub. C'est l'image historique, plus l'identite de noeud.
 #
 #   --role interstp            →  interstp.iso
-#       Le hub SS7 : PC 0.0.0, aucun opérateur, il ne fait QUE router du M3UA
+#       Le hub SS7 : PC 0.0.0, aucun operateur, il ne fait QUE router du M3UA
 #       entre les noeuds. C'est ce qui manquait pour que le SS7 traverse le WAN.
 #
 # Sans --role, rien ne change : on produit l'ISO d'avant, sous son nom d'avant.
 ISO_ROLE=""
 ISO_ROLE_GIVEN=0
 ISO_NODE=""
-ISO_HUB_IP="192.168.56.1"
+# Defaut : le hub du banc, en acces par pont. Le host-only VirtualBox
+# (192.168.56.1) reste possible, mais via --hub-ip : il n'existe sur aucun
+# segment quand les VM sont pontees.
+ISO_HUB_IP="192.168.1.49"
 ISO_SUBNET="192.168.56"
 OUTPUT_SET=0
 for arg in "$@"; do case "$arg" in
@@ -66,26 +69,26 @@ esac; done
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
 
 # ── Sans argument : LES DEUX images ─────────────────────────────────────────
-# Un WAN a besoin de deux choses différentes — un hub SS7 et des nœuds — et
-# rien ne dit laquelle on veut quand on ne précise rien. On produit donc les
-# deux, par deux passes complètes.
+# Un WAN a besoin de deux choses differentes - un hub SS7 et des noeuds - et
+# rien ne dit laquelle on veut quand on ne precise rien. On produit donc les
+# deux, par deux passes completes.
 #
-# UNE SEULE image d'opérateur suffit pour les neuf nœuds : le numéro se choisit
-# au démarrage (`start-direct.sh --node N`), qui réécrit les point codes. C'est
+# UNE SEULE image d'operateur suffit pour les neuf noeuds : le numero se choisit
+# au demarrage (`start-direct.sh --node N`), qui reecrit les point codes. C'est
 # la raison pour laquelle on ne fabrique pas osmo-operator-1..9.
 #
-# Le hub d'abord : il ne dépend ni de build.sh ni de l'image osmocom-run, donc
-# un échec de son côté se voit en quelques minutes au lieu d'une heure.
+# Le hub d'abord : il ne depend ni de build.sh ni de l'image osmocom-run, donc
+# un echec de son cote se voit en quelques minutes au lieu d'une heure.
 if [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0" ] && [ -z "$ISO_NODE" ]; then
-    echo -e "${CYAN}${BOLD}══ Aucun rôle demandé : construction des DEUX images ══${NC}"
+    echo -e "${CYAN}${BOLD}══ Aucun role demande : construction des DEUX images ══${NC}"
     echo -e "  1. ${CYAN}interstp.iso${NC}       le hub SS7 (PC 0.0.0)"
-    echo -e "  2. ${CYAN}osmo-operator.iso${NC}  un nœud — son numéro se choisit au démarrage :"
-    echo -e "     ${CYAN}./start-direct.sh --node N${NC}   (N de 1 à 9)"
+    echo -e "  2. ${CYAN}osmo-operator.iso${NC}  un noeud - son numero se choisit au demarrage :"
+    echo -e "     ${CYAN}./start-direct.sh --node N${NC}   (N de 1 a 9)"
     echo ""
-    "$0" --role=interstp "$@" || { echo -e "${RED}Échec de interstp.iso${NC}" >&2; exit 1; }
+    "$0" --role=interstp "$@" || { echo -e "${RED}Echec de interstp.iso${NC}" >&2; exit 1; }
     "$0" --role=operator --output=osmo-operator.iso "$@" \
-        || { echo -e "${RED}Échec de osmo-operator.iso${NC}" >&2; exit 1; }
-    echo -e "${GREEN}${BOLD}═══ Les deux images sont prêtes ═══${NC}"
+        || { echo -e "${RED}Echec de osmo-operator.iso${NC}" >&2; exit 1; }
+    echo -e "${GREEN}${BOLD}═══ Les deux images sont pretes ═══${NC}"
     ls -lh "$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" 2>/dev/null | sed 's/^/  /'
     exit 0
 fi
@@ -99,7 +102,7 @@ case "${ISO_ROLE:-operator}" in
     operator|"")
         ISO_ROLE="operator"
         if [ -n "$ISO_NODE" ]; then
-            [[ "$ISO_NODE" =~ ^[1-9]$ ]] || { echo "--node : 1 à 9" >&2; exit 2; }
+            [[ "$ISO_NODE" =~ ^[1-9]$ ]] || { echo "--node : 1 a 9" >&2; exit 2; }
             [ "$OUTPUT_SET" = "1" ] || OUTPUT="osmo-operator-${ISO_NODE}.iso"
             ISO_WAN_ID="${ISO_WAN_ID:-$ISO_NODE}"
             ISO_WAN=1
@@ -117,23 +120,23 @@ cleanup() { umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$
 trap cleanup EXIT
 
 
-# ── Paquets hôte requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
-# Installés ici plutôt que dans le workflow CI : `sudo ./build-iso.sh` suffit
-# sur une machine Debian/Ubuntu vierge, sans étape "Install host tools" externe.
+# ── Paquets hote requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
+# Installes ici plutot que dans le workflow CI : `sudo ./build-iso.sh` suffit
+# sur une machine Debian/Ubuntu vierge, sans etape "Install host tools" externe.
 ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git isolinux"
 if command -v apt-get &>/dev/null; then
-    echo -e "${GREEN}[0/9] Installation des paquets hôte (apt)...${NC}"
+    echo -e "${GREEN}[0/9] Installation des paquets hote (apt)...${NC}"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq || true
-    # isolinux est optionnel (isohybrid) : on n'échoue pas s'il manque.
+    # isolinux est optionnel (isohybrid) : on n'echoue pas s'il manque.
     apt-get install -y --no-install-recommends $ISO_HOST_PKGS \
         || apt-get install -y --no-install-recommends \
            squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git
 else
-    echo -e "${YELLOW}apt-get absent : vérification seule des outils hôte.${NC}"
+    echo -e "${YELLOW}apt-get absent : verification seule des outils hote.${NC}"
 fi
 
-# Docker n'est pas auto-installé ici (paquet docker-ce hors apt standard).
+# Docker n'est pas auto-installe ici (paquet docker-ce hors apt standard).
 for t in docker mksquashfs xorriso grub-mkrescue debootstrap git; do
     command -v "$t" &>/dev/null || { echo -e "${RED}Manquant: $t${NC}"; exit 1; }
 done
@@ -141,20 +144,20 @@ mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 
 echo -e "${CYAN}${BOLD}══ osmo_egprs ISO builder (via build.sh + start.sh) ══${NC}"
 
-# ── Étape 1 : Exécuter build.sh pour préparer l'hôte et construire osmocom-nitb ──
+# ── Etape 1 : Executer build.sh pour preparer l'hote et construire osmocom-nitb ──
 if [ "$ISO_ROLE" = "interstp" ]; then
-    echo -e "${GREEN}[1/9] Rôle inter-STP : build.sh SAUTÉ${NC}"
+    echo -e "${GREEN}[1/9] Role inter-STP : build.sh SAUTE${NC}"
     echo -e "  ${CYAN}Le hub route du M3UA. Ni HLR, ni MSC, ni BSC, ni radio, ni Asterisk :${NC}"
     echo -e "  ${CYAN}rien de ce que construit build.sh ne le concerne.${NC}"
 else
-echo -e "${GREEN}[1/9] Exécution de build.sh...${NC}"
+echo -e "${GREEN}[1/9] Execution de build.sh...${NC}"
 if [ -f "$DIR/build.sh" ]; then
     bash "$DIR/build.sh" $NO_CACHE
 else
     echo -e "${YELLOW}build.sh introuvable, construction manuelle de l'image osmocom-nitb...${NC}"
     docker build $NO_CACHE -t osmocom-nitb "$DIR"
 fi
-echo -e "  ${GREEN}✓${NC} image osmocom-nitb prête"
+echo -e "  ${GREEN}✓${NC} image osmocom-nitb prete"
 fi
 
 load_start_lib() {
@@ -172,24 +175,24 @@ load_start_lib() {
         { print }
     ' "$src" > "$lib"
 
-    # La lib vit dans $WORK, pas dans le dépôt : sans ça, la résolution par
-    # BASH_SOURCE de start.sh chercherait generate_configs.sh à côté de la copie.
+    # La lib vit dans $WORK, pas dans le depot : sans ca, la resolution par
+    # BASH_SOURCE de start.sh chercherait generate_configs.sh a cote de la copie.
     export OSMO_REPO_DIR="$DIR"
 
     # shellcheck disable=SC1090
     source "$lib"
 }
 
-# ── Étape 2 : Construire l'image osmocom-run via start.sh ─────────────────────
-# load_start_lib est nécessaire dans TOUS les cas : c'est lui qui apporte
-# apply_config_templates. C'est build_run_image — deux heures de compilation de
-# la pile complète — que le hub n'a aucune raison de payer.
+# ── Etape 2 : Construire l'image osmocom-run via start.sh ─────────────────────
+# load_start_lib est necessaire dans TOUS les cas : c'est lui qui apporte
+# apply_config_templates. C'est build_run_image - deux heures de compilation de
+# la pile complete - que le hub n'a aucune raison de payer.
 load_start_lib
 if [ "$ISO_ROLE" = "interstp" ]; then
     echo -e "${GREEN}[2/9] Construction de l'image ${CYAN}osmocom-stp${NC}${GREEN} (Dockerfile.stp)...${NC}"
     echo -e "  ${CYAN}osmo-stp + libosmocore + libosmo-netif + libosmo-sigtran. Rien d'autre.${NC}"
     docker build $NO_CACHE -f "$DIR/Dockerfile.stp" -t osmocom-stp "$DIR" \
-        || { echo -e "${RED}Échec de la construction d'osmocom-stp${NC}"; exit 1; }
+        || { echo -e "${RED}Echec de la construction d'osmocom-stp${NC}"; exit 1; }
     echo -e "  ${GREEN}✓${NC} osmocom-stp construite ($(docker image inspect osmocom-stp --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0f Mo", $1/1048576}'))"
 else
     echo -e "${GREEN}[2/9] Construction de l'image osmocom-run via start.sh...${NC}"
@@ -197,7 +200,7 @@ else
     echo -e "  ${GREEN}✓${NC} osmocom-run construite"
 fi
 
-echo -e "${GREEN}[2b/9] Préparation de l'image source de l'ISO...${NC}"
+echo -e "${GREEN}[2b/9] Preparation de l'image source de l'ISO...${NC}"
 
 ISO_N_MS=2
 ISO_OP_ID=1         # operateur unique de l'ISO (PLMN 001-01)
@@ -205,22 +208,22 @@ ENCRYPTION="a5 0"   # A5/1 par defaut dans l'ISO (chiffrement bout-en-bout valid
 
 # L'ISO tourne en NATIF, sans bridge docker. Les 172.20.0.x existaient quand
 # meme : 20-dhcp.network (plus bas) les alias sur le NIC par defaut. Mais faire
-# ecouter le coeur dessus le rend tributaire de ce NIC — s'il est absent (VM
-# sans carte), nomme hors de « en* eth* », ou simplement pas encore configure
+# ecouter le coeur dessus le rend tributaire de ce NIC - s'il est absent (VM
+# sans carte), nomme hors de "en* eth*", ou simplement pas encore configure
 # par systemd-networkd quand osmo-ggsn demarre, le bind echoue. La boucle
 # locale, elle, est toujours la et prete avant tout service.
 # Concerne : osmo-ggsn (gtp bind-ip), osmo-sgsn (ggsn remote-ip), osmo-upf
 # (local-addr), osmo-bsc (gprs nsvc remote ip) et le log gsmtap, que l'on
 # ramene ainsi sur 127.0.0.1 ou tshark capte deja.
-HOST_IP="127.0.0.1"        # ip1 : __CONTAINER_IP__ — ggsn/sgsn/upf/bsc-nsvc
-GATEWAY_IP="127.0.0.1"     # gw  : __GATEWAY_IP__  — log gsmtap + dns 0 du ggsn
+HOST_IP="127.0.0.1"        # ip1 : __CONTAINER_IP__ - ggsn/sgsn/upf/bsc-nsvc
+GATEWAY_IP="127.0.0.1"     # gw  : __GATEWAY_IP__  - log gsmtap + dns 0 du ggsn
 
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
 PHY_MODE="${PHY_MODE:-faketrx}"
-# __INTER_STP_IP__ : ASP vers le STP d'un autre operateur. Inerte ici — l'ISO
+# __INTER_STP_IP__ : ASP vers le STP d'un autre operateur. Inerte ici - l'ISO
 # n'a qu'un operateur et passe inter_stp_shutdown=shutdown a apply_config_
-# templates — mais on ne laisse pas une IP docker morte dans les configs.
+# templates - mais on ne laisse pas une IP docker morte dans les configs.
 INTER_STP_IP="127.0.0.1"   # ip2 : inter-operateur (ASP shutdown sur l'ISO)
 
 echo -e "  Host IP    : ${CYAN}${HOST_IP}${NC}"
@@ -233,13 +236,13 @@ echo -e "  PHY        : ${CYAN}${PHY_MODE}${NC}"
 TEMP_CONFIG="$(mktemp -d)"
 
 # ── Point codes et rattachement SS7 ──────────────────────────────────────────
-# Hors WAN : le plan historique, 1.<op>.<role>, et l'ASP inter-STP coupé —
-# l'ISO n'a qu'un opérateur, il n'a personne à qui parler en SS7.
+# Hors WAN : le plan historique, 1.<op>.<role>, et l'ASP inter-STP coupe -
+# l'ISO n'a qu'un operateur, il n'a personne a qui parler en SS7.
 #
 # Avec --node N : le noeud entre DANS le point code, 1.<noeud><op>.<role>.
-# Sans ça, trois ISO attachées au même hub y présenteraient trois fois 1.11.2.
-# Un point code est une adresse : deux équipements avec la même, ce n'est pas
-# un conflit de nom, c'est du routage faux — et silencieux.
+# Sans ca, trois ISO attachees au meme hub y presenteraient trois fois 1.11.2.
+# Un point code est une adresse : deux equipements avec la meme, ce n'est pas
+# un conflit de nom, c'est du routage faux - et silencieux.
 ISO_PC_MSC="1.1.1"; ISO_PC_STP="1.1.2"; ISO_PC_BSC="1.1.3"
 ISO_INTER_SHUT="shutdown"
 ISO_INTER_IP="$INTER_STP_IP"
@@ -251,9 +254,9 @@ if [ -n "$ISO_NODE" ]; then
     ISO_INTER_SHUT="no shutdown"
     # RCTX unique lui aussi : le hub identifie chaque AS par son routing context.
     export RCTX_INTER_OVERRIDE=$(( ISO_NODE * 1000 + ISO_OP_ID * 100 + 50 ))
-    # local-ip de l'ASP laissée à 0.0.0.0 : l'adresse du noeud vient du DHCP et
-    # n'est pas forcément montée quand osmo-stp démarre. Se lier à une adresse
-    # absente échoue au lancement, sans rapport visible avec le réseau.
+    # local-ip de l'ASP laissee a 0.0.0.0 : l'adresse du noeud vient du DHCP et
+    # n'est pas forcement montee quand osmo-stp demarre. Se lier a une adresse
+    # absente echoue au lancement, sans rapport visible avec le reseau.
     export INTER_LOCAL_IP_OVERRIDE="0.0.0.0"
     echo -e "  Noeud WAN  : ${CYAN}${ISO_NODE}${NC}  PC ${CYAN}${ISO_PC_STP}${NC}  hub ${CYAN}${ISO_HUB_IP}${NC}  rctx ${RCTX_INTER_OVERRIDE}"
 fi
@@ -264,7 +267,7 @@ apply_config_templates "$TEMP_CONFIG" \
     "001" "01" "OsmoGSM" \
     "$ISO_INTER_IP" "$ISO_INTER_SHUT" "1"
 
-# ── Rôle inter-STP : la config du hub, pour N noeuds ────────────────────────
+# ── Role inter-STP : la config du hub, pour N noeuds ────────────────────────
 if [ "$ISO_ROLE" = "interstp" ]; then
     _hub_nodes=3
     if [ -n "$ISO_WAN_NODES" ]; then
@@ -272,7 +275,7 @@ if [ "$ISO_ROLE" = "interstp" ]; then
     fi
     bash "$DIR/helpers/create_interop.sh" --wan "$_hub_nodes" "${ISO_WAN_OPS:-1}" \
         "$TEMP_CONFIG/osmocom/osmo-stp-interop.cfg" || exit 1
-    echo -e "  ${GREEN}✓${NC} hub SS7 pour ${CYAN}${_hub_nodes}${NC} noeud(s) × ${ISO_WAN_OPS:-1} opérateur(s)"
+    echo -e "  ${GREEN}✓${NC} hub SS7 pour ${CYAN}${_hub_nodes}${NC} noeud(s) × ${ISO_WAN_OPS:-1} operateur(s)"
 fi
 
 # ── Routage SMS ──────────────────────────────────────────────────────────────
@@ -283,14 +286,14 @@ fi
 #   - [operators] pointe sur op_backbone_ip (172.20.0.11), une adresse du plan
 #     docker ; l'ISO tourne en natif, tout boucle sur HOST_IP.
 #   - [routes] enumere des prefixes fixes (i000, i0000, i001..i005) qui ne
-#     suivent pas ISO_N_MS : au-dela du 5e MS, « No route for destination ».
+#     suivent pas ISO_N_MS : au-dela du 5e MS, "No route for destination".
 #
 # On reecrit donc la meme structure, mais avec UNE route par MS reellement
 # embarque. MSISDN = op * 10000 + ms, la formule du depot (21-abonnes-hlr.sh,
-# scripts/sms-routing-setup.sh) — pour ISO_N_MS=2 : 10001 et 10002.
+# scripts/sms-routing-setup.sh) - pour ISO_N_MS=2 : 10001 et 10002.
 ISO_SMS_SC="1999001${ISO_OP_ID}444"
 {
-    printf '# sms-routing.conf — Fallback\n\n'
+    printf '# sms-routing.conf - Fallback\n\n'
     printf '[local]\noperator_id = %s\nsc_address  = %s\n\n' "$ISO_OP_ID" "$ISO_SMS_SC"
     printf '[operators]\n%s = %s\n\n' "$ISO_OP_ID" "$HOST_IP"
     printf '[routes]\n'
@@ -312,7 +315,7 @@ TMP_CID="$(docker create "$ISO_SRC_IMAGE" /bin/sh)"
 
 docker cp "$TEMP_CONFIG/osmocom/."  "$TMP_CID:/etc/osmocom/"  2>/dev/null || true
 # Le hub n'a pas d'Asterisk : lui pousser des configs SIP n'aurait pas de sens,
-# et l'image n'a même pas /etc/asterisk.
+# et l'image n'a meme pas /etc/asterisk.
 [ "$ISO_ROLE" = "interstp" ] || \
     docker cp "$TEMP_CONFIG/asterisk/." "$TMP_CID:/etc/asterisk/" 2>/dev/null || true
 
@@ -320,14 +323,14 @@ docker commit "$TMP_CID" "$ISO_RUN_IMAGE" >/dev/null
 docker rm -f "$TMP_CID" >/dev/null 2>&1 || true
 rm -rf "$TEMP_CONFIG"
 
-echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prête"
+echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prete"
 
-# ── Étape 3 : (SUPPRIMÉ) — ISO NATIF : on n'embarque PAS l'image Docker ────
+# ── Etape 3 : (SUPPRIME) - ISO NATIF : on n'embarque PAS l'image Docker ────
 # L'image osmocom-run ne sert plus que de SOURCE de build (docker cp des binaires
-# et configs vers le rootfs à l'étape 6). On ne la save plus dans l'ISO : pas de
-# docker au runtime, pas de tar.gz de plusieurs Go embarqué.
+# et configs vers le rootfs a l'etape 6). On ne la save plus dans l'ISO : pas de
+# docker au runtime, pas de tar.gz de plusieurs Go embarque.
 
-# ── Étape 4 : Bootstrap rootfs minimal ─────────────────────────────────────
+# ── Etape 4 : Bootstrap rootfs minimal ─────────────────────────────────────
 echo -e "${GREEN}[4/9] debootstrap jammy (minimal)...${NC}"
 debootstrap --variant=minbase --include=\
 systemd,systemd-sysv,dbus,kmod,\
@@ -336,7 +339,7 @@ iproute2,iputils-ping,procps,less,nano \
     jammy "$ROOTFS" http://archive.ubuntu.com/ubuntu
 echo -e "  ${GREEN}✓${NC} rootfs base $(du -sh "$ROOTFS"|cut -f1)"
 
-# ── Étape 5 : Injection des binaires et libs depuis l'image osmocom-run ───
+# ── Etape 5 : Injection des binaires et libs depuis l'image osmocom-run ───
 echo -e "${GREEN}[5/9] Injection stack Osmocom...${NC}"
 CID=$(docker create "$ISO_RUN_IMAGE" /bin/true)
 docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
@@ -351,15 +354,15 @@ for svc in osmo-bts-trx osmo-bsc osmo-msc osmo-hlr osmo-mgw osmo-stp osmo-ggsn o
     docker cp "$CID:/lib/systemd/system/${svc}.service" "$ROOTFS/lib/systemd/system/" 2>/dev/null||true
 done
 docker rm "$CID" &>/dev/null
-echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectés"
+echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectes"
 
-# ── osmo_egprs : SOURCE à jour depuis GitHub (branche main) ──
-# La copie docker cp ci-dessus peut être périmée ; on récupère la branche main
-# du repo (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh…) dans l'ISO.
-# ── osmo_egprs : ARBRE à jour depuis GitHub (branche main), sans dépôt git ──
+# ── osmo_egprs : SOURCE a jour depuis GitHub (branche main) ──
+# La copie docker cp ci-dessus peut etre perimee ; on recupere la branche main
+# du repo (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh...) dans l'ISO.
+# ── osmo_egprs : ARBRE a jour depuis GitHub (branche main), sans depot git ──
 EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-main}"
 EGPRS_TARBALL="https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/${EGPRS_BRANCH}"
-echo -e "${GREEN}[5d/7] Récupération osmo_egprs (branche ${EGPRS_BRANCH}, tarball)...${NC}"
+echo -e "${GREEN}[5d/7] Recuperation osmo_egprs (branche ${EGPRS_BRANCH}, tarball)...${NC}"
 stage="$(mktemp -d)"
 if wget -qO- "$EGPRS_TARBALL" | tar -xz -C "$stage" --strip-components=1 \
    && [ -s "$stage/start.sh" ]; then
@@ -367,27 +370,27 @@ if wget -qO- "$EGPRS_TARBALL" | tar -xz -C "$stage" --strip-components=1 \
     rm -rf "$ROOTFS/opt/GSM/osmo_egprs"
     mkdir -p "$ROOTFS/opt/GSM"
     cp -a "$stage" "$ROOTFS/opt/GSM/osmo_egprs"
-    echo -e "  ${GREEN}✓${NC} osmo_egprs installé (${EGPRS_BRANCH}, arbre nu, sans .git)"
+    echo -e "  ${GREEN}✓${NC} osmo_egprs installe (${EGPRS_BRANCH}, arbre nu, sans .git)"
 else
-    echo -e "  ${YELLOW}⚠ récupération osmo_egprs échouée (réseau ?) — copie de l'image conservée${NC}"
+    echo -e "  ${YELLOW}⚠ recuperation osmo_egprs echouee (reseau ?) - copie de l'image conservee${NC}"
 fi
 rm -rf "$stage"
 
-# ── Feed HLR : aligner N_MS sur le nombre de MS embarqués ────────────────────
-# run_modules/21-abonnes-hlr.sh retombe sur « : "${N_MS:=1}" » : sans ce fichier
-# un SEUL abonné etait provisionne alors que l'ISO en declare ISO_N_MS, et les
-# MS suivants se voyaient refuser le rattachement (« IMSI unknown in HLR ») —
+# ── Feed HLR : aligner N_MS sur le nombre de MS embarques ────────────────────
+# run_modules/21-abonnes-hlr.sh retombe sur ": "${N_MS:=1}"" : sans ce fichier
+# un SEUL abonne etait provisionne alors que l'ISO en declare ISO_N_MS, et les
+# MS suivants se voyaient refuser le rattachement ("IMSI unknown in HLR") -
 # panne lue a tort comme un defaut radio.
 #
-# environment/load.env source « coeur.env » s'il existe, et tout le depot suit
-# l'idiome « : "${VAR:=...}" » : la ligne de commande (N_MS=2 ./run.sh) garde
+# environment/load.env source "coeur.env" s'il existe, et tout le depot suit
+# l'idiome ": "${VAR:=...}"" : la ligne de commande (N_MS=2 ./run.sh) garde
 # donc la priorite. On ecrit dans les arbres presents : l'ISO native resout
 # run.sh depuis osmo_egprs, qemu-src n'y survit que si ses sources sont gardees.
 for envdir in "$ROOTFS/opt/GSM/osmo_egprs/environment" \
               "$ROOTFS/opt/GSM/qemu-src/environment"; do
     [ -d "$envdir" ] || continue
     cat > "$envdir/coeur.env" <<COEUR
-# coeur.env — genere par build-iso.sh. Aligne le nombre d'abonnes provisionnes
+# coeur.env - genere par build-iso.sh. Aligne le nombre d'abonnes provisionnes
 # dans le HLR sur le nombre de MS embarques par l'ISO (ISO_N_MS).
 : "\${N_MS:=$ISO_N_MS}"
 : "\${OPERATOR_ID:=1}"
@@ -396,10 +399,10 @@ COEUR
 done
 
 
-# ── qemu-src : checkout LOCAL (branche main, build/qemu-system-arm recompilé) ──
-# La copie docker cp ($CID:/opt/GSM) peut être périmée / sur une autre branche. On
-# écrase qemu-src par le checkout local de la VM, déjà sur 'main' avec le binaire
-# build/ à jour. On retire .git (historique QEMU = lourd, inutile à l'exécution).
+# ── qemu-src : checkout LOCAL (branche main, build/qemu-system-arm recompile) ──
+# La copie docker cp ($CID:/opt/GSM) peut etre perimee / sur une autre branche. On
+# ecrase qemu-src par le checkout local de la VM, deja sur 'main' avec le binaire
+# build/ a jour. On retire .git (historique QEMU = lourd, inutile a l'execution).
 QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}/build}"
 echo -e "${GREEN}[5d/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
 if [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
@@ -410,17 +413,17 @@ if [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
     qpfx="${qpfx:-/usr/local}"
 
     if DESTDIR="$ROOTFS" ninja -C "$QEMU_BUILD_LOCAL" install >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} qemu installé dans ${ROOTFS}${qpfx} (ninja install, pas de sources)"
+        echo -e "  ${GREEN}✓${NC} qemu installe dans ${ROOTFS}${qpfx} (ninja install, pas de sources)"
     else
-        # repli : binaire + firmwares/keymaps strictement nécessaires
+        # repli : binaire + firmwares/keymaps strictement necessaires
         install -Dm755 "$QEMU_BUILD_LOCAL/qemu-system-arm" "$ROOTFS$qpfx/bin/qemu-system-arm"
         install -d "$ROOTFS$qpfx/share/qemu"
         cp -a "$QEMU_BUILD_LOCAL/pc-bios/." "$ROOTFS$qpfx/share/qemu/" 2>/dev/null || true
-        echo -e "  ${GREEN}✓${NC} qemu-system-arm + pc-bios copiés dans ${ROOTFS}${qpfx} (repli manuel)"
+        echo -e "  ${GREEN}✓${NC} qemu-system-arm + pc-bios copies dans ${ROOTFS}${qpfx} (repli manuel)"
     fi
     strip --strip-unneeded "$ROOTFS$qpfx/bin/qemu-system-arm" 2>/dev/null || true
 else
-    echo -e "  ${YELLOW}⚠ ${QEMU_BUILD_LOCAL}/qemu-system-arm absent — qemu de l'image conservé${NC}"
+    echo -e "  ${YELLOW}⚠ ${QEMU_BUILD_LOCAL}/qemu-system-arm absent - qemu de l'image conserve${NC}"
 fi
 echo -e "${GREEN}[5c/9] Ajustements osmocom dans le rootfs...${NC}"
 echo -e "${GREEN}[5b/9] Patch configs ISO...${NC}"
@@ -440,10 +443,10 @@ if [ -f "$ROOTFS/etc/osmocom/osmo-msc.cfg" ]; then
         "$ROOTFS/etc/osmocom/osmo-msc.cfg"
 fi
 
-echo -e "  ${GREEN}✓${NC} patch SGSN + MSC appliqué"
+echo -e "  ${GREEN}✓${NC} patch SGSN + MSC applique"
 
-# run.sh: réduire toute ligne "trxcon options..." à "trxcon"
-#         et toute ligne "mobile options..." à "mobile"
+# run.sh: reduire toute ligne "trxcon options..." a "trxcon"
+#         et toute ligne "mobile options..." a "mobile"
 if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
     sed -i \
         -e 's#^[[:space:]]*\([^[:space:]]*/\)\?trxcon\([[:space:]].*\)\?$#trxcon#' \
@@ -452,7 +455,7 @@ if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
     chmod +x "$ROOTFS/etc/osmocom/run.sh"
 fi
 
-echo -e "  ${GREEN}✓${NC} patch SGSN + run.sh appliqué"
+echo -e "  ${GREEN}✓${NC} patch SGSN + run.sh applique"
 mkdir -p "$ROOTFS/usr/bin"
 cp -a "$ROOTFS/usr/local/bin/." "$ROOTFS/usr/bin/" 2>/dev/null || true
 
@@ -474,11 +477,11 @@ chroot "$ROOTFS" usermod -o -u 0 -g 0 osmocom 2>/dev/null || true
 mkdir -p "$ROOTFS/home/osmocom"
 chown -R 0:0 "$ROOTFS/home/osmocom" "$ROOTFS/root/.osmocom" 2>/dev/null || true
 
-echo -e "  ${GREEN}✓${NC} user osmocom + /usr/bin + mobile.cfg prêts"
+echo -e "  ${GREEN}✓${NC} user osmocom + /usr/bin + mobile.cfg prets"
 
 chmod +x "$ROOTFS/etc/osmocom/run.sh"
 
-# ── Étape 6 : Injection du dashboard web ───────────────────────────────────
+# ── Etape 6 : Injection du dashboard web ───────────────────────────────────
 echo -e "${GREEN}[6/9] Dashboard web (git clone)...${NC}"
 WEB="$ROOTFS/opt/osmo-egprs-web"
 WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
@@ -501,7 +504,7 @@ else
     WEB_TMP="$WORK/osmo-egprs-web"
     rm -rf "$WEB_TMP"
     git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2 || true
-    # Layout REEL du repo : server.js / package.json / web/ / start-web.sh à la
+    # Layout REEL du repo : server.js / package.json / web/ / start-web.sh a la
     # RACINE (fallback sous server/ pour un ancien layout).
     if   [ -f "$WEB_TMP/server.js" ];        then cp "$WEB_TMP/server.js"        "$WEB/server.js"
     elif [ -f "$WEB_TMP/server/server.js" ]; then cp "$WEB_TMP/server/server.js" "$WEB/server.js"; fi
@@ -514,19 +517,19 @@ else
     if [ -f "$WEB/server.js" ]; then
         echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis le git ${CYAN}$WEB_REPO${NC} ($WEB_BRANCH)"
     else
-        echo -e "  ${RED}✗ clone osmo-egprs-web sans server.js — dashboard incomplet${NC}"
+        echo -e "  ${RED}✗ clone osmo-egprs-web sans server.js - dashboard incomplet${NC}"
     fi
 fi
 
 # Patch server.js : mode natif (no-docker). VTY en telnet direct sur 127.0.0.1
-# (ou ip netns exec) au lieu de docker exec. Idempotent ; n'échoue pas le build.
+# (ou ip netns exec) au lieu de docker exec. Idempotent ; n'echoue pas le build.
 if [ -f "$WEB/server.js" ] && command -v python3 >/dev/null 2>&1; then
-python3 - "$WEB/server.js" <<'PYEOF' || echo -e "  ${YELLOW}[web] patch natif non appliqué (server.js amont a changé ?)${NC}"
+python3 - "$WEB/server.js" <<'PYEOF' || echo -e "  ${YELLOW}[web] patch natif non applique (server.js amont a change ?)${NC}"
 import sys, re
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 if 'const NATIVE' in s:
-    print('  [web] server.js déjà en mode natif — skip'); sys.exit(0)
+    print('  [web] server.js deja en mode natif - skip'); sys.exit(0)
 HELPERS = """
 // ─── Native (no-docker) mode ─────────────────────────────────
 const NATIVE        = (process.env.OSMO_NATIVE !== '0');
@@ -564,21 +567,21 @@ sub(r"execAsync\(\s*'docker exec ' \+ container \+ ' bash -c \"ss -tlnp.*?', 300
 sub(r"log\('VTY open: docker exec.*?\], \{ stdio: \['pipe','pipe','pipe'\] \}\);",
     "var vc = vtyProc(this.container, this.port, this.ip, this.opId);\n  log('VTY open: ' + vc.bin + ' ' + vc.args.join(' ') + ' (attempt ' + (this.retries + 1) + ')');\n\n  this.proc = spawn(vc.bin, vc.args, { stdio: ['pipe','pipe','pipe'] });", re.DOTALL)
 open(p,'w',encoding='utf-8').write(s)
-print('  [web] server.js patché mode natif (%d remplacements)' % n[0])
+print('  [web] server.js patche mode natif (%d remplacements)' % n[0])
 sys.exit(0 if n[0] >= 6 else 2)
 PYEOF
 fi
 
-# ── Étape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
+# ── Etape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
 echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 P="$ROOTFS/opt/osmo_egprs"
-# [2026-08-14] `lib` ajouté : scripts/audio-chain.sh source lib/audio.sh.
-# Sans ce répertoire l'ISO embarquait un wrapper qui ne pouvait pas se sourcer.
+# [2026-08-14] `lib` ajoute : scripts/audio-chain.sh source lib/audio.sh.
+# Sans ce repertoire l'ISO embarquait un wrapper qui ne pouvait pas se sourcer.
 # [2026-08-25] `network` et `tools` AJOUTES a la liste. Sans eux, les `cp
-# "$DIR/network/..." "$P/network/..."` de la boucle suivante echouaient — le
-# repertoire cible n'existait pas — et comme ils sont dans une chaine `&&`,
+# "$DIR/network/..." "$P/network/..."` de la boucle suivante echouaient - le
+# repertoire cible n'existait pas - et comme ils sont dans une chaine `&&`,
 # l'echec ne disait rien : l'ISO partait SANS aucun script WAN, et le seul
-# symptome etait un « introuvable » au moment d'en avoir besoin.
+# symptome etait un "introuvable" au moment d'en avoir besoin.
 mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont,network,tools}
 for f in start.sh start-direct.sh start-interstp.sh build.sh network/loopback.sh \
          tools/vty-menu.sh tools/vty-connect.exp \
@@ -599,22 +602,22 @@ ln -sf /opt/osmo_egprs/start.sh "$ROOTFS/usr/local/bin/osmo-start-lab"
 [ -f "$DIR/launch/osmo-launch.sh" ] && cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
 ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
 
-# [2026-08-03] start-in-iso.sh a été supprimé : start-direct.sh le remplace.
-# L'ancien bloc fabriquait, en son absence, un stub qui refusait de démarrer
-# (« Veuillez fournir un script start-in-iso.sh complet ») — l'ISO partait donc
+# [2026-08-03] start-in-iso.sh a ete supprime : start-direct.sh le remplace.
+# L'ancien bloc fabriquait, en son absence, un stub qui refusait de demarrer
+# ("Veuillez fournir un script start-in-iso.sh complet") - l'ISO partait donc
 # avec un lanceur inutilisable. On embarque le vrai lanceur.
 if [ -f "$DIR/start-direct.sh" ]; then
     cp "$DIR/start-direct.sh" "$P/start-direct.sh"
     chmod +x "$P/start-direct.sh"
-    echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs/start-direct.sh copié"
+    echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs/start-direct.sh copie"
 else
-    echo -e "  ${RED}✗${NC} start-direct.sh introuvable — l'ISO n'aura pas de lanceur" >&2
+    echo -e "  ${RED}✗${NC} start-direct.sh introuvable - l'ISO n'aura pas de lanceur" >&2
     exit 1
 fi
 
-# ── WAN : table des noeuds figée dans l'image ────────────────────────────────
+# ── WAN : table des noeuds figee dans l'image ────────────────────────────────
 if [ "$ISO_WAN" = "1" ]; then
-    echo -e "${GREEN}[7b/9] WAN — table des noeuds embarquée...${NC}"
+    echo -e "${GREEN}[7b/9] WAN - table des noeuds embarquee...${NC}"
     # shellcheck source=network/wan-nodes.sh
     . "$DIR/network/wan-nodes.sh"
     WAN_OPS="$ISO_WAN_OPS"
@@ -622,29 +625,29 @@ if [ "$ISO_WAN" = "1" ]; then
         wan_nodes_parse "$ISO_WAN_NODES" || exit 1
         WAN_NODE_ID="${ISO_WAN_ID:-0}"
     else
-        # Construction interactive : mêmes questions que ./start.sh --wan.
-        # Le numéro du noeud demandé ici n'est qu'un défaut : chaque machine
-        # qui démarre l'ISO se re-reconnaît à son IP.
+        # Construction interactive : memes questions que ./start.sh --wan.
+        # Le numero du noeud demande ici n'est qu'un defaut : chaque machine
+        # qui demarre l'ISO se re-reconnait a son IP.
         WAN_NODE_ID="${ISO_WAN_ID:-0}"
         wan_nodes_prompt || exit 1
     fi
     wan_nodes_validate || exit 1
     WAN_AUTO=1 WAN_CONF_FILE="$ROOTFS/etc/osmo-wan.conf" wan_nodes_save
     wan_nodes_summary
-    echo -e "  ${GREEN}✓${NC} /etc/osmo-wan.conf figé dans l'ISO (WAN_AUTO=1)"
+    echo -e "  ${GREEN}✓${NC} /etc/osmo-wan.conf fige dans l'ISO (WAN_AUTO=1)"
     echo -e "  ${CYAN}Au boot :${NC} start-direct.sh applique le WAN tout seul ;"
-    echo -e "  ${CYAN}sans --wan à la construction, l'ISO n'a AUCUN WAN.${NC}"
+    echo -e "  ${CYAN}sans --wan a la construction, l'ISO n'a AUCUN WAN.${NC}"
 else
-    echo -e "  ${CYAN}[7b/9] WAN non embarqué (--wan absent) — ISO autonome${NC}"
+    echo -e "  ${CYAN}[7b/9] WAN non embarque (--wan absent) - ISO autonome${NC}"
 fi
 
-# ── Étape 8 : (SUPPRIMÉ) — ISO NATIF, plus de Docker au runtime ───────────
+# ── Etape 8 : (SUPPRIME) - ISO NATIF, plus de Docker au runtime ───────────
 # L'ancien load-osmocom-image.service chargeait osmocom-run.tar.gz via 'docker
-# load' au boot ; son ExecStartPre 'while ! docker info' bloquait indéfiniment la
-# file systemd en natif (docker jamais up) → boot figé. Le lab tourne désormais
-# en natif (start-direct.sh) : pas d'image Docker à charger, pas de ce service.
+# load' au boot ; son ExecStartPre 'while ! docker info' bloquait indefiniment la
+# file systemd en natif (docker jamais up) → boot fige. Le lab tourne desormais
+# en natif (start-direct.sh) : pas d'image Docker a charger, pas de ce service.
 
-# ── Étape 9 : Configuration chroot (paquets) ───────────────────────────────
+# ── Etape 9 : Configuration chroot (paquets) ───────────────────────────────
 echo -e "${GREEN}[8/9] Configuration chroot...${NC}"
 mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
@@ -725,13 +728,13 @@ update-initramfs -u -k "$KERNEL"
 apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 '
 
-# ── Étape 8b : Rééquilibrage sur build.sh — clôture de dépendances ldd ────────
+# ── Etape 8b : Reequilibrage sur build.sh - cloture de dependances ldd ────────
 # L'image osmocom-run (produite par build.sh + Dockerfile) est l'environnement
 # qui MARCHE. Au lieu de se fier aux versions apt du rootfs (skew -> crash
-# logging libosmocore), on copie depuis le conteneur la clôture .so EXACTE de
-# tous les binaires osmo + calypso-ipc-device, en écrasant les libs apt. On
+# logging libosmocore), on copie depuis le conteneur la cloture .so EXACTE de
+# tous les binaires osmo + calypso-ipc-device, en ecrasant les libs apt. On
 # exclut la famille glibc/loader (identique en jammy, ne pas clobber ld.so).
-echo -e "${GREEN}[8b/9] Clôture de dépendances COMPLÈTE depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (toute l'install)...${NC}"
+echo -e "${GREEN}[8b/9] Cloture de dependances COMPLETE depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (toute l'install)...${NC}"
 # On ldd TOUS les ELF (executables + toutes les .so) de l'install custom :
 # /usr/local/bin (osmo), /opt/GSM (qemu, ipc-device, gr-gsm), /root/.env (venv
 # python : bindings gnuradio/gr-gsm + leurs deps boost/log4cpp/volk/fftw...).
@@ -749,20 +752,20 @@ docker run --rm --entrypoint bash \
 ' > "$WORK/closure.tar.gz" || true
 if [ -s "$WORK/closure.tar.gz" ]; then
     tar -xzf "$WORK/closure.tar.gz" -C "$ROOTFS" 2>/dev/null || true
-    echo -e "  ${GREEN}✓${NC} $(tar -tzf "$WORK/closure.tar.gz" 2>/dev/null | wc -l) libs injectées (Docker)"
+    echo -e "  ${GREEN}✓${NC} $(tar -tzf "$WORK/closure.tar.gz" 2>/dev/null | wc -l) libs injectees (Docker)"
 else
-    echo -e "  ${YELLOW}clôture vide — on garde les libs apt${NC}"
+    echo -e "  ${YELLOW}cloture vide - on garde les libs apt${NC}"
 fi
 
-# Priorité /usr/local/lib (libosmo* custom) + purge de tout doublon système.
-# NB: pas de `| grep` ici — sous set -euo pipefail un grep sans correspondance
+# Priorite /usr/local/lib (libosmo* custom) + purge de tout doublon systeme.
+# NB: pas de `| grep` ici - sous set -euo pipefail un grep sans correspondance
 # (cas normal: aucun doublon) renverrait 1 et tuerait le script avant l'ISO.
 echo "/usr/local/lib" > "$ROOTFS/etc/ld.so.conf.d/00-osmocom-local.conf"
 find "$ROOTFS/usr/lib" "$ROOTFS/lib" -maxdepth 4 -name 'libosmo*.so*' -delete 2>/dev/null || true
 chroot "$ROOTFS" ldconfig 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} /usr/local/lib prioritaire + ldconfig"
 
-# ── Configuration système ──────────────────────────────────────────────────
+# ── Configuration systeme ──────────────────────────────────────────────────
 echo "osmo-egprs" > "$ROOTFS/etc/hostname"
 cat > "$ROOTFS/etc/hosts" <<'EOF'
 127.0.0.1 localhost osmo-egprs
@@ -784,17 +787,17 @@ Address=172.20.1.10/24
 Destination=172.20.0.0/16
 Scope=link
 EOF
-# docker RETIRÉ de la liste : son service n'existe plus (ISO natif) et 'systemctl
+# docker RETIRE de la liste : son service n'existe plus (ISO natif) et 'systemctl
 # enable' valide tous les units d'abord → un seul manquant faisait AVORTER l'enable
 # de systemd-networkd/resolved → enp3s0 sans IP au boot. On active chaque unit
-# séparément pour qu'un éventuel échec n'empêche pas les autres.
+# separement pour qu'un eventuel echec n'empeche pas les autres.
 chroot "$ROOTFS" systemctl enable systemd-networkd 2>/dev/null||true
 chroot "$ROOTFS" systemctl enable systemd-resolved 2>/dev/null||true
 
-# live-boot écrit /root/etc/network/interfaces dans la racine montée au boot.
+# live-boot ecrit /root/etc/network/interfaces dans la racine montee au boot.
 # Sans ifupdown, /etc/network/ n'existe pas -> "/init: can't create
-# /root/etc/network/interfaces: nonexistent directory". On crée le dossier + un
-# interfaces minimal (loopback). systemd-networkd gère le réseau ; ce fichier
+# /root/etc/network/interfaces: nonexistent directory". On cree le dossier + un
+# interfaces minimal (loopback). systemd-networkd gere le reseau ; ce fichier
 # n'est lu par personne (ifupdown absent), il satisfait juste le hook live-boot.
 mkdir -p "$ROOTFS/etc/network"
 cat > "$ROOTFS/etc/network/interfaces" <<'EOF'
@@ -802,10 +805,10 @@ auto lo
 iface lo inet loopback
 EOF
 
-# ── Service startup : exécute le gist tools/update.sh (bbaranoff) au démarrage ──────
+# ── Service startup : execute le gist tools/update.sh (bbaranoff) au demarrage ──────
 cat > "$ROOTFS/usr/local/sbin/osmo-update.sh" <<'UPD'
 #!/bin/bash
-# osmo-update.sh — recupere et execute tools/update.sh (repo bbaranoff/osmo_egprs) au boot.
+# osmo-update.sh - recupere et execute tools/update.sh (repo bbaranoff/osmo_egprs) au boot.
 set -u
 URL="https://raw.githubusercontent.com/bbaranoff/osmo_egprs/refs/heads/main/update.sh"
 LOG=/var/log/osmo-update.log
@@ -817,10 +820,10 @@ for i in 1 2 3 4 5; do
         echo "--- execution tools/update.sh ---"
         bash /tmp/osmo-update.gist.sh; rc=$?
         echo "tools/update.sh termine (rc=$rc)"
-        # ── Normalisation fstab : retire le doublon /tmp ré-injecté par tools/update.sh ──
-        # tools/update.sh (gist) ré-ajoute 'tmpfs /tmp tmpfs nosuid,nodev 0 0' (SANS size=),
-        # créant un doublon avec l'entree canonique 'tmpfs /tmp … size=2G' posee au build.
-        # On supprime toute ligne 'tmpfs /tmp tmpfs …' depourvue de size= (le doublon),
+        # ── Normalisation fstab : retire le doublon /tmp re-injecte par tools/update.sh ──
+        # tools/update.sh (gist) re-ajoute 'tmpfs /tmp tmpfs nosuid,nodev 0 0' (SANS size=),
+        # creant un doublon avec l'entree canonique 'tmpfs /tmp ... size=2G' posee au build.
+        # On supprime toute ligne 'tmpfs /tmp tmpfs ...' depourvue de size= (le doublon),
         # en conservant l'entree 2G. Idempotent : sans effet si le doublon est absent.
         if [ -f /etc/fstab ]; then
             sed -i -E '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]+tmpfs[[:space:]]/d' /etc/fstab
@@ -849,26 +852,26 @@ ExecStart=/usr/local/sbin/osmo-update.sh
 WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} osmo-update (exécute le gist tools/update.sh au démarrage)"
+echo -e "  ${GREEN}✓${NC} osmo-update (execute le gist tools/update.sh au demarrage)"
 
-# ── Marqueur de rôle : ce que CETTE image est ───────────────────────────────
-# Lu par start-direct.sh et par la bannière. Sans lui, deux ISO issues de la
-# même chaîne sont indiscernables une fois démarrées — et on lance le mauvais
+# ── Marqueur de role : ce que CETTE image est ───────────────────────────────
+# Lu par start-direct.sh et par la banniere. Sans lui, deux ISO issues de la
+# meme chaine sont indiscernables une fois demarrees - et on lance le mauvais
 # script sur la mauvaise machine.
 {
-    printf '# /etc/osmo-role — généré par build-iso.sh\n'
+    printf '# /etc/osmo-role - genere par build-iso.sh\n'
     printf 'OSMO_ROLE=%s\n' "$ISO_ROLE"
     [ -n "$ISO_NODE" ] && printf 'OSMO_WAN_NODE=%s\n' "$ISO_NODE"
     printf 'OSMO_HUB_IP=%s\n' "$ISO_HUB_IP"
 } > "$ROOTFS/etc/osmo-role"
 
 if [ "$ISO_ROLE" = "interstp" ]; then
-    # Le hub, lui, DOIT démarrer seul : les noeuds s'attachent à lui au boot, et
-    # un hub qu'il faut lancer à la main transforme un démarrage simultané en
+    # Le hub, lui, DOIT demarrer seul : les noeuds s'attachent a lui au boot, et
+    # un hub qu'il faut lancer a la main transforme un demarrage simultane en
     # course perdue d'avance.
     cat > "$ROOTFS/etc/systemd/system/osmo-interstp.service" <<EOF
 [Unit]
-Description=osmo_egprs inter-STP — hub SS7 du WAN (PC 0.0.0)
+Description=osmo_egprs inter-STP - hub SS7 du WAN (PC 0.0.0)
 Wants=network-online.target
 After=network-online.target systemd-networkd-wait-online.service
 [Service]
@@ -882,7 +885,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
     chroot "$ROOTFS" systemctl enable osmo-interstp 2>/dev/null || true
-    echo -e "  ${GREEN}✓${NC} osmo-interstp.service — hub lancé au démarrage sur ${CYAN}${ISO_HUB_IP}${NC}"
+    echo -e "  ${GREEN}✓${NC} osmo-interstp.service - hub lance au demarrage sur ${CYAN}${ISO_HUB_IP}${NC}"
 fi
 
 
@@ -914,26 +917,26 @@ Environment=CONTAINER_PREFIX=osmo-operator-
 [Install]
 WantedBy=multi-user.target
 EOF
-# Le hub n'a ni VTY d'opérateur à afficher ni radio à tracer : le tableau de
-# bord n'aurait rien à montrer. On ne l'active pas.
+# Le hub n'a ni VTY d'operateur a afficher ni radio a tracer : le tableau de
+# bord n'aurait rien a montrer. On ne l'active pas.
 [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 
-# ── Audio : PulseAudio système (sink gsm_audio) au boot ────────────────────
-# Chaîne : osmo-gapk → ALSA gsm_out → sink null gsm_audio → monitor → loopback
-# → carte. system.pa autorise l'accès anonyme + prépare le sink ; le service
-# lance le démon au boot (ensure_pulse de start-direct.sh devient un no-op).
+# ── Audio : PulseAudio systeme (sink gsm_audio) au boot ────────────────────
+# Chaine : osmo-gapk → ALSA gsm_out → sink null gsm_audio → monitor → loopback
+# → carte. system.pa autorise l'acces anonyme + prepare le sink ; le service
+# lance le demon au boot (ensure_pulse de start-direct.sh devient un no-op).
 if [ -f "$ROOTFS/etc/pulse/system.pa" ]; then
     sed -i 's|^load-module module-native-protocol-unix.*|load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native|' \
         "$ROOTFS/etc/pulse/system.pa"
-    # [2026-08-14] gsm_mic MANQUAIT ICI. Seul gsm_audio était déclaré, alors que
+    # [2026-08-14] gsm_mic MANQUAIT ICI. Seul gsm_audio etait declare, alors que
     # lib/audio.sh traite les deux sinks comme SOLIDAIRES (GSM_SINKS) et que
     # configs/asound.conf fait pointer `pcm.gsm_in` sur `gsm_mic.monitor`.
-    # Conséquence mesurée dans la VM : `pactl list short sources` sans gsm_mic
+    # Consequence mesuree dans la VM : `pactl list short sources` sans gsm_mic
     # → gapk_io n'initialise pas la capture et ABANDONNE LES DEUX SENS
-    #   (pq_alsa.c:168 « Couldn't init ALSA device 'gsm_in' » puis
-    #    gapk_io.c:468 « Failed to initialize GAPK I/O »)
-    # → appel parfaitement établi et TOTALEMENT MUET. Les deux sinks doivent
-    # être déclarés ensemble, ici, comme le dit déjà lib/audio.sh.
+    #   (pq_alsa.c:168 "Couldn't init ALSA device 'gsm_in'" puis
+    #    gapk_io.c:468 "Failed to initialize GAPK I/O")
+    # → appel parfaitement etabli et TOTALEMENT MUET. Les deux sinks doivent
+    # etre declares ensemble, ici, comme le dit deja lib/audio.sh.
     for _s in "gsm_audio:GSM_Audio" "gsm_mic:GSM_Mic"; do
         _n="${_s%%:*}"; _d="${_s##*:}"
         grep -q "sink_name=${_n}\b" "$ROOTFS/etc/pulse/system.pa" || \
@@ -941,24 +944,24 @@ if [ -f "$ROOTFS/etc/pulse/system.pa" ]; then
             >> "$ROOTFS/etc/pulse/system.pa"
     done
 fi
-# [2026-08-14] /etc/asound.conf N'ÉTAIT DÉPLOYÉ NULLE PART sur l'ISO. Il l'est
-# par ensure_pulse() de lib/audio.sh — mais lib/audio.sh n'est sourcé par
-# personne (son appelant annoncé, run_modules/25-audio.sh, n'existe pas). Sans
+# [2026-08-14] /etc/asound.conf N'ETAIT DEPLOYE NULLE PART sur l'ISO. Il l'est
+# par ensure_pulse() de lib/audio.sh - mais lib/audio.sh n'est source par
+# personne (son appelant annonce, run_modules/25-audio.sh, n'existe pas). Sans
 # ce fichier les PCM `gsm_out`/`gsm_in` que `mobile` ouvre n'existent pas, donc
-# la voix TCH n'atteint jamais gsm_audio. Vérifié absent dans la VM au boot.
+# la voix TCH n'atteint jamais gsm_audio. Verifie absent dans la VM au boot.
 if [ -f "$DIR/configs/asound.conf" ]; then
     cp -f "$DIR/configs/asound.conf" "$ROOTFS/etc/asound.conf"
     echo -e "  ${GREEN}✓${NC} /etc/asound.conf (PCM gsm_out/gsm_in → sinks PulseAudio)"
 fi
 cat > "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh" <<'ACHAIN'
 #!/bin/bash
-# osmo-audio-chain.sh — ferme la chaîne audio locale après le démarrage de
-# PulseAudio. Appelé en ExecStartPost par osmo-pulse.service.
-#   1. /etc/asound.conf présent (PCM gsm_out/gsm_in)
-#   2. les DEUX null-sinks gsm_audio + gsm_mic chargés
+# osmo-audio-chain.sh - ferme la chaine audio locale apres le demarrage de
+# PulseAudio. Appele en ExecStartPost par osmo-pulse.service.
+#   1. /etc/asound.conf present (PCM gsm_out/gsm_in)
+#   2. les DEUX null-sinks gsm_audio + gsm_mic charges
 #   3. le module-loopback gsm_audio.monitor → carte son
 # Sans (2), gapk_io abandonne LES DEUX SENS ; sans (3), la voix descendante est
-# jetée par le null-sink. Toujours exit 0 : l'audio ne doit jamais empêcher la
+# jetee par le null-sink. Toujours exit 0 : l'audio ne doit jamais empecher la
 # pile de monter. AUDIO=0 ou AUDIO_LOCAL_LOOPBACK=0 neutralisent.
 set -u
 for r in /opt/GSM/osmo_egprs /opt/osmo_egprs /etc/osmocom/osmo_egprs; do
@@ -977,15 +980,15 @@ Type=forking
 ExecStart=/usr/bin/pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 --log-target=file:/var/log/osmocom/pulse-system.log
 ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
 # [2026-08-14] Sans ceci, gsm_audio (module-null-sink) n'a AUCUN consommateur :
-# la voix descendante y est jetée par construction, la sortie ALSA reste
-# SUSPENDED et l'appel est muet. Le loopback est le maillon qui manquait — il
-# est posé ici, par le démon lui-même, donc il survit à un restart du service.
+# la voix descendante y est jetee par construction, la sortie ALSA reste
+# SUSPENDED et l'appel est muet. Le loopback est le maillon qui manquait - il
+# est pose ici, par le demon lui-meme, donc il survit a un restart du service.
 # Non fatal (le script sort 0 quoi qu'il arrive) : l'audio ne doit jamais
-# empêcher la pile de monter. AUDIO_LOCAL_LOOPBACK=0 le neutralise.
-# Passe par un wrapper /usr/local/sbin (même patron que osmo-update.sh) : une
+# empecher la pile de monter. AUDIO_LOCAL_LOOPBACK=0 le neutralise.
+# Passe par un wrapper /usr/local/sbin (meme patron que osmo-update.sh) : une
 # directive `ExecStartPost=/bin/sh -c "... \" ... \" ..."` avec guillemets
-# imbriqués est ACCEPTÉE par `systemctl cat` mais rejetée par le parseur —
-# `systemctl show -p ExecStartPost` revient alors VIDE et rien ne s'exécute.
+# imbriques est ACCEPTEE par `systemctl cat` mais rejetee par le parseur -
+# `systemctl show -p ExecStartPost` revient alors VIDE et rien ne s'execute.
 ExecStartPost=/usr/local/sbin/osmo-audio-chain.sh 30
 Restart=on-failure
 RestartSec=5
@@ -1023,9 +1026,9 @@ export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m
 ### end calypso-prompt ###
 BASH
 
-# Message du jour — bannière couleur + boîte alignée. Contenu de la boîte en
-# ASCII (pas de ←/é/• multi-octets) + padding printf => bords parfaitement
-# alignés. Généré à chaud pour injecter les couleurs ANSI dans /etc/motd.
+# Message du jour - banniere couleur + boite alignee. Contenu de la boite en
+# ASCII (pas de ←/e/• multi-octets) + padding printf => bords parfaitement
+# alignes. Genere a chaud pour injecter les couleurs ANSI dans /etc/motd.
 {
   B=$'\033[1;36m'; T=$'\033[1;37m'; G=$'\033[1;32m'; Y=$'\033[0;33m'; N=$'\033[0m'
   W=58
@@ -1059,8 +1062,8 @@ echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
 # ── Espace writable du live : 2 Go pour /dev/shm + /tmp ─────────────────────
 # Le live boote en 'toram' → racine = overlay tmpfs (RAM). Les gros writers de la
 # stack sont les cfiles I/Q dans /dev/shm (FFT/record, plusieurs centaines de Mo)
-# et /tmp. On force 2 Go sur ces deux tmpfs via fstab (cap RAM-backed : nécessite
-# autant de RAM dispo). systemd applique ces entrées au boot.
+# et /tmp. On force 2 Go sur ces deux tmpfs via fstab (cap RAM-backed : necessite
+# autant de RAM dispo). systemd applique ces entrees au boot.
 # Idempotent + anti-doublon : on purge d'abord toute entree tmpfs /tmp ou /dev/shm
 # preexistante (y compris la variante 'nosuid,nodev' sans size=) et l'ancien
 # commentaire de bloc, PUIS on (re)ecrit le bloc canonique size=2G. Garantit
@@ -1069,11 +1072,11 @@ touch "$ROOTFS/etc/fstab"
 sed -i -E \
     -e '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]/d' \
     -e '/^[[:space:]]*tmpfs[[:space:]]+\/dev\/shm[[:space:]]/d' \
-    -e '/^# osmo_egprs live — espace writable/d' \
+    -e '/^# osmo_egprs live - espace writable/d' \
     "$ROOTFS/etc/fstab"
 # /dev/shm : sizing via fstab (sans risque de doublon generateur).
 cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
-# osmo_egprs live — espace writable (cfiles I/Q FFT)
+# osmo_egprs live - espace writable (cfiles I/Q FFT)
 tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=2G   0 0
 FSTAB
 # /tmp : PAS dans fstab. Une entree fstab /tmp entre en collision avec l'unite
@@ -1108,15 +1111,15 @@ cat > "$ROOTFS/etc/profile.d/01-keyboard-setup.sh" <<'KBSCRIPT'
 echo ""
 echo -e "\033[1;36m══ Configuration clavier ══\033[0m"
 echo ""
-echo "  1) fr    — Français (AZERTY)"
-echo "  2) us    — English (QWERTY)"
-echo "  3) de    — Deutsch (QWERTZ)"
-echo "  4) es    — Español"
-echo "  5) it    — Italiano"
-echo "  6) pt    — Português"
-echo "  7) gb    — UK English"
-echo "  8) be    — Belge"
-echo "  9) ch    — Suisse"
+echo "  1) fr    - Francais (AZERTY)"
+echo "  2) us    - English (QWERTY)"
+echo "  3) de    - Deutsch (QWERTZ)"
+echo "  4) es    - Espanol"
+echo "  5) it    - Italiano"
+echo "  6) pt    - Portugues"
+echo "  7) gb    - UK English"
+echo "  8) be    - Belge"
+echo "  9) ch    - Suisse"
 echo "  0) Autre (saisie manuelle)"
 echo ""
 read -rp "  Choix [1] : " KB_CHOICE
@@ -1157,19 +1160,19 @@ dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 
 touch /var/lib/osmo-kb-done
 
-echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lancé automatiquement."
-echo -e "  \033[1;33mPour démarrer la stack manuellement : /opt/osmo_egprs/start-direct.sh\033[0m"
+echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lance automatiquement."
+echo -e "  \033[1;33mPour demarrer la stack manuellement : /opt/osmo_egprs/start-direct.sh\033[0m"
 
-echo -e "  \033[1;32m✓ Clavier configuré (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
+echo -e "  \033[1;32m✓ Clavier configure (${KB_LAYOUT}). Rechargez avec : loadkeys ${KB_LAYOUT}\033[0m"
 echo ""
 KBSCRIPT
 
 chmod +x "$ROOTFS/etc/profile.d/01-keyboard-setup.sh"
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 
-echo -e "  ${GREEN}✓${NC} config terminée"
+echo -e "  ${GREEN}✓${NC} config terminee"
 
-# ── Création du squashfs et de l'ISO ───────────────────────────────────────
+# ── Creation du squashfs et de l'ISO ───────────────────────────────────────
 echo -e "${GREEN}[9/9] Squashfs et ISO...${NC}"
 mkdir -p "$ISOROOT/live" "$ISOROOT/boot/grub"
 
@@ -1191,19 +1194,19 @@ cp "$INITRD"  "$ISOROOT/boot/initrd.img"
 cat > "$ISOROOT/boot/grub/grub.cfg" <<'GRUB'
 set default=0
 set timeout=5
-menuentry "osmo_egprs — Live (toram — RAM ~6 Go)" {
+menuentry "osmo_egprs - Live (toram - RAM ~6 Go)" {
     linux  /boot/vmlinuz boot=live toram quiet
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs — Live USB sans toram (RAM ~3 Go, lit depuis le medium)" {
+menuentry "osmo_egprs - Live USB sans toram (RAM ~3 Go, lit depuis le medium)" {
     linux  /boot/vmlinuz boot=live quiet
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs — Live verbose (toram — RAM ~6 Go)" {
+menuentry "osmo_egprs - Live verbose (toram - RAM ~6 Go)" {
     linux  /boot/vmlinuz boot=live toram
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs — Copy to RAM (toram — RAM ~6 Go)" {
+menuentry "osmo_egprs - Copy to RAM (toram - RAM ~6 Go)" {
     linux  /boot/vmlinuz boot=live toram copytoram quiet
     initrd /boot/initrd.img
 }
@@ -1229,10 +1232,10 @@ grub-mkrescue --xorriso="$XORRISO_WRAP" -o "$OUTPUT" "$ISOROOT" \
 fi
 
 if [ ! -f "$OUTPUT" ]; then
-    echo -e "${RED}grub-mkrescue a échoué — ISO non créée${NC}"
+    echo -e "${RED}grub-mkrescue a echoue - ISO non creee${NC}"
     exit 1
 fi
 
 echo ""
-echo -e "${GREEN}${BOLD}═══ ISO prête : ${OUTPUT} ($(du -sh "$OUTPUT"|cut -f1)) ═══${NC}"
+echo -e "${GREEN}${BOLD}═══ ISO prete : ${OUTPUT} ($(du -sh "$OUTPUT"|cut -f1)) ═══${NC}"
 echo -e "  Chemin absolu : $(readlink -f "$OUTPUT")"
