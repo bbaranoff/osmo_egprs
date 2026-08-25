@@ -85,8 +85,7 @@ need_pkg() {   # $1=commande  $2..=paquets candidats, dans l'ordre
     return 1
 }
 
-APT_REFRESHED=1
-need_pkg socat socat
+apt update && apt install socat -y
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /usr/local/sbin/osmo-sync.sh - animation puis synchro, ecrit UNE fois
