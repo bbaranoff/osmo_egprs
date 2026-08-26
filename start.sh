@@ -154,6 +154,55 @@ op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
 op_rctx_bsc()     { echo $(( $1 * 100 + 30 )); }
 op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
 
+# ── Le PLMN : le MCC est le PAYS, donc le NOEUD ; le MNC, l'operateur ────────
+# Un MCC fige a 001 pour tout le monde ne laissait que le MNC pour distinguer
+# les reseaux, et toute valeur ecrite en dur ailleurs - les IMSI des MS
+# l'etaient - retombait sur un PLMN plausible mais etranger : le mobile de
+# l'operateur 2 presentait 001-01, son reseau diffusait 001-02, et le Location
+# Updating restait sans reponse, pile entiere debout.
+# Le noeud, c'est ce que --node passe a start-direct.sh. Avec --node-per-op
+# chaque conteneur est son propre noeud, donc son propre pays, et le MNC
+# retombe a 01 ; sans lui, les conteneurs sont N operateurs d'un meme pays.
+op_plmn_node()  { if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then echo $(( ${WAN_NODE_ID:-1} + $1 - 1 )); else echo "${WAN_NODE_ID:-1}"; fi; }
+op_plmn_index() { if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then echo 1; else echo "$1"; fi; }
+op_mcc()        { printf '%03d' "$(op_plmn_node "$1")"; }
+op_mnc()        { printf '%02d' "$(op_plmn_index "$1")"; }
+
+# Noms sans espace : la commande VTY "short name" d'osmo-msc prend un mot, et
+# un nom coupe en deux y passe pour un argument surnumeraire.
+# ── Les jeux de donnees du banc : data/*.txt ─────────────────────────────────
+# Noms d'operateur, pays, etat civil et adresses ne sont pas ecrits dans ce
+# script : ils vivent dans data/, un par ligne, editables sans toucher au code.
+# On les MELANGE au chargement - c'est la le tirage au hasard - puis on les
+# fige pour toute la duree du lancement : un operateur qui changerait de nom ou
+# de pays entre deux lignes du journal ne serait plus le meme reseau.
+OSMO_DATA_DIR="${OSMO_DATA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/data}"
+
+# $1 = nom du tableau a remplir, $2 = fichier, le reste = valeurs de secours.
+# Le depot peut etre incomplet (une ISO n'embarque pas toujours data/) : sans
+# repli, un banc entier s'arreterait sur un fichier d'agrement absent.
+_load_pool() {
+    local -n __out=$1
+    local __file=$2; shift 2
+    __out=()
+    if [ -r "$__file" ]; then
+        if command -v shuf >/dev/null 2>&1; then
+            mapfile -t __out < <(grep -vE '^[[:space:]]*(#|$)' "$__file" | shuf)
+        else
+            mapfile -t __out < <(grep -vE '^[[:space:]]*(#|$)' "$__file")
+        fi
+    fi
+    [ "${#__out[@]}" -gt 0 ] || __out=("$@")
+}
+declare -a POOL_OP POOL_PAYS POOL_NOMS POOL_ADR
+_load_pool POOL_OP   "$OSMO_DATA_DIR/op.txt"        OsmoOP1 OsmoOP2 OsmoOP3
+_load_pool POOL_PAYS "$OSMO_DATA_DIR/pays.txt"      Syldavie Bordurie Poldevie
+_load_pool POOL_NOMS "$OSMO_DATA_DIR/noms.txt"      "Jean Dupont" "Marie Martin"
+_load_pool POOL_ADR  "$OSMO_DATA_DIR/adresses.txt"  "rue des Ondes Courtes, Fontaine-sur-Onde"
+
+op_default_name() { echo "${POOL_OP[$(( ($1 - 1) % ${#POOL_OP[@]} ))]}"; }
+op_country()      { local n; n=$(op_plmn_node "$1"); echo "${POOL_PAYS[$(( (n - 1) % ${#POOL_PAYS[@]} ))]}"; }
+
 # WAN helpers
 wan_sip_port()    { echo $(( WAN_SIP_BASE + ($1 - 1) * 2 )); }
 wan_rtp_start()   { echo $(( WAN_RTP_BASE + ($1 - 1) * WAN_RTP_PER_OP )); }
@@ -1069,6 +1118,8 @@ start_bridge_mode() {
         # ── PoC QEMU ──────────────────────────────────────────────────────────
         n_operators=1
         OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=2
+        # PoC a un seul operateur : le PLMN de reference, celui des IMSI du
+        # depot. On ne le derive pas du noeud, il n'y a pas de WAN ici.
         WAN_ENABLED="false"
         # --wan reste valable en PoC QEMU : un noeud = un operateur, c'est
         # exactement la maquette "N machines qui s'appellent".
@@ -1098,7 +1149,7 @@ start_bridge_mode() {
         fi
 
         local use_defaults="N"
-        wt_yesno "Valeurs par defaut" "Valeurs par defaut pour tous (MCC=001, MNC=01/02/...) ?" && use_defaults="O"
+        wt_yesno "Valeurs par defaut" "Valeurs par defaut pour tous (MCC=001/002/... MNC=01/02/...) ?" && use_defaults="O"
 
         local same_ms_all="N"
         if [ "$use_defaults" != "O" ]; then
@@ -1113,8 +1164,13 @@ start_bridge_mode() {
             common_ms=${common_ms:-8}
             if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
             for i in $(seq 1 "$n_operators"); do
-                OP_MCC[$i]="001"; OP_MNC[$i]=$(printf '%02d' "$i")
-                OP_NAME[$i]="OsmoOP${i}"; OP_MS[$i]=$common_ms
+                # Un PLMN par operateur, sur les DEUX composantes. Le MCC
+                # etait fige a 001 pour tout le monde : seul le MNC separait
+                # les reseaux, et la moindre valeur ecrite en dur ailleurs
+                # (les IMSI des MS l'etaient) retombait sur un PLMN plausible
+                # mais etranger. 001/002/003 rend la confusion visible.
+                OP_MCC[$i]=$(op_mcc "$i"); OP_MNC[$i]=$(op_mnc "$i")
+                OP_NAME[$i]="$(op_default_name "$i")"; OP_MS[$i]=$common_ms
             done
         else
             if [ "$same_ms_all" = "O" ]; then
@@ -1123,18 +1179,20 @@ start_bridge_mode() {
                 common_ms=${common_ms:-8}
                 if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
                 for i in $(seq 1 "$n_operators"); do
-                    local mcc mnc name dmnc; dmnc=$(printf '%02d' "$i")
-                    mcc=$(wt_input "Operateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
+                    local mcc mnc name dmcc dmnc dname
+                    dmcc=$(op_mcc "$i"); dmnc=$(op_mnc "$i"); dname="$(op_default_name "$i")"
+                    mcc=$(wt_input "Operateur ${i}" "MCC (pays = noeud $(op_plmn_node "$i"), $(op_country "$i")) :" "$dmcc") || exit 1; OP_MCC[$i]=${mcc:-$dmcc}
                     mnc=$(wt_input "Operateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
-                    name=$(wt_input "Operateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                    name=$(wt_input "Operateur ${i}" "Nom :" "$dname") || exit 1; OP_NAME[$i]=${name:-$dname}
                     OP_MS[$i]=$common_ms
                 done
             else
                 for i in $(seq 1 "$n_operators"); do
-                    local mcc mnc name n_ms dmnc; dmnc=$(printf '%02d' "$i")
-                    mcc=$(wt_input "Operateur ${i}" "MCC :" "001") || exit 1; OP_MCC[$i]=${mcc:-001}
+                    local mcc mnc name n_ms dmcc dmnc dname
+                    dmcc=$(op_mcc "$i"); dmnc=$(op_mnc "$i"); dname="$(op_default_name "$i")"
+                    mcc=$(wt_input "Operateur ${i}" "MCC (pays = noeud $(op_plmn_node "$i"), $(op_country "$i")) :" "$dmcc") || exit 1; OP_MCC[$i]=${mcc:-$dmcc}
                     mnc=$(wt_input "Operateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
-                    name=$(wt_input "Operateur ${i}" "Nom :" "OsmoOP${i}") || exit 1; OP_NAME[$i]=${name:-"OsmoOP${i}"}
+                    name=$(wt_input "Operateur ${i}" "Nom :" "$dname") || exit 1; OP_NAME[$i]=${name:-$dname}
                     n_ms=$(wt_input "Operateur ${i}" "Nombre de MS (1-64) :" "1") || exit 1; OP_MS[$i]=${n_ms:-1}
                     if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then OP_MS[$i]=1; fi
                 done
@@ -1262,18 +1320,48 @@ start_bridge_mode() {
     local all_subscribers_file
     all_subscribers_file=$(mktemp)
     echo "# op_id:ms_idx:imsi:msisdn:ki" > "$all_subscribers_file"
+    # ── L'annuaire : un etat civil pour chaque IMSI ──────────────────────────
+    # Un banc ne rend que des numeros a 15 chiffres, et l'on finit par lire
+    # "001010001000002" comme un mot de passe : impossible de dire de tete a
+    # quel operateur, a quel pays, a quel telephone il appartient. Cette table
+    # met un nom et une adresse en face de chaque abonne. Elle est FABRIQUEE -
+    # personnages et rues n'existent pas - mais elle n'invente pas l'IMSI :
+    # c'est exactement celui qui part au HLR trois lignes plus bas, dans la
+    # meme boucle, a partir de la meme variable.
+    # Les fiches sont tirees dans data/noms.txt et data/adresses.txt, melanges
+    # au chargement. On les parcourt EN ORDRE a partir de la liste melangee
+    # plutot que de retirer au sort a chaque abonne : deux abonnes du meme banc
+    # ne peuvent alors pas porter le meme nom tant que le fichier n'est pas
+    # epuise - et deux homonymes dans une trace, c'est une heure perdue.
+    local ANNUAIRE_FILE="${OSMO_ANNUAIRE:-/var/tmp/osmo-annuaire.csv}"
+    local _pick=0
+    printf 'imsi;msisdn;operateur;pays;mcc;mnc;nom;adresse;ki\n' > "$ANNUAIRE_FILE"
     for op_id in $(seq 1 "$n_operators"); do
         local mcc="${OP_MCC[$op_id]}" mnc="${OP_MNC[$op_id]}" n_ms="${OP_MS[$op_id]}"
+        local _pays; _pays="$(op_country "$op_id")"
         for ms_idx in $(seq 1 "$n_ms"); do
             local msin; msin=$(printf '%04d%06d' "${op_id}" "${ms_idx}")
             local imsi="${mcc}${mnc}${msin}"
             local msisdn=$(( op_id * 10000 + ms_idx ))
             local ki; ki=$(printf '00112233445566778899aabbccdd%02x%02x' "${ms_idx}" "${op_id}")
             echo "${op_id}:${ms_idx}:${imsi}:${msisdn}:${ki}" >> "$all_subscribers_file"
+            printf '%s;%s;%s;%s;%s;%s;%s;%s %s;%s\n' \
+                "$imsi" "$msisdn" "${OP_NAME[$op_id]}" "$_pays" "$mcc" "$mnc" \
+                "${POOL_NOMS[$(( _pick % ${#POOL_NOMS[@]} ))]}" \
+                "$(( RANDOM % 97 + 1 ))" \
+                "${POOL_ADR[$(( _pick % ${#POOL_ADR[@]} ))]}" \
+                "$ki" >> "$ANNUAIRE_FILE"
+            _pick=$(( _pick + 1 ))
         done
     done
     local total_subs; total_subs=$(( $(wc -l < "$all_subscribers_file") - 1 ))
     echo -e "${GREEN}Abonnes total : ${total_subs}${NC}"
+    # Aperçu : les premieres fiches, puis le chemin du fichier complet. Une
+    # table de 8 MS par operateur noierait le reste du demarrage.
+    awk -F';' 'NR==1 {next}
+               NR<=9 {printf "  %-16s %-6s %-16s %-12s %-22s %s\n", $1,$2,$3,$4,$7,$8}
+               END {if (NR>9) printf "  ... et %d autres\n", NR-9}' "$ANNUAIRE_FILE"
+    echo -e "  ${CYAN}Annuaire complet : ${ANNUAIRE_FILE}${NC}  (aussi /etc/osmocom/annuaire.csv dans chaque conteneur)"
     echo ""
 
     # ── Table rase sur la serie d'operateurs ────────────────────────────────
@@ -1307,7 +1395,7 @@ start_bridge_mode() {
         n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
         last_group_ip="127.0.0.${n_groups}"
 
-        echo -e "${CYAN}── Operateur ${i} : ${OP_NAME[$i]} (MCC=${OP_MCC[$i]} MNC=${OP_MNC[$i]}) ──${NC}"
+        echo -e "${CYAN}── Operateur ${i} : ${OP_NAME[$i]} ($(op_country "$i"), MCC=${OP_MCC[$i]} MNC=${OP_MNC[$i]}) ──${NC}"
         echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Prive : ${CYAN}${container_ip}${NC}"
         local _node_i="$WAN_NODE_ID" _op_i="$i"
         if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
@@ -1374,6 +1462,10 @@ start_bridge_mode() {
             "${OP_MCC[$i]}" "${OP_MNC[$i]}" "${OP_NAME[$i]}" \
             "$WAN_STP_TARGET" "no shutdown" \
             "$n_operators"
+
+        # L'annuaire voyage avec la pile : c'est dans le conteneur qu'on lit
+        # un IMSI dans un journal, pas sur l'hote.
+        [ -f "$ANNUAIRE_FILE" ] && cp "$ANNUAIRE_FILE" "$tmpdir/osmocom/annuaire.csv"
 
         local vol_args alsa_args
         vol_args=$(build_vol_args "$tmpdir")

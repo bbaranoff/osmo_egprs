@@ -244,9 +244,10 @@ fi
 # L'adresse du hub arrive par le MEME chemin que le noeud : start.sh la pose
 # dans l'environnement du conteneur (OSMO_HUB_IP, et INTER_STP_IP pour les
 # scripts plus anciens). Sans ce repli, HUB_IP restait vide alors que la
-# reponse etait deja la, et le lanceur ouvrait une boite whiptail pour
-# redemander l'adresse du hub : dans un conteneur lance sans terminal,
-# personne ne repond et le demarrage se figeait la, sans un mot.
+# reponse etait deja la : un conteneur lance par docker exec -d n'a pas de
+# terminal, la question du hub est donc sautee et l'adresse restait nulle
+# jusqu'aux configs. Le repli est pose ici, apres la boucle d'options, pour
+# que --hub-ip garde le dernier mot.
 [ -n "$HUB_IP" ] || HUB_IP="${OSMO_HUB_IP:-${INTER_STP_IP:-}}"
 # Pour les scripts qui ne connaissent que deux mondes : docker, ou tout le reste.
 case "$RUNTIME_ENV" in docker) NODE_MODE=docker ;; *) NODE_MODE=native ;; esac
@@ -431,8 +432,9 @@ generate_mobile_cfg() {
             -e "s|layer2-socket /tmp/osmocom_l2[_0-9]*|layer2-socket ${l2sock}|" \
             -e "s|sap-socket /tmp/osmocom_sap[_0-9]*|sap-socket ${sapsock}|" \
             -e "s|stick [0-9]*|stick ${arfcn}|" \
-            -e "s|imsi [0-9]*|imsi ${imsi}|" \
-            -e "s|ki comp128 [0-9a-f ]*|ki comp128 ${ki}|" \
+            -e "s|^\([[:space:]]*\)imsi .*|\1imsi ${imsi}|" \
+            -e "s|^\([[:space:]]*\)imei .*|\1imei $(rand_imei) 0|" \
+            -e "s|^\([[:space:]]*\)ki .*|\1ki comp128 ${ki}|" \
             -e "s|alsa-output-dev .*|alsa-output-dev ${aout}|" \
             -e "s|alsa-input-dev .*|alsa-input-dev ${ain}|" \
             "$tpl" > "$dest"
@@ -472,6 +474,46 @@ EOF
 # Tant que le lanceur du conteneur designe mobile_group1.cfg, ce qu'on ecrit ici
 # est inerte. Verifier avant de croire un reglage pose ici :
 #     pgrep -a mobile
+# ── IMSI et Ki des MS : le plan du HLR, pas celui de l'operateur 1 ──────────
+# Ces valeurs etaient ecrites EN DUR sur le PLMN de l'operateur 1 (001-01) et
+# sur son numero d'abonne. Sur l'operateur 2, dont le reseau diffuse un autre
+# MCC, le mobile presentait donc l'IMSI d'un abonne d'un autre pays : ni le MSC
+# ni le HLR n'ont de fiche a ce numero, le Location Updating reste sans reponse,
+# et l'on cherche la panne dans la BTS alors que la pile entiere est debout.
+# Le plan est celui de start.sh (section "HLR subscribers") :
+#     IMSI = MCC MNC <operateur sur 4 chiffres> <index du MS sur 6 chiffres>
+#     Ki   = 00112233445566778899aabbccdd <index du MS> <operateur>
+# MCC et MNC sont relus dans la configuration REELLEMENT deployee - c'est elle
+# que la BTS diffuse - et non redevines a partir d'une convention.
+MS_OP_ID="${OPERATOR_ID:-1}"
+MS_MCC="$(awk '$1=="network" && $2=="country" && $3=="code" {print $4; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
+MS_MNC="$(awk '$1=="mobile" && $2=="network" && $3=="code" {print $4; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
+[ -n "$MS_MCC" ] || MS_MCC="$(printf '%03d' "$MS_OP_ID")"
+[ -n "$MS_MNC" ] || MS_MNC="01"
+ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
+ms_ki()   { printf '00 11 22 33 44 55 66 77 88 99 aa bb cc dd %02x %02x' "$1" "$MS_OP_ID"; }
+
+# IMEI tire au hasard, cle de Luhn calculee - un par MS, jamais deux identiques
+# dans une meme trace.
+rand_imei() {
+    local body d i sum=0 dbl parity
+    body="35892500$(printf '%06d' "$(( (RANDOM << 15 | RANDOM) % 1000000 ))")"
+    for (( i = ${#body} - 1; i >= 0; i-- )); do
+        d=${body:i:1}
+        parity=$(( (${#body} - 1 - i) % 2 ))
+        if [ "$parity" -eq 0 ]; then
+            dbl=$(( d * 2 )); [ "$dbl" -gt 9 ] && dbl=$(( dbl - 9 ))
+            sum=$(( sum + dbl ))
+        else
+            sum=$(( sum + d ))
+        fi
+    done
+    printf '%s%d' "$body" "$(( (10 - sum % 10) % 10 ))"
+}
+
+printf '  %sPLMN MS%s    MCC %s  MNC %s  operateur %s  ->  IMSI %s / %s\n' \
+    "${C_DIM:-}" "${C_Z:-}" "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$(ms_imsi 1)" "$(ms_imsi 2)"
+
 say_begin "Generation mobile MS#1"
 MS1_CFG="${MOBILE_CFG_MS1_PATH:-$BB_DIR/mobile.cfg}"
 generate_mobile_cfg "$MS1_CFG" \
@@ -479,8 +521,8 @@ generate_mobile_cfg "$MS1_CFG" \
     /tmp/osmocom_l2 \
     /tmp/osmocom_sap_1 \
     514 \
-    "001010001000001" \
-    "00 11 22 33 44 55 66 77 88 99 aa bb cc dd 01 01"
+    "$(ms_imsi 1)" \
+    "$(ms_ki 1)"
 say_end " OK " "$C_OK" "Generation mobile MS#1" "$MS1_CFG"
 say_begin "Generation mobile MS#2 (faketrx)"
 MS2_CFG="$BB_DIR/mobile_faketrx_bts1.cfg"
@@ -489,8 +531,8 @@ generate_mobile_cfg "$MS2_CFG" \
     /tmp/ms2_l2 \
     /tmp/ms2_sap \
     516 \
-    "001010001000002" \
-    "00 11 22 33 44 55 66 77 88 99 aa bb cc dd 02 01" \
+    "$(ms_imsi 2)" \
+    "$(ms_ki 2)" \
     gsm_out gsm_in
 say_end " OK " "$C_OK" "Generation mobile MS#2 (faketrx)" "$MS2_CFG"
 # Export pour que les modules run.sh / hybrid puissent les retrouver
@@ -643,8 +685,8 @@ else
     printf '  %snoeud%s      %s\n' "$C_DIM" "$C_Z" "aucun - identite SS7 inchangee"
 fi
 printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
-printf '  %sMS#1%s       %s  IMSI 001010001000001  ARFCN 514  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG"
-printf '  %sMS#2%s       %s  IMSI 001010001000002  ARFCN 516  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG"
+printf '  %sMS#1%s       %s  IMSI %s  ARFCN 514  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG" "$(ms_imsi 1)"
+printf '  %sMS#2%s       %s  IMSI %s  ARFCN 516  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG" "$(ms_imsi 2)"
 printf '  %sjournaux%s   %s\n' "$C_DIM" "$C_Z" "$LOG_DIR"
 printf '  %schiffrement%s %s\n' "$C_DIM" "$C_Z" "$ENCRYPTION"
 printf '\n'
@@ -690,10 +732,11 @@ esac
 # une ISO qui demarre seule ne peut pas rester bloquee sur une question.
 ask_node_identity() {
     # NO_MENU=1 est ce que start.sh pose devant le lanceur quand les choix ont
-    # deja ete faits sur l'hote. Il n'etait lu NULLE PART ici : le conteneur
-    # arrivait donc sur les questions d'identite avec toutes les reponses en
-    # poche, et attendait sur une boite que personne n'allait valider. Un
-    # lanceur automatique ne pose pas de question.
+    # deja ete faits sur l'hote. Aujourd'hui la garde tty juste en dessous
+    # suffit (start.sh lance par docker exec -d, sans terminal) : ce test ne
+    # repare donc aucune panne observable, il aligne l'identite SS7 sur la
+    # meme convention que les menus de pile de start.sh, pour le jour ou le
+    # lanceur automatique aura un terminal.
     [ "${NO_MENU:-0}" = "1" ] && return 0
     [ -t 0 ] || return 0
     [ "$DRY" -eq 1 ] && return 0
@@ -756,9 +799,15 @@ if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
     # lanceur : sans ces exports, --regen rendait tous les noeuds au plan du
     # gabarit - point-code 1.1.2 pour tout le monde, ASP vers 127.0.0.1 - et
     # l'interco mourait au moment precis ou l'on demandait des configs neuves.
-    if [ -n "${NODE_ID:-${WAN_NODE_ID:-}}" ]; then
+    # On n'exporte que NODE_ID, sans repli sur WAN_NODE_ID. Partout ailleurs
+    # - ligne 800 ici, generate_configs.sh:349 - OSMO_WAN_NODE prime sur
+    # WAN_NODE_ID ; un repli en sens inverse ECRIRAIT la valeur perdante dans
+    # OSMO_WAN_NODE. Un --wan-id hors de 1-9 (rejete par detect_node_id, qui
+    # laisse alors NODE_ID vide) suffisait a effacer un OSMO_WAN_NODE valide
+    # et a faire sortir le lanceur en exit 2 sur son propre controle.
+    if [ -n "${NODE_ID:-}" ]; then
         export OSMO_ROLE=operator
-        export OSMO_WAN_NODE="${NODE_ID:-${WAN_NODE_ID:-}}"
+        export OSMO_WAN_NODE="$NODE_ID"
         [ -n "$HUB_IP" ] && export OSMO_HUB_IP="$HUB_IP"
     fi
 elif [ "${RUNTIME_ENV:-native}" = "docker" ]; then

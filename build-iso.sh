@@ -426,11 +426,16 @@ TMP_CID="$(docker create "$ISO_SRC_IMAGE" /bin/sh)"
 # sur une adresse du plan docker que la VM n'a jamais eue.
 # On ne copie donc que la config du hub - et pas par lien symbolique : le pgrep
 # de start-interstp.sh discrimine sur le NOM du fichier de conf passe a osmo-stp.
+# On retire donc la config STP d'operateur - et elle seule. Ne pousser que
+# osmo-stp-interop.cfg privait aussi le hub de run.sh, status.sh, check.sh et
+# entrypoint.sh, que /etc/osmocom est le seul a fournir (l'image osmocom-stp
+# part d'ubuntu:22.04 nu) : le chmod de l'etape 5 s'arretait alors sur un
+# fichier absent et la construction du hub - donc ./build-iso.sh sans
+# argument, qui commence par lui - echouait apres une heure de travail.
 if [ "$ISO_ROLE" = "interstp" ]; then
-    docker cp "$TEMP_CONFIG/osmocom/osmo-stp-interop.cfg" "$TMP_CID:/etc/osmocom/" 2>/dev/null || true
-else
-    docker cp "$TEMP_CONFIG/osmocom/."  "$TMP_CID:/etc/osmocom/"  2>/dev/null || true
+    rm -f "$TEMP_CONFIG/osmocom/osmo-stp.cfg"
 fi
+docker cp "$TEMP_CONFIG/osmocom/."  "$TMP_CID:/etc/osmocom/"  2>/dev/null || true
 # Le hub n'a pas d'Asterisk : lui pousser des configs SIP n'aurait pas de sens,
 # et l'image n'a meme pas /etc/asterisk.
 [ "$ISO_ROLE" = "interstp" ] || \
@@ -584,7 +589,14 @@ if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
         -e 's#^[[:space:]]*\([^[:space:]]*/\)\?trxcon\([[:space:]].*\)\?$#trxcon#' \
         -e 's#^[[:space:]]*\([^[:space:]]*/\)\?mobile\([[:space:]].*\)\?$#mobile#' \
         "$ROOTFS/etc/osmocom/run.sh"
+    # Garde-fou : sous set -e, un run.sh absent tuait la construction tout au bout
+# de l'etape 5. Le fichier vient de l'image, pas du depot : s'il manque, c'est
+# l'image qu'il faut regarder, pas une heure de build qu'il faut perdre.
+if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
     chmod +x "$ROOTFS/etc/osmocom/run.sh"
+else
+    echo -e "  ${YELLOW}!${NC} /etc/osmocom/run.sh absent de l'image ${CYAN}${ISO_SRC_IMAGE}${NC}"
+fi
 fi
 
 echo -e "  ${GREEN}✓${NC} patch SGSN + run.sh applique"
@@ -714,7 +726,7 @@ P="$ROOTFS/opt/osmo_egprs"
 # repertoire cible n'existait pas - et comme ils sont dans une chaine `&&`,
 # l'echec ne disait rien : l'ISO partait SANS aucun script WAN, et le seul
 # symptome etait un "introuvable" au moment d'en avoir besoin.
-mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont,network,tools}
+mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont,network,tools,data}
 # set_stp_ip.sh et network/set-node-id.sh MANQUAIENT : ce sont les deux scripts
 # que start-direct.sh appelle des qu'on lui donne --node. Sans set-node-id.sh il
 # refuse net ("network/set-node-id.sh absent", exit 1) - et c'est pourtant CE
@@ -737,7 +749,7 @@ ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct"
 # scripts WAN s'appellent entre eux (set-node-id.sh lit wan-nodes.sh,
 # set_ip_vm.sh...) : en copier une partie donne un repertoire qui a l'air
 # complet et casse au premier renvoi vers un voisin absent.
-for d in scripts configs checks helpers lib pont network; do
+for d in scripts configs checks helpers lib pont network data; do
     [ -d "$DIR/$d" ] && cp -r "$DIR/$d/." "$P/$d/" && find "$P/$d" -name "*.sh" -exec chmod +x {} \;
 done
 [ -f "$DIR/Dockerfile" ]     && cp "$DIR/Dockerfile"     "$P/"

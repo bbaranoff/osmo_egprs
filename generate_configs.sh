@@ -176,6 +176,31 @@ gc_load() {
     return 0
 }
 
+# ── IMEI tire au hasard, avec sa cle de Luhn ────────────────────────────────
+# L'IMEI etait derive du numero d'operateur : deux bancs identiques rendaient
+# les memes, et deux MS du meme operateur ne se distinguaient plus dans une
+# trace. On garde un TAC plausible (35892500) et on tire les six chiffres de
+# serie, puis on calcule la 15e position : un IMEI dont la cle est fausse est
+# rejete par certains equipements, et surtout il se voit tout de suite comme
+# fabrique a la main.
+rand_imei() {
+    local body d i sum=0 dbl parity
+    body="35892500$(printf '%06d' "$(( (RANDOM << 15 | RANDOM) % 1000000 ))")"
+    # Luhn sur les 14 chiffres : on double un chiffre sur deux en partant de la
+    # droite, en repliant les resultats a deux chiffres.
+    for (( i = ${#body} - 1; i >= 0; i-- )); do
+        d=${body:i:1}
+        parity=$(( (${#body} - 1 - i) % 2 ))
+        if [ "$parity" -eq 0 ]; then
+            dbl=$(( d * 2 )); [ "$dbl" -gt 9 ] && dbl=$(( dbl - 9 ))
+            sum=$(( sum + dbl ))
+        else
+            sum=$(( sum + d ))
+        fi
+    done
+    printf '%s%d' "$body" "$(( (10 - sum % 10) % 10 ))"
+}
+
 # ── La substitution des gabarits - implementation UNIQUE ─────────────────────
 #  Signature inchangee, pour rester compatible avec les deux appelants :
 #    apply_config_templates DEST CONTAINER_IP GATEWAY_IP OP_ID \
@@ -260,9 +285,18 @@ apply_config_templates() {
     local bvci="${BVCI:-$(( op_id * 10 + 2 ))}"
     local nsei="${NSEI:-$(( op_id * 10 ))}"
     local nsvci="${NSVCI:-$(( op_id * 10 ))}"
-    local imsi="${IMSI:-${mcc}${mnc}$(printf '%010d' "$op_id")}"
-    local imei="${IMEI:-3589250059$(printf '%04d' "$op_id")0}"
-    local ki="${KI:-00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x' "$op_id") ff}"
+    # Meme plan d'abonne que le HLR (start.sh, section "HLR subscribers") :
+    #    IMSI = MCC MNC <operateur sur 4 chiffres> <index du MS sur 6>
+    # Ce gabarit sert le MS #1. L'ancien %010d donnait 0000000002 la ou le HLR
+    # provisionne 0002000001 : la fiche existait, l'IMSI presente ne la visait
+    # pas, et l'attachement echouait sans que rien ne dise pourquoi.
+    local imsi="${IMSI:-${mcc}${mnc}$(printf '%04d%06d' "$op_id" 1)}"
+    local imei="${IMEI:-$(rand_imei)}"
+    # IMEI : tire au hasard a chaque generation (voir rand_imei).
+    # Ki : deux derniers octets = index du MS, puis operateur - l'ordre du HLR
+    # (printf '...dd%02x%02x' ms_idx op_id). Le "ff" final ne correspondait a
+    # aucune fiche : sans Ki commun, pas de Kc, et le CIPHER MODE est rejete.
+    local ki="${KI:-00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x %02x' 1 "$op_id")}"
     local sms_sc="${SMS_SC:-+336661234$(printf '%04d' "$op_id")}"
 
     local inter_local_ip rtp_start rtp_end sip_host_port

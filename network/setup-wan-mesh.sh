@@ -76,11 +76,20 @@ peer_is_backbone() { case "$1" in 172.20.0.*) return 0 ;; *) return 1 ;; esac; }
 # Nombre d'operateurs portes par un noeud DISTANT. Le compteur local ne le dit
 # pas : avec un noeud par conteneur il vaut 2 et fabriquait un trunk vers un
 # operateur inexistant, un pattern _<indicatif>2XXXX et une route SMS que
-# personne ne sert. WAN_NOPS vient de la table ; repli a 1 quand elle est
-# ancienne et ne porte pas encore le champ.
+# personne ne sert. WAN_NOPS vient de la table.
+#
+# Aucun producteur n'ecrit encore le 4e champ : le repli est donc, aujourd'hui,
+# le cas general. Un repli fixe a 1 aurait supprime l'operateur 2 de tout
+# montage CLASSIQUE ("--wan-nodes 1:a:11 2:b:22 --ops 2", ou chaque noeud porte
+# les deux operateurs) - trunk absent, appels inter-noeuds morts pour lui. On
+# ne replie sur 1 que la ou c'est vrai par construction : --op-is-node, un
+# operateur par noeud. Sinon on garde l'hypothese d'origine, les pairs sont
+# montes comme nous.
 node_nops() {
-    local n="${WAN_NOPS[$1]:-1}"
-    [[ "$n" =~ ^[1-9][0-9]*$ ]] || n=1
+    local n="${WAN_NOPS[$1]:-}"
+    if ! [[ "$n" =~ ^[1-9][0-9]*$ ]]; then
+        if [ "${OP_IS_NODE:-0}" = "1" ]; then n=1; else n="${N_OPS:-1}"; fi
+    fi
     echo "$n"
 }
 

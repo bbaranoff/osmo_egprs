@@ -137,7 +137,11 @@ else
     done <<< "$ASP_ROWS"
     [ "$attache" = 0 ] && printf '         aucun ASP rattache : noeud eteint, asp en shutdown, ou SCTP bloque\n'
   done <<< "$AS_ROWS"
-  orph="$(printf '%s\n' "$ASP_ROWS" | awk -F'|' '$2 !~ /^as-/ {printf "%s(%s) ", $1, $4}')"
+  # NF : sans aucun ASP, printf emet quand meme une ligne vide, dont le champ
+  # 2 (vide) ne matche pas /^as-/. Le bloc annoncait alors un orphelin "()" et
+  # un desaccord de routing context - dans l'etat ou il n'y a tout simplement
+  # rien d'attache, celui-la meme pour lequel on lance ce diagnostic.
+  orph="$(printf '%s\n' "$ASP_ROWS" | awk -F'|' 'NF && $2 !~ /^as-/ {printf "%s(%s) ", $1, $4}')"
   if [ -n "$orph" ]; then
     printf '  %s ASP connecte mais rattache a aucun AS : %s\n' "$WARN" "${orph% }"
     printf '         son routing context ne correspond a aucun AS du hub\n'
@@ -160,10 +164,17 @@ else
   for ip in $(printf '%s\n' "$ASP_ROWS" | awk -F'|' '$4 ~ /^[0-9]/ {print $4}' | sort -u); do
     case "$tab" in *" $ip "*) ;; *) hors="$hors $ip" ;; esac
   done
+  # Une adresse hors table ne peut masquer QU'UN seul noeud. Sans ce compte,
+  # un unique ASP masque - l'etat permanent d'un conteneur derriere le NAT -
+  # degradait en WARN tous les noeuds reellement absents, et le FAIL "aucune
+  # association" ne pouvait plus jamais sortir.
+  n_hors=0
+  for _ in $hors; do n_hors=$(( n_hors + 1 )); done
   for n in $NODES; do
     if printf '%s\n' "$ASP_ROWS" | awk -F'|' -v ip="${EXP_IP[$n]}" '$4 == ip {f = 1} END {exit !f}'; then
       printf '  %s %-15s %-20s (noeud %s de la table)\n' "$OK" "${EXP_IP[$n]}" "attachee" "$n"
-    elif [ -n "$hors" ]; then
+    elif [ "$n_hors" -gt 0 ]; then
+      n_hors=$(( n_hors - 1 ))
       printf '  %s %-15s %-20s (noeud %s de la table)\n' "$WARN" "${EXP_IP[$n]}" "pas vue telle quelle" "$n"
     else
       printf '  %s %-15s %-20s (noeud %s de la table)\n' "$KO" "${EXP_IP[$n]}" "aucune association" "$n"
