@@ -73,6 +73,29 @@ op_container()  { echo "${CONTAINER_PREFIX}$1"; }
 # 5060 et le port de base du relais.
 peer_is_backbone() { case "$1" in 172.20.0.*) return 0 ;; *) return 1 ;; esac; }
 
+# Sur quel port joindre l'operateur j du noeud r.
+#
+# Le plan 5080/5082/... n'existe QUE pour multiplexer plusieurs operateurs
+# derriere une seule adresse : c'est un hote docker qui republie les ports de
+# ses conteneurs, ou un noeud natif qui pose des REDIRECT vers 5060. Un noeud
+# qui ne porte QU'UN operateur n'a rien a multiplexer - son Asterisk ecoute
+# directement sur 5060.
+#
+# Le discriminant etait "l'adresse est-elle sur le backbone docker". C'etait
+# trop etroit : le noeud 3 du banc est une VM NATIVE, hors backbone, avec un
+# seul operateur. On visait donc 192.168.1.2:5080, ou rien n'ecoute, et le
+# trunk restait "Unavail" pendant que la VM repondait tranquillement sur 5060 :
+#     192.168.1.2:5060  -> SIP/2.0 401 Unauthorized
+#     192.168.1.2:5080  -> aucune reponse
+# (Elle repondrait sur 5080 si le maillage y avait tourne - il pose les
+#  REDIRECT - mais on ne peut pas en faire une hypothese depuis ici.)
+peer_sip_port() {          # $1 = id du noeud distant, $2 = operateur
+    if [ "$(node_nops "$1")" -eq 1 ]; then echo 5060; else wan_sip_port "$2"; fi
+}
+peer_sms_port() {          # $1 = id du noeud distant, $2 = operateur
+    if [ "$(node_nops "$1")" -eq 1 ]; then echo "$SMS_RELAY_BASE"; else wan_sms_port "$2"; fi
+}
+
 # L'adresse que la TABLE annonce pour nous n'est pas toujours celle que porte le
 # paquet a l'arrivee : derriere un routeur, la table donne l'adresse publique et
 # l'hote ne voit jamais que sa privee. Un "-d" sur une adresse absente de la
@@ -308,6 +331,40 @@ for i in "${OP_IDS[@]}"; do
     _dfil=()
     if addr_is_local "$lip"; then _dfil=(-d "$lip")
     else echo -e "  ${YELLOW}! ${lip} (table) n'est pas une adresse de cette machine : DNAT non restreint en destination${NC}"; fi
+    # ── LE SENS SORTANT : un port source PAR CONTENEUR ──────────────────────
+    # Tous les conteneurs font tourner Asterisk sur le meme port, 5060. Vers un
+    # pair du LAN ils sont masques derriere l'unique adresse de l'hote, et le
+    # masquage leur a donne LE MEME port traduit :
+    #     192.168.1.31.48057 > 192.168.1.2.5080   (venant de 172.20.0.11)
+    #     192.168.1.31.48057 > 192.168.1.2.5080   (venant de 172.20.0.12)
+    # Deux flux distincts, un seul tuple : les reponses du pair ne reviennent
+    # qu'a l'un des deux, et le trunk de l'autre reste "Unavail" pour toujours.
+    # Constate sur le banc, et invisible autrement - les deux conteneurs
+    # emettent bien, seul le retour manque.
+    #
+    # On epingle donc un port source stable et distinct par operateur. Stable
+    # aussi pour le pair : son identify voit toujours le meme couple
+    # adresse/port pour un noeud donne, au lieu d'un port tire au hasard a
+    # chaque expiration de conntrack.
+    if [ "$MODE" = "docker" ] && [ "${#REMOTES[@]}" -gt 0 ]; then
+        _snat_port=$(( 5060 + i ))
+        _lan_net="$(printf '%s' "$lip" | cut -d. -f1-3).0/24"
+        for _pr in udp tcp; do
+            run iptables -t nat -D POSTROUTING -s "$(op_backbone_ip "$i")" -p "$_pr" --sport 5060 \
+                -d "$_lan_net" -j SNAT --to-source "${lip}:${_snat_port}" 2>/dev/null || true
+            run iptables -t nat -I POSTROUTING 1 -s "$(op_backbone_ip "$i")" -p "$_pr" --sport 5060 \
+                -d "$_lan_net" -j SNAT --to-source "${lip}:${_snat_port}"
+        done
+        echo -e "  ${CYAN}Op${i}${NC} sort en SIP depuis ${CYAN}${lip}:${_snat_port}${NC} (port source epingle)"
+        # Les entrees conntrack deja etablies ignorent la regle neuve : Asterisk
+        # rafraichit son qualify toutes les 30 s, elles n'expirent jamais toutes
+        # seules. On les efface, sinon le correctif ne prend qu'au prochain
+        # redemarrage d'Asterisk - et l'on croit qu'il ne marche pas.
+        if [ "$DRY" -eq 0 ] && command -v conntrack >/dev/null 2>&1; then
+            conntrack -D -s "$(op_backbone_ip "$i")" -p udp >/dev/null 2>&1 || true
+        fi
+    fi
+
     for r in "${REMOTES[@]}"; do
         rip="${WAN_IP[$r]}"
         if [ "$MODE" = "docker" ]; then
@@ -433,10 +490,10 @@ endpoint=wan_n${r}_op1
 match=${rip}
 EOF
             for j in $(seq 1 "$rnops"); do
-                rsip=$(wan_sip_port "$j")
+                rsip=$(peer_sip_port "$r" "$j")
                 # Pair sur le backbone : le port publie sur l'hote n'est pas
                 # traverse dans le bridge, c'est 5060 que le conteneur ecoute.
-                if peer_is_backbone "$rip"; then rsip=5060; fi
+
                 cat <<EOF
 
 ; ── node ${r} · operateur ${j} · ${rip}:${rsip} ──
@@ -532,16 +589,22 @@ for i in "${OP_IDS[@]}"; do
             # Les operateurs du noeud DISTANT, pas les notres : compter les notres
             # produisait un _<indicatif>2XXXX vers un operateur que ce noeud-la
             # n'a pas - l'appel sortait et se perdait au lieu d'etre refuse ici.
+            # Le numero compose : <indicatif du noeud> + le MSISDN a SIX chiffres.
+            # Pour joindre l'operateur 1 du noeud 1 depuis ici : 11 600101.
+            # Le motif etait _<indicatif><operateur>XXXX, c'est-a-dire l'ancien
+            # plan a cinq chiffres ou le premier chiffre du numero ETAIT
+            # l'operateur. Depuis le passage a 600<op><rang>, plus rien ne
+            # matchait : l'appel tombait dans le fourre-tout, Asterisk repondait
+            # "successful" a l'envoi SMS et le message n'allait nulle part.
+            # Un seul motif suffit maintenant, la longueur etant fixe.
             for j in $(seq 1 "$(node_nops "$r")"); do
-                for pat in "XXXX" "XXXXX"; do
-                    cat <<EOF
-exten => _${rind}${j}${pat},1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → ${WAN_IP[$r]} ===)
+                cat <<EOF
+exten => _${rind}600${j}XX,1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → ${WAN_IP[$r]} ===)
  same => n,Dial(PJSIP/\${EXTEN:${off}}@wan_n${r}_op${j},,rT)
  same => n,NoOp(WAN \${DIALSTATUS})
  same => n,Congestion()
  same => n,Hangup()
 EOF
-                done
             done
             # L'operateur vise chez le pair, borne a ce qu'il porte reellement :
             # cette ligne prenait l'indice de l'operateur LOCAL. Vers un noeud
@@ -575,17 +638,19 @@ exten => _X.,1,NoOp(=== WAN OUT: indicatif inconnu \${EXTEN} ===)
 ; Le noeud emetteur a deja retire l'indicatif : on recoit le numero nu.
 [wan_in]
 EOF
+        # L'indicatif a ete retire par le noeud appelant : ce qui arrive ici est
+        # le MSISDN nu, six chiffres, 600<operateur><rang>. Meme correction que
+        # pour le sortant - le motif attendait l'ancien format a cinq chiffres.
         for j in "${OP_IDS[@]}"; do
-            for pat in "XXXX" "XXXXX"; do
                 cat <<EOF
-exten => _${j}${pat},1,NoOp(=== WAN IN → GSM Op${j}: \${EXTEN} ===)
+exten => _600${j}XX,1,NoOp(=== WAN IN → GSM Op${j}: \${EXTEN} ===)
  same => n,Set(CALLERID(all)=<\${CALLERID(num)}>)
+ same => n,Gosub(sub-annuaire,\${CALLERID(num)},1)
  same => n,Gosub(sub-record,s,1(\${EXTEN}))
  same => n,Dial(PJSIP/\${EXTEN}@gsm_msc,,rT)
  same => n,Congestion()
  same => n,Hangup()
 EOF
-            done
         done
         for sp in $softphones; do
             sp_num="${sp%%:*}"; sp_ep="${sp#*:}"
@@ -679,17 +744,23 @@ for i in "${OP_IDS[@]}"; do
                 # Vers un pair du backbone, le relais distant est joint dans le
                 # bridge : son port publie sur l'hote (7891 pour l'operateur 2)
                 # n'y mene pas, il ecoute le port de base.
-                rsms="$(wan_sms_port "$j")"
-                if peer_is_backbone "$rip"; then rsms="$SMS_RELAY_BASE"; fi
+                rsms="$(peer_sms_port "$r" "$j")"
+
                 printf 'w%s%s = %s:%s\n' "$r" "$j" "$rip" "$rsms"
             done
         done
         echo ""
-        echo "# <indicatif><op> → noeud distant ; strip = chiffres d'indicatif a retirer."
+        # La cle de routage est le PREFIXE compose : <indicatif>600<operateur>.
+        # Elle valait <indicatif><operateur>, c'est-a-dire l'ancien plan a cinq
+        # chiffres ou le numero commencait par le chiffre de l'operateur. Depuis
+        # 600<op><rang>, un SMS vers 11600101 ne matchait plus aucune route : le
+        # relais rendait un succes et le message n'allait nulle part.
+        # strip retire l'indicatif seul, ce qui laisse le MSISDN entier.
+        echo "# <indicatif>600<op> → noeud distant ; strip = chiffres d'indicatif a retirer."
         echo "[routes]"
         for r in "${REMOTES[@]}"; do
             for j in $(seq 1 "$(node_nops "$r")"); do
-                printf '%s%s = w%s%s strip=%s\n' "${WAN_IND[$r]}" "$j" "$r" "$j" "${#WAN_IND[$r]}"
+                printf '%s600%s = w%s%s strip=%s\n' "${WAN_IND[$r]}" "$j" "$r" "$j" "${#WAN_IND[$r]}"
             done
         done
         echo "$SMS_END"
@@ -738,9 +809,19 @@ fi
 echo ""
 echo -e "${GREEN}${BOLD}WAN mesh applique.${NC}"
 echo ""
+# Le resume annoncait "<indicatif>10001", l'ancien plan a cinq chiffres. Il
+# faut composer l'indicatif du noeud SUIVI DU MSISDN entier, six chiffres :
+# 600<operateur><rang>. Un exemple faux dans le resume final vaut une heure
+# perdue a essayer un numero qui ne matche aucun motif.
+# LOCAL_IND et REMOTES gardent le contexte du DERNIER operateur boucle plus
+# haut ; on repose donc le notre avant d'afficher, sinon la ligne annonce un
+# indicatif qui n'est pas celui de ce noeud.
+mesh_set_context "${OP_IDS[0]}"
 echo -e "  ${BOLD}Depuis ce noeud (${WAN_NODE_ID}, indicatif ${LOCAL_IND}) :${NC}"
 for r in "${REMOTES[@]}"; do
-    echo -e "    ${CYAN}${WAN_IND[$r]}${NC}10001  → MS 10001 op1 du noeud ${r} (${WAN_IP[$r]})"
+    for j in $(seq 1 "$(node_nops "$r")"); do
+        echo -e "    ${CYAN}${WAN_IND[$r]}${NC}600${j}01  → MS 600${j}01 (op${j}) du noeud ${r} (${WAN_IP[$r]})"
+    done
 done
 echo ""
 echo -e "  ${BOLD}Ports WAN (identiques sur chaque noeud) :${NC}"

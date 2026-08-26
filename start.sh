@@ -482,26 +482,26 @@ generate_extensions_interop_out() {
 [interop_out]
 
 EOF
+    # Un seul motif : les MSISDN font six chiffres, 600<operateur><rang>. Les
+    # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
+    # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
     for remote_op in $(seq 1 "$n_operators"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
-exten => _${remote_op}XXXX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
- same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
- same => n,Congestion()
- same => n,Hangup()
-
-exten => _${remote_op}XXXXX,1,NoOp(=== INTEROP OUT Op${remote_op} 5d: \${EXTEN} ===)
+exten => _600${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
  same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
  same => n,Congestion()
  same => n,Hangup()
 
 EOF
     done
-    cat <<'EOF'
-exten => _X.,1,NoOp(=== INTEROP OUT: inconnu ${EXTEN} ===)
- same => n,Congestion()
- same => n,Hangup()
-EOF
+    # PAS de fourre-tout _X. ici : le gabarit configs/extensions.conf en declare
+    # deja un dans ce meme contexte. Deux extensions identiques dans un contexte
+    # font refuser la seconde, avec six avertissements a chaque chargement :
+    #     add_priority: Unable to register extension '_X.' priority 1
+    #                   in 'interop_out', already in use
+    # Rien ne cassait - le fourre-tout du gabarit restait en place - mais ces
+    # lignes noyaient celles qui comptent.
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

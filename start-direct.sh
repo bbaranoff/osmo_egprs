@@ -512,6 +512,22 @@ MS_MNC="$(awk '$1=="mobile" && $2=="network" && $3=="code" {print $4; exit}' /et
 [ -n "$MS_MNC" ] || MS_MNC="01"
 ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 
+# ── LE QUATRIEME PROVISIONNEUR ──────────────────────────────────────────────
+# run.sh embarque son propre module d'abonnes (run_modules/21-abonnes-hlr.sh,
+# dans qemu-src). Il calcule son IMSI comme MCC+MNC+operateur+rang - la meme
+# formule que nous - mais lit MCC et MNC dans /etc/osmocom/osmo-msc.cfg via un
+# chemin qui n'aboutit pas toujours ; il retombe alors sur ses defauts, 001 et
+# 01. Sur l'operateur 2 il fabriquait donc 001010002000001 : un abonne que
+# personne ne presente, avec en prime un MSISDN de l'ancien plan (20001), qui
+# RETIENT ce numero et empeche le bon abonne de le recuperer.
+#
+# Il honore MCC et MNC depuis l'environnement. En les posant, son IMSI devient
+# exactement celui que start.sh a deja provisionne - et son propre controle
+# d'etat (mod_abonnes_hlr_status) le trouve present, donc il ne fait rien.
+# On neutralise ainsi un doublon par son idempotence, sans toucher a qemu-src.
+export MCC="${MCC:-$MS_MCC}"
+export MNC="${MNC:-$MS_MNC}"
+
 # ── Le plan radio : on le LIT, on ne le recalcule pas ───────────────────────
 # generate_configs.sh l'ecrit dans /etc/osmocom/radio-plan.env en meme temps
 # que les configurations. Le relire ici garantit que le mobile s'accorde sur
