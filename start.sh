@@ -1381,11 +1381,15 @@ start_bridge_mode() {
         # conteneur : la seconde commencait par "--stop" et coupait ce que la
         # premiere venait de monter. L'ASP de l'operateur 2 s'attachait, puis
         # tout s'arretait - "Client connected" suivi d'un silence.
-        if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
-            echo -e "  ${CYAN}[*] demarrage par start-direct.sh (plus bas)${NC}"
-        else
-            docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
-        fi
+        # run.sh EST conservé : c'est lui qui monte le coeur, et c'est de son
+        # HLR que depend l'etape suivante - l'attente du port 4258 puis le
+        # provisionnement des abonnes. L'en priver figeait le lancement sur
+        # "Attente HLR" pour un demarrage prevu plus tard.
+        #
+        # Les conteneurs qui doivent porter la pile COMPLETE la relancent
+        # ensuite via start-direct.sh, une fois les abonnes en base : la base
+        # HLR survit au redemarrage, le travail n'est pas perdu.
+        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
 
         # Attente HLR
         echo -ne "  ${GREEN}[*] Attente HLR (4258)${NC}"
@@ -1571,8 +1575,12 @@ start_bridge_mode() {
             echo -e "  ${CYAN}[*] $(op_container "$_c") : meme pile, detachee (noeud ${_cnode})${NC}"
             # Session "osmo", sur le socket PAR DEFAUT : c'est ce que l'on tape
             # naturellement une fois dans le conteneur - "tmux attach -t osmo",
-            # sans avoir a se souvenir d'un socket. Et plus de "--stop" : rien
-            # d'autre ne tourne dans ce conteneur, il n'y a rien a arreter.
+            # sans avoir a se souvenir d'un socket.
+            #
+            # --force suffit a reprendre la main sur le coeur que run.sh vient
+            # de monter : start-direct.sh arrete ce qu'il faut lui-meme. Un
+            # "--stop" separe, lance avant, coupait la pile sans garantir que la
+            # relance aboutisse - l'ASP s'attachait puis tout retombait.
             docker exec -d "$(op_container "$_c")" bash -c \
                 "cd /opt/GSM/osmo_egprs && \
                  tmux new-session -d -s osmo \
