@@ -363,6 +363,12 @@ build_alsa_args() {
     local src_asound="$(dirname "$0")/configs/asound.conf"
     local host_asound="/tmp/osmocom-alsa/asound.conf"
     mkdir -p /tmp/osmocom-alsa
+    # Docker cree un REPERTOIRE quand la source d'un bind -v n'existe pas :
+    # si un run precedent a laisse ce repertoire, le mount sur /etc/asound.conf
+    # (un fichier) echoue avec "not a directory". On le nettoie avant la copie.
+    if [ -d "$host_asound" ]; then
+        rm -rf "$host_asound"
+    fi
     if [ -d /dev/snd ]; then
         alsa_args="${alsa_args} --device /dev/snd"
         if getent group audio >/dev/null 2>&1; then
@@ -371,8 +377,15 @@ build_alsa_args() {
     fi
     local has_pulse="true"
     alsa_args="${alsa_args} -e PULSE_SERVER=unix:/run/pulse/native"
+    local asound_ok="false"
     if [ -f "$src_asound" ]; then
-        cp "$src_asound" "$host_asound"
+        if cp -f "$src_asound" "$host_asound" 2>/dev/null && [ -f "$host_asound" ]; then
+            asound_ok="true"
+        else
+            echo -e "  ${YELLOW}Audio : copie de asound.conf vers ${host_asound} impossible${NC}" >&2
+        fi
+    fi
+    if [ "$asound_ok" = "true" ]; then
         alsa_args="${alsa_args} -v ${host_asound}:/etc/asound.conf:rw"
         alsa_args="${alsa_args} -e ALSA_OUTPUT=gsm_out -e ALSA_INPUT=gsm_in"
         alsa_args="${alsa_args} -e ALSA_CARD=gsm_out -e GAPK_ALSA_DEV=gsm_out"
