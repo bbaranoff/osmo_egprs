@@ -142,13 +142,19 @@ else
     HUB_NODE="$INTER_STP"
 fi
 
+# HUB_REMOTE_IP - adresse du hub quand il ne tourne PAS ici : WAN docker
+# (start.sh --wan/--hub-ip injecte OSMO_HUB_IP dans les conteneurs), ou noeud
+# operateur natif. Vide si le hub est local, ou si aucune adresse n'est connue.
+HUB_REMOTE_IP="$(osmo_hub_is_remote 2>/dev/null || true)"
+
 # HUB_EXPECTED - "un hub devrait exister" (≠ "je peux l'interroger").
-# En docker les deux se confondent : pas de conteneur, pas de hub. En natif un
-# hub distant reste attendu des que /etc/osmo-role donne un OSMO_HUB_IP : la
-# route par defaut du STP local vers ce hub, elle, est parfaitement verifiable
-# d'ici, meme si l'etat interne du hub ne l'est pas.
+# Un hub distant reste attendu des qu'une adresse est connue - OSMO_HUB_IP de
+# /etc/osmo-role en natif, l'adresse --hub-ip vue par les conteneurs en docker
+# WAN : la route par defaut du STP local vers ce hub, elle, est parfaitement
+# verifiable d'ici, meme si l'etat interne du hub ne l'est pas. En docker SANS
+# WAN les deux notions se confondent toujours : pas de conteneur, pas de hub.
 HUB_EXPECTED=$HAS_INTER_STP
-if [ "$MODE" != docker ] && [ "$HUB_EXPECTED" -eq 0 ] && osmo_hub_ip >/dev/null 2>&1; then
+if [ "$HUB_EXPECTED" -eq 0 ] && [ -n "$HUB_REMOTE_IP" ]; then
     HUB_EXPECTED=1
 fi
 
@@ -179,10 +185,14 @@ echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
 boxline "          SS7 Health Check - $(date '+%H:%M:%S')"
 boxline "          mode : ${MODE_LABEL}"
-boxline "          ${N_OPS} operateur(s)  inter-stp=${HAS_INTER_STP}"
+if [ -n "$HUB_REMOTE_IP" ]; then
+    boxline "          ${N_OPS} operateur(s)  inter-stp : distant ${HUB_REMOTE_IP}"
+else
+    boxline "          ${N_OPS} operateur(s)  inter-stp=${HAS_INTER_STP}"
+fi
 echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 
-if [ "$N_OPS" -eq 0 ] && [ "$HAS_INTER_STP" -eq 0 ]; then
+if [ "$N_OPS" -eq 0 ] && [ "$HAS_INTER_STP" -eq 0 ] && [ -z "$HUB_REMOTE_IP" ]; then
     if [ "$MODE" = docker ]; then
         echo -e "${RED}Aucun container trouve${NC}"
     else
@@ -250,6 +260,25 @@ if [ "$HAS_INTER_STP" -eq 1 ]; then
             fail "Routes : ${n_prohib} PROHIB detectees"
         fi
     fi
+elif [ -n "$HUB_REMOTE_IP" ]; then
+    # Hub DISTANT (WAN) : "conteneur absent" serait un contresens - le hub
+    # tourne, ailleurs. Ce qui est observable d'ici, c'est le LIEN vers lui.
+    banner "INTER-STP (hub distant ${HUB_REMOTE_IP})"
+
+    # Le lien operateur → hub est du M3UA sur SCTP (osmo-stp.cfg : "asp
+    # asp-to-inter 2908 2910 m3ua"). Une sonde TCP sur 2908 rendrait
+    # "Connection refused" sur un lien parfaitement monte : c'est l'association
+    # SCTP, vue depuis les noeuds, qui fait foi.
+    hub_assoc="$(osmo_hub_assoc "$HUB_REMOTE_IP" 2>/dev/null)" && hub_rc=0 || hub_rc=$?
+    case "$hub_rc" in
+        0) ok "Lien M3UA/SCTP → ${HUB_REMOTE_IP}:${OSMO_HUB_M3UA_PORT} : ${hub_assoc} noeud(s) associe(s)" ;;
+        1) fail "Aucune association SCTP vers ${HUB_REMOTE_IP}:${OSMO_HUB_M3UA_PORT} (${hub_assoc}) - hub arrete, filtre, ou ASP shutdown" ;;
+        *) skip "Association SCTP vers ${HUB_REMOTE_IP} non sondable ici (ss --sctp absent des noeuds)" ;;
+    esac
+
+    # Pas de faux echec sur l'etat INTERNE du hub : son VTY n'ecoute que sur SA
+    # boucle locale. La phrase vient de _mode.sh et nomme l'IP reelle.
+    skip "$(osmo_hub_hint)"
 else
     banner "INTER-STP"
     if [ "$MODE" = docker ]; then
@@ -383,13 +412,18 @@ done
 # ══════════════════════════════════════════════════════════════════════════════
 # CHECK 3 : Matrice de connectivite simple
 # ══════════════════════════════════════════════════════════════════════════════
-# La matrice croise les operateurs LOCAUX entre eux via le hub local : elle a du
-# sens en docker, et en natif multi-operateur (netns). Sur un natif mono-
-# operateur elle se reduirait a une case "self" - on l'annonce ignoree plutot
-# que de la dessiner vide, et on renvoie vers le check qui, lui, sait regarder
-# entre machines.
-if [ "$HAS_INTER_STP" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
-    banner "MATRICE DE CONNECTIVITE (via inter-STP)"
+# La matrice croise les operateurs LOCAUX entre eux via le hub : elle a du sens
+# des qu'un hub est ATTENDU (local, ou distant en WAN - le trafic op1↔op2 le
+# traverse dans les deux cas) et qu'il y a plus d'un operateur ici. Sur un
+# mono-operateur elle se reduirait a une case "self" - on l'annonce ignoree
+# plutot que de la dessiner vide, et on renvoie vers le check qui, lui, sait
+# regarder entre machines.
+if [ "$HUB_EXPECTED" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
+    if [ -n "$HUB_REMOTE_IP" ]; then
+        banner "MATRICE DE CONNECTIVITE (via inter-STP distant ${HUB_REMOTE_IP})"
+    else
+        banner "MATRICE DE CONNECTIVITE (via inter-STP)"
+    fi
 
     printf "  %-8s" ""
     for j in "${OPS[@]}"; do printf "  Op%-3s" "$j"; done

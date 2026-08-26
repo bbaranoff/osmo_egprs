@@ -318,6 +318,20 @@ elif osmo_is_native; then
         print_row "Hub" "$(osmo_hub_hint)"
     fi
 
+elif hub_remote="$(osmo_hub_is_remote 2>/dev/null)"; then
+    # WAN : le hub vit sur une AUTRE machine (--hub-ip / OSMO_HUB_IP), il ne
+    # peut donc pas figurer dans un dump pris ici, et son VTY 4239 n'ecoute que
+    # sur sa propre boucle locale. Ce qui est observable d'ici, c'est le LIEN
+    # vers lui : l'association SCTP que chaque noeud tient ouverte.
+    print_header "INTER-STP HUB - distant (${hub_remote})"
+    hub_assoc="$(osmo_hub_assoc "$hub_remote" 2>/dev/null)" && hub_rc=0 || hub_rc=$?
+    case "$hub_rc" in
+        0) print_row "Lien M3UA/SCTP" "${hub_assoc} noeud(s) associe(s) a ${hub_remote}:${OSMO_HUB_M3UA_PORT}" ;;
+        1) print_row "Lien M3UA/SCTP" "aucune association vers ${hub_remote}:${OSMO_HUB_M3UA_PORT}" ;;
+        *) print_row "Lien M3UA/SCTP" "non sondable ici (ss --sctp absent des noeuds)" ;;
+    esac
+    print_row "Etat interne" "$(osmo_hub_hint)"
+
 elif hub_here="$(osmo_hub)"; then
     # Mode docker : le conteneur tourne mais ne figure pas dans le dump - le
     # dump est donc anterieur au hub. Sans conteneur hub, on ne dit rien, comme

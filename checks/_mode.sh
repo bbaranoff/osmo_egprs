@@ -290,17 +290,94 @@ osmo_hub() {
     return 1
 }
 
-# osmo_hub_ip - adresse du hub. docker : 172.20.0.10. natif : OSMO_HUB_IP de
-# /etc/osmo-role (idiome de wan_ss7_check.sh:193). Rien a dire → rc 1.
+# OSMO_HUB_M3UA_PORT - port M3UA du hub inter-STP (helpers/create_interop.sh
+# ecrit "listen m3ua 2908"). Les STP operateur, eux, ecoutent sur 2905.
+: "${OSMO_HUB_M3UA_PORT:=2908}"
+
+# _osmo_hub_ip_probe - demande aux noeuds operateur ou est leur hub. Deux
+# sources, dans cet ordre :
+#   1. OSMO_HUB_IP, injecte dans chaque conteneur par start.sh (-e OSMO_HUB_IP)
+#      des que --hub-ip / --wan designe un inter-STP hors dorsale docker ;
+#   2. le "remote-ip" de l'asp asp-to-inter dans /etc/osmocom/osmo-stp.cfg, qui
+#      reste vrai meme sans environnement (conteneur relance a la main, ISO).
+# Rend 1 sans rien ecrire si aucun noeud ne sait repondre.
+_osmo_hub_ip_probe() {
+    local op v=""
+    for op in $(osmo_ops 2>/dev/null); do
+        v="$(osmo_exec "$op" printenv OSMO_HUB_IP 2>/dev/null | tr -d "\r" | tail -1)"
+        [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }
+        v="$(osmo_exec "$op" cat /etc/osmocom/osmo-stp.cfg 2>/dev/null \
+             | awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' | tr -d "\r")"
+        [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }
+    done
+    return 1
+}
+
+# osmo_hub_ip - adresse du hub. Rien a dire → rc 1.
+#   docker + hub local  : la dorsale, 172.20.0.10 ;
+#   docker sans hub local : l'adresse WAN vue par les operateurs (--hub-ip) ;
+#   natif : OSMO_HUB_IP de /etc/osmo-role (idiome de wan_ss7_check.sh:193),
+#           puis, a defaut, la meme sonde par les noeuds.
+# Le resultat est mis en cache : la sonde coute un "docker exec" par noeud, et
+# les checks appellent cette fonction plusieurs fois par passage.
+_OSMO_HUB_IP_CACHE=""
 osmo_hub_ip() {
-    if [ "$(osmo_mode)" = docker ]; then
-        printf '%s.10\n' "$OSMO_BACKBONE_NET"; return 0
+    if [ -n "$_OSMO_HUB_IP_CACHE" ]; then
+        [ "$_OSMO_HUB_IP_CACHE" = "-" ] && return 1
+        printf '%s\n' "$_OSMO_HUB_IP_CACHE"; return 0
     fi
     local v=""
-    [ -r /etc/osmo-role ] && \
-        v="$(awk -F= '/^OSMO_HUB_IP=/ { gsub(/[ \r\t]/, "", $2); print $2 }' /etc/osmo-role 2>/dev/null | tail -1)"
-    [ -n "$v" ] || return 1
+    if [ "$(osmo_mode)" = docker ]; then
+        if osmo_hub >/dev/null 2>&1; then
+            printf '%s.10\n' "$OSMO_BACKBONE_NET"; return 0
+        fi
+    else
+        [ -r /etc/osmo-role ] && \
+            v="$(awk -F= '/^OSMO_HUB_IP=/ { gsub(/[ \r\t]/, "", $2); print $2 }' /etc/osmo-role 2>/dev/null | tail -1)"
+    fi
+    [ -n "$v" ] || v="$(_osmo_hub_ip_probe 2>/dev/null || true)"
+    if [ -z "$v" ]; then _OSMO_HUB_IP_CACHE="-"; return 1; fi
+    _OSMO_HUB_IP_CACHE="$v"
     printf '%s\n' "$v"
+}
+
+# osmo_hub_is_remote - rc 0 (et ecrit l'IP) quand un hub est CONFIGURE mais
+# vit AILLEURS : c'est le cas WAN (--hub-ip / --wan), ou le noeud operateur
+# natif. Une adresse de dorsale docker ou de boucle locale sans conteneur hub
+# ne compte pas : la, le hub n'est pas distant, il est simplement absent.
+osmo_hub_is_remote() {
+    local ip
+    osmo_hub >/dev/null 2>&1 && return 1
+    ip="$(osmo_hub_ip 2>/dev/null)" || return 1
+    [ -n "$ip" ] || return 1
+    case "$ip" in
+        "${OSMO_BACKBONE_NET}."*|127.*|localhost) return 1 ;;
+    esac
+    printf '%s\n' "$ip"
+}
+
+# osmo_hub_assoc [ip] [port] - combien de noeuds locaux ont une association
+# SCTP ETABLIE vers le hub ? Le lien inter-STP est du M3UA sur SCTP : une
+# sonde TCP ("nc -z" sur 2908) rend "Connection refused" meme quand le lien
+# est parfaitement monte. C'est "ss --sctp" qui dit la verite, et il la dit
+# depuis le NOEUD, pas depuis l'hote : le conteneur a sa propre pile reseau.
+# Ecrit "etablies/total" ; rc 0 si au moins une, 1 si aucune, 2 si la sonde
+# n'est pas praticable (ni ss, ni support --sctp, ni noeud interrogeable).
+osmo_hub_assoc() {
+    local ip="${1:-}" port="${2:-$OSMO_HUB_M3UA_PORT}" op out probed=0 n=0 tot=0 pat
+    [ -n "$ip" ] || ip="$(osmo_hub_ip 2>/dev/null || true)"
+    [ -n "$ip" ] || return 2
+    pat="${ip//./\\.}:${port}"
+    for op in $(osmo_ops 2>/dev/null); do
+        tot=$((tot+1))
+        out="$(osmo_exec "$op" ss -an --sctp 2>/dev/null || true)"
+        [ -n "$out" ] || continue
+        probed=1
+        grep -qE "ESTAB.*[[:space:]]${pat}([[:space:]]|$)" <<<"$out" && n=$((n+1))
+    done
+    [ "$probed" -eq 1 ] || return 2
+    printf '%s/%s\n' "$n" "$tot"
+    [ "$n" -gt 0 ]
 }
 
 # osmo_hub_hint - phrase prete pour skip(), quand le hub existe mais est
@@ -313,7 +390,7 @@ osmo_hub_hint() {
     if [ -n "$ip" ]; then
         printf 'hub distant %s : VTY 4239 non joignable depuis ce noeud - lancez ./start-interstp.sh --status sur le hub\n' "$ip"
     else
-        printf 'aucun inter-STP local, et pas de OSMO_HUB_IP dans /etc/osmo-role - hub non interrogeable depuis ce noeud\n'
+        printf 'aucun inter-STP local, et aucune adresse de hub connue ici (OSMO_HUB_IP, --hub-ip) - hub non interrogeable\n'
     fi
 }
 

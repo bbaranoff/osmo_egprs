@@ -1492,6 +1492,19 @@ start_bridge_mode() {
         if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
             _node_i=$(( WAN_NODE_ID + i - 1 ))
             _op_i=1
+            # Le numero de noeud vit dans 1..9 : au-dela, le point code ecrit
+            # ici (1.<noeud><op>.<role>) sort du format ITU 3-8-3, aucun AS
+            # correspondant n'existe au hub (helpers/create_interop.sh borne a
+            # 9 noeuds), et network/set-node-id.sh comme start-direct.sh
+            # refusent l'argument. Mieux vaut le dire ici, avant de fabriquer
+            # une identite SS7 que personne ne connaitra.
+            if [ "$_node_i" -gt 9 ] || [ "$_node_i" -lt 1 ]; then
+                echo -e "${RED}[WAN] --node-per-op : l'operateur ${i} tomberait sur le noeud ${_node_i}${NC}" >&2
+                echo -e "${RED}      Les numeros de noeud vont de 1 a 9. Avec --wan-id ${WAN_NODE_ID},"' '"${NC}" >&2
+                echo -e "${RED}      le maximum est $(( 10 - WAN_NODE_ID )) operateur(s) : baissez --wan-id,"' '"${NC}" >&2
+                echo -e "${RED}      reduisez --operators, ou retirez --node-per-op.${NC}" >&2
+                exit 1
+            fi
         fi
         local _pc_mid="$i" _rctx_inter=""
         if [ "${WAN_MESH:-0}" = "1" ]; then
@@ -1983,10 +1996,20 @@ start_bridge_mode() {
 
         # Les arguments de noeud d'un conteneur : sa place dans le plan WAN.
         _node_args() {                # $1=indice du conteneur
-            local _n
-            if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then _n=$(( ${WAN_NODE_ID:-1} + $1 - 1 ))
-            else _n="${WAN_NODE_ID:-1}"; fi
-            [ "${WAN_MESH:-0}" = "1" ] && printf -- '--node %s --op 1 --hub-ip %s' "$_n" "$WAN_STP_TARGET"
+            # Le rang d'operateur n'est 1 que si CHAQUE conteneur est un noeud.
+            # Sinon les conteneurs partagent le noeud et se distinguent par
+            # leur rang : figer "--op 1" faisait reecrire par set-node-id.sh
+            # les trois configs du conteneur 2 avec l'identite du conteneur 1
+            # (meme point code, meme routing context) - le hub, en override,
+            # donnait alors tout le trafic au dernier attache. Meme convention
+            # que le plan ecrit plus haut (_node_i / _op_i).
+            local _n _op
+            if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
+                _n=$(( ${WAN_NODE_ID:-1} + $1 - 1 )); _op=1
+            else
+                _n="${WAN_NODE_ID:-1}"; _op="$1"
+            fi
+            [ "${WAN_MESH:-0}" = "1" ] && printf -- '--node %s --op %s --hub-ip %s' "$_n" "$_op" "$WAN_STP_TARGET"
             return 0
         }
 
@@ -2244,15 +2267,23 @@ while [ $# -gt 0 ]; do
         --wan-conf=*)   WAN_CONF_FILE="${1#*=}" ;;
         --build-stp)      BUILD_STP=1 ;;
         --hub-node)       WAN_HUB_NODE="${2:-1}"; WAN_HUB_NODE_GIVEN=1; shift ;;
-        --hub-ip)         WAN_HUB_IP="${2:-}"; shift ;;
-        --node-per-op)    WAN_NODE_PER_OP=1; WAN_NODE_PER_OP_GIVEN=1 ;;
+        # --hub-ip et --node-per-op IMPLIQUENT le plan WAN. Sans WAN_MESH=1,
+        # _pc_mid retombe sur le plan LOCAL (_pc_mid="$i") : les point codes
+        # deviennent 1.1.2 / 1.2.2 et les routing contexts 150 / 250, calcules
+        # a l'identique sur CHAQUE machine du WAN. Deux noeuds attaches au meme
+        # hub presentent alors le meme PC et le meme contexte ; le hub etant en
+        # traffic-mode override, le dernier ASP attache vole le trafic du
+        # premier, en silence. C'est exactement ce que le plan WAN, indexe par
+        # numero de noeud, existe pour eviter.
+        --hub-ip)         WAN_HUB_IP="${2:-}"; WAN_MESH=1; shift ;;
+        --node-per-op)    WAN_NODE_PER_OP=1; WAN_NODE_PER_OP_GIVEN=1; WAN_MESH=1 ;;
         --host)           HOST_LAN_IP="${2:-}"; shift ;;
         --host=*)         HOST_LAN_IP="${1#*=}" ;;
         --operators)      OPERATOR_COUNT_HINT="${2:-}"; shift ;;
         --operators=*)    OPERATOR_COUNT_HINT="${1#*=}" ;;
         --operator)       OPERATOR_DECLS+=("${2:-}"); WAN_MESH=1; shift ;;
         --operator=*)     OPERATOR_DECLS+=("${1#*=}"); WAN_MESH=1 ;;
-        --hub-ip=*)       WAN_HUB_IP="${1#*=}" ;;
+        --hub-ip=*)       WAN_HUB_IP="${1#*=}"; WAN_MESH=1 ;;
         --hub-node=*)     WAN_HUB_NODE="${1#*=}" ;;
         --virtualbox)     WAN_MESH=1; VBOX_INTERCO=1 ;;
         --virtualbox=*)   WAN_MESH=1; VBOX_INTERCO=1; VBOX_NODES="${1#*=}" ;;

@@ -215,6 +215,16 @@ echo ""
 # point codes qu'il faut verifier - pas leur absence.
 HUB_IP=""
 [ -r /etc/osmo-role ] && HUB_IP="$(awk -F= '/^OSMO_HUB_IP=/{print $2}' /etc/osmo-role)"
+# En docker, /etc/osmo-role n'existe pas sur l'hote : l'adresse du hub est
+# injectee dans les conteneurs par start.sh (-e OSMO_HUB_IP, cf. --hub-ip).
+# Sans ce repli, un hub WAN parfaitement declare passait pour "un lien non
+# maitrise" faute d'etre reconnu comme LE hub.
+if [ -z "$HUB_IP" ]; then
+    for _i in $(seq 1 "$N_OPS"); do
+        HUB_IP="$(inside "$_i" 'printenv OSMO_HUB_IP' | tr -d '\r' | tail -1)"
+        [ -n "$HUB_IP" ] && break
+    done
+fi
 
 # 5a - ou pointe l'ASP local ?
 for i in $(seq 1 "$N_OPS"); do
@@ -229,12 +239,18 @@ for i in $(seq 1 "$N_OPS"); do
         else
             fail "op${i} : ASP → hub ${remote} mais ${BOLD}shutdown${NC} - aucun SS7 ne passera"
         fi
-        # Un hub joignable ou non, ca ne se devine pas depuis la config.
-        if command -v nc >/dev/null 2>&1 && nc -z -w2 "$remote" 2908 2>/dev/null; then
-            ok "op${i} : hub ${remote}:2908 joignable"
-        else
-            warn "op${i} : hub ${remote}:2908 injoignable - l'ASP restera DOWN"
+        # Un hub joignable ou non, ca ne se devine pas depuis la config. Mais
+        # le lien est du M3UA sur SCTP : "nc -z" (TCP) rend "Connection
+        # refused" sur un hub parfaitement vivant. La preuve, c'est
+        # l'association SCTP ETABLIE, vue depuis le noeud lui-meme.
+        assoc="$(inside "$i" "ss -an --sctp" | grep -E "ESTAB.*[[:space:]]${remote//./\\.}:2908([[:space:]]|\$)" || true)"
+        if [ -n "$assoc" ]; then
+            ok "op${i} : association SCTP etablie vers le hub ${remote}:2908"
+        elif inside "$i" "ss -an --sctp" | grep -q .; then
+            fail "op${i} : aucune association SCTP vers ${remote}:2908 - l'ASP est DOWN"
             echo -e "     ${CYAN}Sur le noeud inter-STP : ./start-interstp.sh --status${NC}"
+        else
+            skip "op${i} : ss --sctp indisponible - lien vers ${remote}:2908 non verifiable"
         fi
     else
         case "$remote" in
@@ -270,7 +286,10 @@ fi
 LOCAL_IP="$(wan_local_ip)"
 for port in 2905 2908; do
     if command -v ss >/dev/null 2>&1; then
-        listen="$(ss -lntp 2>/dev/null | grep ":${port} ")"
+        # M3UA tourne sur SCTP dans ce depot (osmo-stp.cfg : "listen m3ua ..."),
+        # pas sur TCP : "ss -lntp" seul ne verrait RIEN et conclurait a tort
+        # "aucun ecouteur". On regarde les deux transports.
+        listen="$( { ss -lntp 2>/dev/null; ss -ln --sctp 2>/dev/null; } | grep ":${port} ")"
         if [ -z "$listen" ]; then
             ok "M3UA ${port} : aucun ecouteur sur l'hote"
         elif echo "$listen" | grep -qE '0\.0\.0\.0:'"${port}"'|\[::\]:'"${port}"; then
