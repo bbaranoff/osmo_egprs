@@ -56,6 +56,21 @@ IPS=""
 # VirtualBox) n'existe sur aucun segment des que les VM sont pontees : le hub
 # s'y liait sans que personne ne puisse l'atteindre.
 HUB_IP="192.168.1.49"
+# ── La table du banc, defaut de tous les prompts ────────────────────────────
+# Les conteneurs d'abord, dans l'ordre de leur nom, puis les machines distantes.
+# C'est le meme ordre que start.sh et build-iso.sh : une table lue ici doit
+# ressembler a celle qu'ils ecrivent, sinon les point codes d'un cote ne
+# correspondent plus aux AS declares de l'autre.
+#   noeud 1  172.20.0.11  osmo-operator-1  (conteneur)
+#   noeud 2  172.20.0.12  osmo-operator-2  (conteneur)
+#   noeud 3  192.168.1.2  la VM
+WAN_NODES_DEFAULT="1:172.20.0.11:11 2:172.20.0.12:22 3:192.168.1.2:33"
+
+# L'adresse par defaut du noeud i, lue dans cette table.
+_default_node_ip() {
+    printf '%s' "$WAN_NODES_DEFAULT" | tr ' ' '\n' \
+        | awk -F: -v n="$1" '$1==n{print $2; exit}'
+}
 IFACE=""
 PORT=2908
 SET_IP=1
@@ -168,8 +183,11 @@ ask_ips() {
 
     WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=()
     for i in $(seq 1 "$n"); do
-        # Defaut aligne sur le plan du banc : noeud N a .1N sur le segment du hub.
-        def="${HUB_IP%.*}.$((10 + i))"
+        # Defaut : la table du banc. Le repli ".1N sur le segment du hub" ne
+        # vaut plus rien depuis que les deux premiers noeuds sont des
+        # conteneurs, sur le backbone docker et non sur le LAN.
+        def="$(_default_node_ip "$i")"
+        [ -n "$def" ] || def="${HUB_IP%.*}.$((10 + i))"
         ip=$(_wan_ask "Noeud $i/$n" "IP du noeud operateur $i :" "$def") || exit 1
         [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { echo -e "${RED}'$ip' n'est pas une IPv4${NC}" >&2; exit 2; }
