@@ -35,9 +35,10 @@
 #   --keep ADRESSE     adresse a NE PAS retirer (repetable)
 #   --force            retire meme les adresses sur lesquelles un demon ecoute
 #   --no-stp           ne touche pas a osmo-stp.cfg (source de l'ASP)
-#   --defaut           applique la configuration du banc sans rien demander :
-#                      hote docker 192.168.1.101, backbone 172.20.0.0/24, et
-#                      --persist. Toute autre option passee la surcharge.
+#   --defaut           applique la configuration du banc sans rien demander.
+#                      L'hote docker n'est PAS suppose : il est cherche sur le
+#                      reseau lu sur l'interface - la seule machine qui sache
+#                      joindre le backbone des conteneurs. --via le fixe.
 #   --persist          rejoue au boot (unite systemd)
 #   --dry-run          montre, n'applique pas
 # =============================================================================
@@ -57,7 +58,7 @@ USE_DEFAULTS=0
 # l'hote qui porte docker, le backbone des conteneurs, et la persistance au
 # boot (le live n'en a aucune, la route serait perdue au redemarrage).
 # Chaque valeur reste surchargeable : --defaut --via X gagne sur le defaut.
-DEFAULT_VIA="192.168.1.101"     # l hote docker du banc
+DEFAULT_VIA=""                  # decouvert : voir discover_docker_host()
 DEFAULT_DOCKER_NET="172.20.0.0/24"
 DRY=0
 PERSIST=0
@@ -90,8 +91,50 @@ done
 
 run() { if [ "$DRY" = 1 ]; then echo "    [dry-run] $*"; else "$@"; fi; }
 
+# ── Trouver l'hote docker, sans le nommer ───────────────────────────────────
+# Une adresse en dur ne survit pas au banc : il a suffi que l'hote passe de
+# l'ethernet au wifi pour qu'il change d'adresse, et toutes les VM se sont mises
+# a router vers une machine qui n'existait plus - aller sans retour, "connect
+# failed" partout, sans qu'aucune configuration n'ait bouge.
+#
+# On le cherche donc par ce qu'il FAIT, pas par ce qu'il s'appelle : c'est la
+# seule machine du LAN qui sait joindre le backbone des conteneurs. Pour chaque
+# machine vivante, on pose la route a l'essai et on tente d'atteindre le premier
+# conteneur ; celle qui repond est l'hote. La route est retiree si l'essai
+# echoue - rien ne subsiste d'une tentative infructueuse.
+discover_docker_host() {
+    local prefix probe live c saved
+    # Le reseau se lit sur l'interface, il n'est jamais suppose.
+    [ -n "$LAN_IP" ] || return 1
+    prefix="${LAN_IP%.*}"
+    probe="$(echo "$DOCKER_NET" | cut -d. -f1-3).11"   # le premier conteneur
+
+    echo -e "  ${CYAN}Recherche de l'hote docker sur ${prefix}.0/24...${NC}" >&2
+    # 1. qui est vivant ? (en parallele, une seconde au total)
+    live="$(for c in $(seq 1 254); do
+                [ "${prefix}.${c}" = "$LAN_IP" ] && continue
+                ping -c1 -W1 "${prefix}.${c}" >/dev/null 2>&1 && echo "${prefix}.${c}" &
+            done; wait)"
+    [ -n "$live" ] || return 1
+
+    # 2. lequel route vers les conteneurs ?
+    saved="$(ip -4 route show "$DOCKER_NET" 2>/dev/null | head -1)"
+    for c in $live; do
+        ip route replace "$DOCKER_NET" via "$c" 2>/dev/null || continue
+        if ping -c1 -W1 "$probe" >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✓${NC} hote docker : ${CYAN}${c}${NC} (il joint ${probe})" >&2
+            printf '%s' "$c"; return 0
+        fi
+    done
+    # rien trouve : on remet ce qui etait la
+    ip route del "$DOCKER_NET" 2>/dev/null || true
+    [ -n "$saved" ] && ip route add $saved 2>/dev/null || true
+    return 1
+}
+
 if [ "$USE_DEFAULTS" = "1" ]; then
-    [ -n "$VIA" ] || VIA="$DEFAULT_VIA"
+    [ -n "$VIA" ] || VIA="$(awk -F= '/^OSMO_DOCKER_HOST=/{print $2}' "$STATE" 2>/dev/null | tr -d ' \r')"
+    [ -n "$VIA" ] || VIA="$(discover_docker_host || true)"
     [ "$DOCKER_NET" = "172.20.0.0/24" ] && DOCKER_NET="$DEFAULT_DOCKER_NET"
     PERSIST=1
     echo -e "${CYAN}  --defaut : hote docker ${VIA}, backbone ${DOCKER_NET}, rejoue au boot${NC}"
@@ -101,8 +144,15 @@ fi
 [ -n "$IFACE" ] || IFACE="$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}')"
 [ -n "$IFACE" ] || { echo -e "${RED}Aucune interface par defaut - precisez --iface${NC}" >&2; exit 1; }
 
-LAN_IP="$(ip -4 -o addr show dev "$IFACE" scope global 2>/dev/null \
-          | awk '{print $4}' | cut -d/ -f1 | grep -vE '^172\.20\.' | head -1)"
+# ── L'adresse de la machine SUR LE LAN ──────────────────────────────────────
+# Prise sur la route par defaut, pas dans la liste des adresses : depuis que
+# l'ISO pose aussi le plan prive (192.168.<n>.1/32 et .10/32), un simple "la
+# premiere qui n'est pas 172.20" tombait sur 192.168.2.1 - une adresse locale,
+# sur aucun segment. La decouverte de l'hote balayait alors le mauvais reseau.
+# La source de la route par defaut, elle, est par construction celle qui sort.
+LAN_IP="$(ip route show default 2>/dev/null | awk '/^default/{print $9; exit}')"
+[ -n "$LAN_IP" ] || LAN_IP="$(ip -4 -o addr show dev "$IFACE" scope global 2>/dev/null \
+          | awk '$0 !~ /\/32/ {print $4}' | cut -d/ -f1 | grep -vE '^172\.20\.' | head -1)"
 
 # Le prefixe du plan docker, pour reconnaitre les adresses a retirer :
 # 172.20.0.0/24 -> "172.20." (on ratisse le /16, car l'ISO pose aussi 172.20.1.x)
@@ -267,6 +317,16 @@ fi
 STP_CFG="${STP_CFG:-/etc/osmocom/osmo-stp.cfg}"
 if [ "${NO_STP:-0}" != "1" ] && [ -w "$STP_CFG" ]; then
     _hub="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$STP_CFG")"
+    # Un remote-ip en boucle locale n'est pas un hub : c'est le defaut du
+    # gabarit, laisse par une regeneration qui a efface l'identite du noeud.
+    # Aligner la source dessus validerait une configuration morte - "source
+    # deja correcte (127.0.0.1)" sur un ASP qui ne joindra jamais personne.
+    case "$_hub" in
+        127.*|0.0.0.0|"")
+            echo -e "  ${YELLOW}⚠${NC} ASP : remote-ip=${_hub:-vide} - ce n'est pas un hub."
+            echo -e "     L'identite SS7 n'a pas ete appliquee : ${CYAN}./start-direct.sh --node N --hub-ip <hub>${NC}"
+            _hub="" ;;
+    esac
     if [ -n "$_hub" ]; then
         _src="$(ip route get "$_hub" 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
         _cur="$(awk '/asp asp-to-inter/{f=1} f&&/local-ip/{print $2; exit}' "$STP_CFG")"

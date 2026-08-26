@@ -80,10 +80,24 @@ menu_services() {
                 # par ici qu'on rejoint les autres, sans avoir a retenir la
                 # commande docker.
                 tput cnorm
-                if docker exec "$OP" sh -c 'command -v tmux >/dev/null 2>&1' 2>/dev/null \
-                   && docker exec "$OP" tmux has-session -t osmo 2>/dev/null; then
-                    echo "  Detacher : Ctrl-b puis d"
-                    docker exec -ti "$OP" tmux attach -t osmo
+                # Trois conventions cohabitent selon le conteneur :
+                #   osmocom sur /tmp/osmocom_tmux  la pile lancee par run.sh
+                #   calypso / gapk sur le socket par defaut  le pipeline QEMU
+                # On les cherche dans cet ordre plutot que d'en imposer une :
+                # une session annoncee mais introuvable ("no sessions") laisse
+                # croire que la pile est morte alors qu'elle tourne.
+                _sock=""; _sess=""
+                if docker exec "$OP" tmux -S /tmp/osmocom_tmux has-session -t osmocom 2>/dev/null; then
+                    _sock="-S /tmp/osmocom_tmux"; _sess="osmocom"
+                elif docker exec "$OP" tmux has-session -t calypso 2>/dev/null; then
+                    _sess="calypso"
+                elif docker exec "$OP" tmux has-session -t osmo 2>/dev/null; then
+                    _sess="osmo"
+                fi
+                if [ -n "$_sess" ]; then
+                    echo "  Session ${_sess} - detacher : Ctrl-b puis d"
+                    # shellcheck disable=SC2086
+                    docker exec -ti "$OP" tmux $_sock attach -t "$_sess"
                 else
                     whiptail --msgbox "Pas de session tmux 'osmo' dans $OP.\n\nLe journal reste lisible :\n  docker exec $OP tail -f /var/log/osmocom/run.sh.log" 12 66
                 fi

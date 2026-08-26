@@ -68,6 +68,12 @@ WAN_NODE_PER_OP="${WAN_NODE_PER_OP:-0}"
 # de declaration.
 OPERATOR_DECLS=()
 OPERATOR_COUNT_HINT=""
+# --host : l'adresse de CETTE machine, telle que les VM doivent la joindre.
+# Elle est deduite de l'interface par defaut ; --host la fixe quand la deduction
+# se trompe - plusieurs cartes, un wifi et un ethernet actifs en meme temps, ou
+# une adresse qui vient de changer. Elle sert de recours, pas de reglage
+# quotidien : c'est elle que les VM inscrivent dans leur route vers le backbone.
+HOST_LAN_IP=""
 IMAGE_STP="${IMAGE_STP:-osmocom-stp}"
 INTER_STP_CONTAINER="osmo-inter-stp"
 INTER_STP_IP="172.20.0.10"
@@ -946,7 +952,8 @@ reassert_docker_lan_return() {
     [ "$(id -u)" -eq 0 ] || return 0
 
     local lan_ip lan_net
-    lan_ip="$(ip route show default 2>/dev/null | awk '/^default/{print $9; exit}')"
+    lan_ip="${HOST_LAN_IP:-}"
+    [ -n "$lan_ip" ] || lan_ip="$(ip route show default 2>/dev/null | awk '/^default/{print $9; exit}')"
     [ -n "$lan_ip" ] || lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     [ -n "$lan_ip" ] || return 0
     lan_net="${lan_ip%.*}.0/24"
@@ -1367,14 +1374,11 @@ start_bridge_mode() {
         # tee : le journal reste ecrit meme quand personne n'est attache, sinon
         # un incident survenu hors session serait perdu. Repli sans tmux pour
         # une image qui n'en aurait pas - le comportement d'avant, a l'identique.
-        if docker exec "$container_name" sh -c 'command -v tmux >/dev/null 2>&1'; then
-            docker exec -d "$container_name" bash -c \
-                "mkdir -p /var/log/osmocom && tmux new-session -d -s osmo \
-                 '{ ${run_cmd}; } 2>&1 | tee /var/log/osmocom/run.sh.log'"
-            echo -e "     ${CYAN}tmux 'osmo' : docker exec -ti ${container_name} tmux attach -t osmo${NC}"
-        else
-            docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
-        fi
+        # PAS de session "osmo" ici : run.sh cree la sienne, nommee "osmocom",
+        # sur le socket /tmp/osmocom_tmux. En ajouter une deuxieme donnait deux
+        # conventions pour la meme chose - et celle qu'on annoncait disparaissait
+        # des que run.sh rendait la main ("no sessions" a l'attache).
+        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
 
         # Attente HLR
         echo -ne "  ${GREEN}[*] Attente HLR (4258)${NC}"
@@ -1498,6 +1502,17 @@ start_bridge_mode() {
     # les reseaux existent : plus rien ne passera devant.
     reassert_docker_lan_return
 
+    # L'adresse par laquelle les VM doivent router vers les conteneurs. Elle
+    # change avec l'interface active - un cable debranche, et c'est le wifi qui
+    # repond, sous une autre adresse. L'afficher ici evite d'aller la chercher
+    # apres coup, quand plus rien ne s'attache et que rien n'a "bouge".
+    local _hostip
+    _hostip="${HOST_LAN_IP:-$(ip route show default 2>/dev/null | awk '/^default/{print $9; exit}')}"
+    if [ -n "$_hostip" ] && [ "${WAN_MESH:-0}" = "1" ]; then
+        echo -e "\n  ${BOLD}Cote VM${NC}, pour joindre les conteneurs :"
+        echo -e "    ${CYAN}bash network/set_ip_vm.sh --via ${_hostip} --persist${NC}"
+    fi
+
     echo -e "\n${GREEN}${BOLD}Stack prete !${NC}"
 
     # ── Mode QEMU : handoff vers start-direct.sh ──────────────────────────────
@@ -1525,6 +1540,39 @@ start_bridge_mode() {
             _wan_env="WAN_REMOTE_IP='${WAN_REMOTE_IP}' WAN_PREFIX='${WAN_PREFIX}' WAN_N_REMOTE='${WAN_N_REMOTE:-$n_operators}'"
             echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (prefixe ${WAN_PREFIX})${NC}"
         fi
+
+        # ── LES AUTRES CONTENEURS : la MEME pile, mais detachee ─────────────
+        # Ils recevaient jusqu'ici "run.sh" en mode no-process : le coeur SS7
+        # montait, mais ni PHY, ni mobile, ni Asterisk, ni SMSC. Deux operateurs
+        # censes se telephoner, dont un seul avec une radio - l'appel n'aboutit
+        # pas, et rien ne dit pourquoi.
+        #
+        # Ils lancent donc le meme start-direct.sh que le premier, avec LEUR
+        # numero de noeud. Le terminal courant reste au premier - c'est lui
+        # qu'on regarde - les autres tournent dans une session tmux nommee
+        # "osmocom", sur le socket que run.sh utilise deja :
+        #     docker exec -ti osmo-operator-2 tmux -S /tmp/osmocom_tmux attach -t osmocom
+        local _c _cnode
+        for _c in $(seq 2 "$n_operators"); do
+            if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
+                _cnode=$(( ${WAN_NODE_ID:-1} + _c - 1 ))
+            else
+                _cnode="${WAN_NODE_ID:-1}"
+            fi
+            local _cargs=""
+            [ "${WAN_MESH:-0}" = "1" ] && _cargs="--node ${_cnode} --op 1 --hub-ip ${WAN_STP_TARGET}"
+            echo -e "  ${CYAN}[*] $(op_container "$_c") : meme pile, detachee (noeud ${_cnode})${NC}"
+            docker exec -d "$(op_container "$_c")" bash -c \
+                "cd /opt/GSM/osmo_egprs && \
+                 ./start-direct.sh --stop >/dev/null 2>&1; \
+                 tmux -S /tmp/osmocom_tmux new-session -d -s osmocom \
+                   \"NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' \
+                     ENCRYPTION='a5 1' CALYPSO_BRIDGE='pont' CALYPSO_MODE='shunt_legit' \
+                     ${_wan_env} ./start-direct.sh ${_cargs} --force 2>&1 \
+                     | tee /var/log/osmocom/run.sh.log\"" \
+                || echo -e "  ${YELLOW}[!] $(op_container "$_c") : lancement detache en echec${NC}"
+            echo -e "      ${CYAN}docker exec -ti $(op_container "$_c") tmux -S /tmp/osmocom_tmux attach -t osmocom${NC}"
+        done
 
         # Correction : on execute directement start-direct.sh avec les bonnes variables
         # pour que CALYPSO_MODE soit correctement passe et reconnu
@@ -1724,6 +1772,10 @@ Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
   --node-per-op           chaque conteneur est un NOEUD (base = --wan-id) et non
                           un operateur de la machine : conteneur 1 -> noeud N,
                           conteneur 2 -> noeud N+1... Point codes 1.<n>1.<role>.
+  --host ADRESSE          adresse de CETTE machine vue des VM (defaut : deduite
+                          de la route par defaut). Recours quand la machine a
+                          plusieurs cartes ou vient de changer d'adresse : c'est
+                          par elle que les VM routent vers les conteneurs.
   --operator IP:PREFIXE   declare un operateur du WAN par son adresse et son
                           prefixe d'appel. Repetable ; l'ordre donne les numeros
                           de noeud. Il DECLARE seulement : aucun conteneur n'est
@@ -1761,6 +1813,8 @@ while [ $# -gt 0 ]; do
         --hub-node)       WAN_HUB_NODE="${2:-1}"; WAN_HUB_NODE_GIVEN=1; shift ;;
         --hub-ip)         WAN_HUB_IP="${2:-}"; shift ;;
         --node-per-op)    WAN_NODE_PER_OP=1; WAN_NODE_PER_OP_GIVEN=1 ;;
+        --host)           HOST_LAN_IP="${2:-}"; shift ;;
+        --host=*)         HOST_LAN_IP="${1#*=}" ;;
         --operators)      OPERATOR_COUNT_HINT="${2:-}"; shift ;;
         --operators=*)    OPERATOR_COUNT_HINT="${1#*=}" ;;
         --operator)       OPERATOR_DECLS+=("${2:-}"); WAN_MESH=1; shift ;;
