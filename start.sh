@@ -1050,20 +1050,38 @@ reassert_docker_lan_return() {
     # au bridge : on s'abstient plutot que de deviner.
     [ "${lan_net%%/*}" = "${INTER_NET_SUBNET%%/*}" ] && return 0
 
-    local _was_first=1
-    iptables -t nat -C POSTROUTING -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null \
-        && [ "$(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | awk '/RETURN/{print $1; exit}')" = "1" ] \
-        || _was_first=0
-
-    # || true : sous "set -eu", un -D qui ne trouve pas la regle - le cas du
-    # PREMIER passage, ou d'un pare-feu remis a plat - renvoie 1 et faisait
-    # sortir start.sh sur-le-champ, au milieu de la creation des reseaux. Sans
-    # un mot, la fonction etant appelee la avec sa sortie redirigee.
-    iptables -t nat -D POSTROUTING -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null || true
-    if iptables -t nat -I POSTROUTING 1 -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null; then
-        [ "$_was_first" = 1 ] || \
-            echo -e "  ${CYAN}[WAN] adresse source preservee vers ${lan_net} (RETURN en tete de POSTROUTING)${NC}"
-    fi
+    # ── LA REGLE RETURN EST RETIREE, PAS POSEE ──────────────────────────────
+    # [2026-08-26] Elle preservait l'adresse source des conteneurs vers le LAN :
+    # l'inter-STP voyait 172.20.0.11 et 172.20.0.12 au lieu de l'hote. C'etait
+    # l'intention. Le resultat etait l'inverse : ASP_DOWN des deux cotes et
+    # "connect failed (-110)" en boucle.
+    #
+    # MESURE, plutot que raisonnement. Capture pendant une reconnexion forcee :
+    #   wlp0s20f3 Out  172.20.0.12.2910 > 192.168.1.49.2908  [INIT]
+    #   wlp0s20f3 Out  192.168.1.49.2908 > 172.20.0.12.2910  [INIT ACK]
+    # L'INIT part, le hub repond - et l'INIT ACK n'est JAMAIS recu en entree par
+    # l'hote (tcpdump -Q in : rien). Il est adresse a 172.20.0.12, une adresse
+    # que l'hote doit ROUTER, et le chemin ne la lui remet pas.
+    #
+    # Ce n'est PAS le drop de Docker 29 dans la table raw, contrairement a ce
+    # qu'on a cru : ses compteurs sont restes a 0 pendant toute la mesure.
+    #   ip daddr 172.20.0.12 iifname != "br-..." counter packets 0 bytes 0 drop
+    #
+    # Sans la regle, le trafic ressort masque en 192.168.1.31 : le hub repond a
+    # l'adresse PROPRE de l'hote, qui la recoit, et conntrack rend le paquet au
+    # conteneur. Verifie : as-inter AS_ACTIVE sur les deux operateurs, en huit
+    # secondes.
+    #
+    # Et l'on ne perd rien : l'inter-STP ne distingue pas ses noeuds par leur
+    # adresse source. Il est en "accept-asp-connections dynamic-permitted"
+    # (helpers/create_interop.sh) et les apparie par ROUTING CONTEXT - 1150,
+    # 2150, 3150. Deux noeuds derriere la meme adresse gardent des contextes
+    # distincts, donc des AS distincts.
+    #
+    # On RETIRE donc la regle si un lancement precedent l'a laissee.
+    iptables -t nat -D POSTROUTING -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null \
+        && echo -e "  ${CYAN}[WAN] regle RETURN retiree : les noeuds sortent masques (l'inter-STP les apparie par routing context)${NC}" \
+        || true
 
     # ── Le FORWARD, sans quoi le routage ne sert a rien ─────────────────────
     # Docker pose un FORWARD par defaut a DROP : un paquet du LAN vers le
@@ -1715,18 +1733,39 @@ start_bridge_mode() {
         done
         echo -e " ${GREEN}✓${NC}"
 
-        # Feed HLR
-        echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${total_subs} abonnes)...${NC}"
+        # ── CHAQUE HLR NE PORTE QUE SES PROPRES ABONNES ─────────────────────
+        # On y versait TOUS les abonnes du banc, tous operateurs confondus. Cela
+        # simulait un roaming qui n'existe pas : un abonne de l'operateur 1
+        # inscrit dans le HLR de l'operateur 2 y est joignable sans qu'aucun
+        # lien MAP n'ait ete etabli. Et surtout, la liste devenait illisible -
+        # six abonnes chez un operateur qui n'en a que deux, dont on ne savait
+        # plus lesquels etaient les siens.
+        # Un vrai roaming passe par le SS7, pas par une copie de la base.
+        local _mine; _mine="$(awk -F: -v op="$i" '$1 == op' "$all_subscribers_file")"
+        local _n_mine; _n_mine="$(printf '%s\n' "$_mine" | grep -c . || true)"
+        echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${_n_mine} abonnes)...${NC}"
+
+        # ── ET ON EFFACE CE QUI N'EST PLUS AU PLAN ──────────────────────────
+        # hlr.db survit aux relances. Un changement de plan - MCC par noeud,
+        # MSISDN a six chiffres - laisse donc derriere lui des abonnes d'un plan
+        # mort : IMSI que plus aucun mobile ne presente, et surtout MSISDN qu'ils
+        # RETIENNENT. osmo-hlr impose l'unicite du numero, si bien que le bon
+        # abonne ne peut plus recuperer le sien - l'erreur est alors
+        # "cannot update MSISDN", qui ne nomme pas celui qui le tient.
+        local _garder; _garder="$(printf '%s\n' "$_mine" | cut -d: -f3 | paste -sd'|' -)"
         {
             echo "#!/bin/bash"
             echo "cat > /tmp/hlr_feed.vty << 'VTYCMDS'"
             echo "enable"
+            if [ -n "$_garder" ]; then
+                echo "__PURGE__${_garder}"
+            fi
             while IFS=: read -r feed_op feed_ms feed_imsi feed_msisdn feed_ki; do
                 [[ "$feed_op" =~ ^#.*$ ]] && continue
                 echo "subscriber imsi ${feed_imsi} create"
                 echo "subscriber imsi ${feed_imsi} update msisdn ${feed_msisdn}"
                 echo "subscriber imsi ${feed_imsi} update aud2g comp128v1 ki ${feed_ki}"
-            done < "$all_subscribers_file"
+            done <<< "$_mine"
             echo "end"
             echo "VTYCMDS"
         } | docker exec -i "$container_name" bash
@@ -1744,7 +1783,27 @@ start_bridge_mode() {
         # trouve, reclame ses vecteurs d'authentification, n'obtient rien, et
         # rejette le mobile avec un motif qui accuse la carte SIM.
         local _sans_cle
+        # La purge : on LISTE avec sqlite (le VTY n'a pas de "show all" filtrable)
+        # et on SUPPRIME par le VTY - osmo-hlr tient un cache en memoire, un
+        # DELETE direct dans la base ne l'en previendrait pas.
         docker exec "$container_name" bash -c '
+            garder="$(sed -n "s/^__PURGE__//p" /tmp/hlr_feed.vty)"
+            sed -i "/^__PURGE__/d" /tmp/hlr_feed.vty
+            if [ -n "$garder" ] && command -v sqlite3 >/dev/null 2>&1; then
+                sqlite3 /var/lib/osmocom/hlr.db "select imsi from subscriber;" 2>/dev/null \
+                  | grep -vE "^($garder)$" \
+                  | sed "s|^|subscriber imsi |; s|$| delete|" >> /tmp/hlr_purge.vty
+            fi
+            if [ -s /tmp/hlr_purge.vty ]; then
+                { echo enable; cat /tmp/hlr_purge.vty; } > /tmp/hlr_purge_full.vty
+                if command -v nc >/dev/null 2>&1; then
+                    (sleep 1; cat /tmp/hlr_purge_full.vty; sleep 2) | nc -q2 127.0.0.1 4258 2>/dev/null
+                else
+                    (sleep 1; cat /tmp/hlr_purge_full.vty; sleep 3) | telnet 127.0.0.1 4258 2>/dev/null
+                fi
+                echo "  purge : $(grep -c . /tmp/hlr_purge.vty) abonne(s) hors plan supprime(s)" >&2
+            fi
+            rm -f /tmp/hlr_purge.vty /tmp/hlr_purge_full.vty
             if command -v nc >/dev/null 2>&1; then
                 (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) | nc -q2 127.0.0.1 4258 2>/dev/null
             else
@@ -1764,7 +1823,7 @@ start_bridge_mode() {
             echo -e "  ${RED}✗ HLR Op${i} : ${_sans_cle} abonne(s) SANS CLE - ils ne pourront pas s'authentifier${NC}"
             echo -e "    ${CYAN}docker exec ${container_name} sqlite3 /var/lib/osmocom/hlr.db \"select s.imsi from subscriber s left join auc_2g a on a.subscriber_id=s.id where a.subscriber_id is null;\"${NC}"
         else
-            echo -e "  ${GREEN}✓ HLR Op${i} alimente (${total_subs} abonnes, tous avec cle)${NC}"
+            echo -e "  ${GREEN}✓ HLR Op${i} alimente (${_n_mine} abonnes, tous avec cle)${NC}"
         fi
 
         # Attente dernier groupe - sautee en no-process

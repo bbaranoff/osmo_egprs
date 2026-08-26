@@ -584,6 +584,19 @@ generate_mobile_cfg "$MS1_CFG" \
 # La copie que le lanceur ouvre reellement. On la REGENERE plutot que de la
 # copier : generate_mobile_cfg fixe aussi le port VTY, les sockets et l'ARFCN,
 # et un simple cp propagerait le fichier statique de qemu-src.
+# ── ET ON EMPECHE QU'IL SOIT ECRASE ─────────────────────────────────────
+# Ecrire ce fichier ne suffit pas : run.sh le REECRIT juste apres. Son module
+# 20-mobile-cfg.sh copie MOBILE_CFG_SRC par-dessus, et ce chemin vaut par
+# defaut $QEMU_TREE/cfgs/mobile_group1.cfg - le fichier statique de qemu-src,
+# fige sur l'operateur 1. Mesure sur le banc :
+#     mobile.cfg          18:22:22  imsi=002010002000001 arfcn=516
+#     mobile_group1.cfg   18:22:27  imsi=001010001000001 arfcn=514
+# Cinq secondes d'ecart, et c'est le second que le mobile ouvre.
+# On designe donc NOTRE fichier comme source : le module recopie alors le bon
+# contenu, et son controle d'idempotence (cmp -s src dest) passe puisque les
+# deux sont identiques. Aucune modification de qemu-src.
+export MOBILE_CFG_SRC="$MS1_CFG"
+
 MS1_GROUP_CFG="$BB_DIR/mobile_group1.cfg"
 if [ "$MS1_GROUP_CFG" != "$MS1_CFG" ]; then
     generate_mobile_cfg "$MS1_GROUP_CFG" \
