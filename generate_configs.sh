@@ -246,7 +246,17 @@ apply_config_templates() {
     local bsic="${BSIC:-$(( (op_id * 7) % 64 ))}"
     local lac="${LAC:-0x000${op_id}}"
     local cell_id="${CELL_ID:-$(( 6000 + op_id ))}"
-    local ipa_unit_id="${IPA_UNIT_ID:-$(( 6000 + op_id ))}"
+    # Pas 6000+op_id : le gabarit de la SECONDE BTS
+    # (configs/osmo-bts-trx-bts1.cfg) porte "ipa unit-id 6002 0" EN DUR. Avec
+    # l'ancienne formule, l'operateur 2 recevait lui aussi 6002 : ses deux BTS se
+    # presentaient au BSC sous le meme identifiant, il en acceptait une et
+    # ejectait l'autre, en boucle. Symptome observe : "BTS failures : 26 OML,
+    # 26 RSL", un lien OML qui se reconnecte toutes les deux secondes, et aucun
+    # abonne attache - alors que l'operateur 1 (6001) fonctionnait, par simple
+    # coincidence de numerotation.
+    # Le pas de 10 laisse les valeurs de la seconde BTS hors d'atteinte, quel
+    # que soit le nombre d'operateurs.
+    local ipa_unit_id="${IPA_UNIT_ID:-$(( 6000 + op_id * 10 ))}"
     local bvci="${BVCI:-$(( op_id * 10 + 2 ))}"
     local nsei="${NSEI:-$(( op_id * 10 ))}"
     local nsvci="${NSVCI:-$(( op_id * 10 ))}"
