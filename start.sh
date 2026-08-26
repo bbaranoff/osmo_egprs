@@ -1563,48 +1563,50 @@ start_bridge_mode() {
         # qu'on regarde - les autres tournent dans une session tmux nommee
         # "osmocom", sur le socket que run.sh utilise deja :
         #     docker exec -ti osmo-operator-2 tmux -S /tmp/osmocom_tmux attach -t osmocom
-        local _c _cnode
-        for _c in $(seq 2 "$n_operators"); do
+        # ── TOUS en session detachee, puis on attache le premier ────────────
+        # Meme traitement pour chaque conteneur : un script pose dans le
+        # conteneur, lance par tmux dans une session nommee "osmo". Passer la
+        # commande en ligne a tmux obligeait a imbriquer trois niveaux de
+        # guillemets - c'est ce qui faisait echouer la creation en silence, et
+        # "tmux attach -t osmo" repondait "no sessions" sans qu'aucune erreur
+        # n'ait ete affichee. Un fichier ne se cite pas.
+        _launch_in_tmux() {           # $1=conteneur  $2=arguments de noeud
+            local _ct="$1" _na="$2"
+            docker exec -i "$_ct" tee /tmp/osmo-launch.sh >/dev/null <<LAUNCH
+#!/bin/bash
+cd /opt/GSM/osmo_egprs || exit 1
+export NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'
+export ENCRYPTION='a5 1' CALYPSO_BRIDGE='pont' CALYPSO_MODE='shunt_legit'
+${_wan_env:+export ${_wan_env}}
+exec ./start-direct.sh ${_na} --force
+LAUNCH
+            docker exec "$_ct" chmod +x /tmp/osmo-launch.sh
+            docker exec "$_ct" tmux kill-session -t osmo 2>/dev/null || true
+            docker exec "$_ct" tmux new-session -d -s osmo \
+                "/tmp/osmo-launch.sh 2>&1 | tee /var/log/osmocom/run.sh.log" \
+                && echo -e "  ${GREEN}[*] ${_ct} : pile lancee (session tmux 'osmo')${NC}" \
+                || echo -e "  ${YELLOW}[!] ${_ct} : lancement en echec${NC}"
+        }
+
+        local _c _cnode _cargs
+        for _c in $(seq 1 "$n_operators"); do
             if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
                 _cnode=$(( ${WAN_NODE_ID:-1} + _c - 1 ))
             else
                 _cnode="${WAN_NODE_ID:-1}"
             fi
-            local _cargs=""
+            _cargs=""
             [ "${WAN_MESH:-0}" = "1" ] && _cargs="--node ${_cnode} --op 1 --hub-ip ${WAN_STP_TARGET}"
-            echo -e "  ${CYAN}[*] $(op_container "$_c") : meme pile, detachee (noeud ${_cnode})${NC}"
-            # Session "osmo", sur le socket PAR DEFAUT : c'est ce que l'on tape
-            # naturellement une fois dans le conteneur - "tmux attach -t osmo",
-            # sans avoir a se souvenir d'un socket.
-            #
-            # --force suffit a reprendre la main sur le coeur que run.sh vient
-            # de monter : start-direct.sh arrete ce qu'il faut lui-meme. Un
-            # "--stop" separe, lance avant, coupait la pile sans garantir que la
-            # relance aboutisse - l'ASP s'attachait puis tout retombait.
-            docker exec -d "$(op_container "$_c")" bash -c \
-                "cd /opt/GSM/osmo_egprs && \
-                 tmux new-session -d -s osmo \
-                   \"NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' \
-                     ENCRYPTION='a5 1' CALYPSO_BRIDGE='pont' CALYPSO_MODE='shunt_legit' \
-                     ${_wan_env} ./start-direct.sh ${_cargs} --force 2>&1 \
-                     | tee /var/log/osmocom/run.sh.log\"" \
-                || echo -e "  ${YELLOW}[!] $(op_container "$_c") : lancement detache en echec${NC}"
-            echo -e "      ${CYAN}docker exec -ti $(op_container "$_c") tmux attach -t osmo${NC}"
+            _launch_in_tmux "$(op_container "$_c")" "$_cargs"
+            [ "$_c" -gt 1 ] && echo -e "      ${CYAN}docker exec -ti $(op_container "$_c") tmux attach -t osmo${NC}"
         done
 
-        # Correction : on execute directement start-direct.sh avec les bonnes variables
-        # pour que CALYPSO_MODE soit correctement passe et reconnu
-        exec docker exec -ti "$_qemu_container" bash -c \
-            "cd /opt/GSM/osmo_egprs && \
-             ./start-direct.sh --stop && \
-             NO_MENU=1 \
-             MODE='${HANDOFF_MODE}' \
-             QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' \
-             ENCRYPTION='a5 1' \
-             CALYPSO_BRIDGE='pont' \
-             CALYPSO_MODE='shunt_legit' \
-             ${_wan_env} \
-             ./start-direct.sh ${_node_args} --force"
+        echo -e "\n  ${BOLD}Les autres conteneurs tournent detaches${NC} - attachez-vous quand vous voulez."
+        echo -e "  ${CYAN}Ctrl-b puis d${NC} pour vous detacher sans rien arreter.\n"
+
+        # Le premier, et lui seul, prend le terminal courant - en s'ATTACHANT a
+        # sa session, pas en relancant la pile : elle tourne deja.
+        exec docker exec -ti "$_qemu_container" tmux attach -t osmo
     fi
 }
 
