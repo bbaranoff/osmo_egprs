@@ -659,6 +659,30 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     # 66-grgsm-decode (MOD_ENABLED_IF) - le pont fournit lui-meme le GSMTAP.
     export CALYPSO_PIPELINE=bridge
     _PONT="${PONT_PY:-/opt/GSM/pont/pont.py}"
+
+    # ── LE PONT DOIT SAVOIR SUR QUELLE CELLULE IL TRAVAILLE ─────────────────
+    # pont.py fait le codage/decodage de canal entre le Calypso de QEMU et la
+    # BTS. Il lisait PONT_ARFCN et PONT_BSIC dans son environnement, avec pour
+    # defauts 514 et 7 - les valeurs de l'operateur 1. Personne ne les posait.
+    #
+    # Le BSIC n'est pas decoratif : sa partie basse (BCC) EST la sequence
+    # d'apprentissage des canaux dedies. Avec un BSIC faux, la correlation
+    # echoue et les blocs ne se decodent pas. Constate sur l'operateur 2, dont
+    # la cellule est en ARFCN 516 / BSIC 14 :
+    #     dl_bursts=20660 dl_dec=1180 crc_fail=3984
+    #     TS0/22 : 0/295        <- la voie ou arrive l'Immediate Assignment
+    #     ul_sent=23 rach=23    <- le RACH partait bien
+    # Le mobile emettait son RACH, le reseau repondait, et la reponse n'etait
+    # jamais rendue au Calypso : "radio resource layer state: connection
+    # pending", indefiniment. L'operateur 1 s'en sortait parce que ses valeurs
+    # sont justement celles des defauts.
+    #
+    # On les prend dans le plan radio publie par generate_configs.sh, avec les
+    # memes replis que les mobiles.
+    export PONT_ARFCN="${PONT_ARFCN:-${PLAN_ARFCN:-$MS_ARFCN1}}"
+    export PONT_BSIC="${PONT_BSIC:-${PLAN_BSIC:-$(( MS_OP_ID * 7 % 64 ))}}"
+    printf '  %spont TRX%s : cellule ARFCN %s BSIC %s\n' \
+        "${C_DIM:-}" "${C_Z:-}" "$PONT_ARFCN" "$PONT_BSIC"
     # [2026-08-16] N'ARMER LE LANCEUR QUE SUR UN VRAI DEMARRAGE.
     # Ce bloc s'execute AVANT le `case "$ACTION"` plus bas. Sur `--stop` (comme
     # sur --list/--status/--check-paths) on armait donc quand meme le lanceur
