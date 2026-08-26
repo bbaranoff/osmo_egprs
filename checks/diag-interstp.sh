@@ -3,15 +3,16 @@
 # checks/diag-interstp.sh -- diagnostic SS7 vu du HUB (inter-STP)
 #
 # Repond a une seule question : QUI est attache, et qui manque ?
-# Le hub connait ses noeuds par /etc/osmo-wan.conf ; il compare cette liste a
-# ce que le VTY declare reellement attache. Un noeud absent de la table est
-# indiscernable d'un noeud eteint - d'ou la table comme reference.
+# L'identite de ce qui est attache vient du hub lui-meme (colonne AS Name et
+# adresse distante de "show cs7 instance 0 asp"). La table /etc/osmo-wan.conf
+# ne sert plus qu'a l'appel des absents : un noeud absent de la table reste
+# indiscernable d'un noeud eteint.
 #
 # CE QU'IL VERIFIE
 #   1. role et adresse d'ecoute (le multi-homing 0.0.0.0 est signale)
 #   2. le demon tourne, le port M3UA ecoute
-#   3. chaque AS attendu : AS_ACTIVE / AS_DOWN / absent
-#   4. chaque ASP : etat, adresse distante, AS rattache
+#   3. chaque AS declare par le hub : AS_ACTIVE / AS_DOWN, et les ASP rattaches
+#   4. l'appel de la table WAN : quelle adresse attendue n'est vue nulle part
 #   5. les routes : PROHIB / UNAVAIL signales
 #   6. le flapping : deux mesures espacees, les ASP dynamiques renumerotes
 #      trahissent des associations qui se reetablissent en boucle
@@ -34,7 +35,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --watch)    WATCH=1 ;;
     --no-color) USE_COLOR=0 ;;
-    -h|--help)  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   esac
   shift
 done
@@ -80,11 +81,14 @@ else
   printf '  %s port M3UA %s PAS en ecoute\n' "$KO" "${LISTEN_PORT:-$M3UA_PORT}"
 fi
 
-# ---- noeuds attendus --------------------------------------------------------
+# ---- table WAN (sert seulement a l appel des absents) -----------------------
 declare -A EXP_IP=()
 NODES=""
 if [ -r "$WAN_FILE" ]; then
-  spec="$(awk -F\" '/WAN_NODES=/{print $2}' "$WAN_FILE" 2>/dev/null)"
+  # Ancre en debut de ligne : la ligne de commentaire du fichier rappelle le
+  # format WAN_NODES="id:ip:indicatif ..." et etait lue comme une entree, d ou
+  # deux noeuds fantomes ("id", "...") toujours portes manquants a l appel.
+  spec="$(awk -F\" '/^WAN_NODES=/{print $2}' "$WAN_FILE" 2>/dev/null)"
   for tok in $spec; do
     id="${tok%%:*}"; rest="${tok#*:}"; ip="${rest%%:*}"
     EXP_IP[$id]="$ip"; NODES="$NODES $id"
@@ -92,29 +96,80 @@ if [ -r "$WAN_FILE" ]; then
 fi
 
 # ---- AS / ASP ---------------------------------------------------------------
-head "AS ATTENDUS (table : ${WAN_FILE})"
+head "AS DECLARES PAR LE HUB"
 AS_OUT="$(vty 'show cs7 instance 0 as all')"
 ASP_OUT="$(vty 'show cs7 instance 0 asp')"
+
+# Le hub construit ses AS a partir du seul NOMBRE de noeuds et apparie les ASP
+# par routing context. Apparier ici as-n<n>op1 avec l'adresse attendue du noeud
+# n, lue dans une table locale rangee autrement que celle en service, donnait
+# l'etat d'une machine a sa voisine : un noeud sain sortait en panne et l'autre
+# en marche. On lit donc le rattachement la ou le hub le declare : colonne
+# AS Name et adresse distante de sa propre sortie.
+# Ces colonnes ont bouge selon les versions de libosmo-sigtran : l'etat et
+# l'adresse sont reperes a leur forme, pas a leur rang.
+ASP_ROWS="$(printf '%s\n' "$ASP_OUT" | awk '
+  /ASP_/ {
+    st = ""; rem = ""
+    for (i = 2; i <= NF; i++) {
+      if ($i ~ /^ASP_/) st = $i
+      if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?$/) rem = $i
+    }
+    sub(/:[0-9]+$/, "", rem)
+    printf "%s|%s|%s|%s\n", $1, $2, (st == "" ? "?" : st), (rem == "" ? "?" : rem)
+  }')"
+AS_ROWS="$(printf '%s\n' "$AS_OUT" | awk '$1 ~ /^as-/ {print $1 "|" $2}')"
+
 if [ -z "$AS_OUT" ]; then
   printf '  %s VTY injoignable sur 127.0.0.1:%s -- nc absent, ou demon arrete\n' "$KO" "$VTY_PORT"
+elif [ -z "$AS_ROWS" ]; then
+  printf '  %s aucun AS declare : conf du hub vide, ou autre instance cs7\n' "$KO"
 else
-  if [ -z "$NODES" ]; then
-    printf '  %s table WAN absente ou vide : je montre ce que le hub declare\n' "$WARN"
-    printf '%s\n' "$AS_OUT" | grep -E 'as-n[0-9]+op[0-9]+' | sed 's/^/    /'
+  while IFS='|' read -r as_name as_state; do
+    [ -n "$as_name" ] || continue
+    if [ "$as_state" = AS_ACTIVE ]; then m="$OK"; else m="$KO"; fi
+    printf '  %s %-12s %s\n' "$m" "$as_name" "${as_state:-?}"
+    attache=0
+    while IFS='|' read -r asp_name asp_as asp_state asp_rem; do
+      [ "$asp_as" = "$as_name" ] || continue
+      attache=1
+      printf '         %-12s %-12s depuis %s\n' "$asp_name" "$asp_state" "$asp_rem"
+    done <<< "$ASP_ROWS"
+    [ "$attache" = 0 ] && printf '         aucun ASP rattache : noeud eteint, asp en shutdown, ou SCTP bloque\n'
+  done <<< "$AS_ROWS"
+  orph="$(printf '%s\n' "$ASP_ROWS" | awk -F'|' '$2 !~ /^as-/ {printf "%s(%s) ", $1, $4}')"
+  if [ -n "$orph" ]; then
+    printf '  %s ASP connecte mais rattache a aucun AS : %s\n' "$WARN" "${orph% }"
+    printf '         son routing context ne correspond a aucun AS du hub\n'
   fi
-  for n in $NODES; do
-    as_line="$(printf '%s\n' "$AS_OUT" | grep -E "as-n${n}op1" | head -1)"
-    state="$(printf '%s' "$as_line" | awk '{print $2}')"
-    asp_line="$(printf '%s\n' "$ASP_OUT" | grep -F "${EXP_IP[$n]}:" | head -1)"
-    asp_state="$(printf '%s' "$asp_line" | awk '{print $3}')"
-    case "$state" in
-      AS_ACTIVE) m="$OK" ;;
-      "")        m="$KO"; state="absent de la conf" ;;
-      *)         m="$KO" ;;
-    esac
-    printf '  %s noeud %s  %-15s  AS=%-12s ASP=%s\n' \
-        "$m" "$n" "${EXP_IP[$n]}" "$state" "${asp_state:-aucun}"
+fi
+
+head "APPEL DE LA TABLE WAN (${WAN_FILE})"
+if [ -z "$ASP_OUT" ]; then
+  printf '  %s pas de reponse VTY : rien a confronter a la table\n' "$KO"
+elif [ -z "$NODES" ]; then
+  printf '  %s table absente ou vide : impossible de dire qui manque a l appel,\n' "$WARN"
+  printf '         la liste ci-dessus reste complete pour ce qui est attache\n'
+else
+  # Une adresse attachee absente de la table = noeud masque (NAT) : le hub voit
+  # alors l'adresse du routeur et pas celle du noeud. Sans ce rappel on declare
+  # absent un noeud qui parle, au seul motif qu'il est masque.
+  tab=" "
+  for n in $NODES; do tab="$tab${EXP_IP[$n]} "; done
+  hors=""
+  for ip in $(printf '%s\n' "$ASP_ROWS" | awk -F'|' '$4 ~ /^[0-9]/ {print $4}' | sort -u); do
+    case "$tab" in *" $ip "*) ;; *) hors="$hors $ip" ;; esac
   done
+  for n in $NODES; do
+    if printf '%s\n' "$ASP_ROWS" | awk -F'|' -v ip="${EXP_IP[$n]}" '$4 == ip {f = 1} END {exit !f}'; then
+      printf '  %s %-15s %-20s (noeud %s de la table)\n' "$OK" "${EXP_IP[$n]}" "attachee" "$n"
+    elif [ -n "$hors" ]; then
+      printf '  %s %-15s %-20s (noeud %s de la table)\n' "$WARN" "${EXP_IP[$n]}" "pas vue telle quelle" "$n"
+    else
+      printf '  %s %-15s %-20s (noeud %s de la table)\n' "$KO" "${EXP_IP[$n]}" "aucune association" "$n"
+    fi
+  done
+  [ -n "$hors" ] && printf '  %s attachees hors table :%s -- masquage NAT probable\n' "$WARN" "$hors"
 fi
 
 head "ASP ATTACHES"

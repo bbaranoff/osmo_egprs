@@ -185,12 +185,17 @@ apply_config_templates() {
     local dest=$1 container_ip=$2 gateway_ip=$3 op_id=$4
 
     # ── OSMO_NO_REGEN : ne pas refaire ce qui vient d'etre fait ─────────────
-    # run.sh rejoue cette fonction au demarrage (qemu-src,
-    # run_modules/08-gabarits.sh). Dans un conteneur, c'est une REGRESSION : les
-    # configs viennent d'etre generees par start.sh, avec l'identite du noeud,
-    # ses point codes et son inter-STP. Les regenerer depuis les gabarits les
-    # remplace par les valeurs par defaut - 1.1.2 pour tout le monde, ASP vers
-    # le hub docker, en shutdown - et l'interco meurt sans un mot.
+    # run.sh (qemu-src) peut rejouer cette fonction au demarrage. Dans un
+    # conteneur, c'est une REGRESSION : les configs viennent d'etre generees par
+    # start.sh, avec l'identite du noeud, ses point codes et son inter-STP. Les
+    # regenerer depuis les gabarits les remplace par les valeurs par defaut -
+    # 1.1.2 pour tout le monde, ASP vers le hub docker, en shutdown - et
+    # l'interco meurt sans un mot.
+    #
+    # Ce commentaire nommait run_modules/08-gabarits.sh comme cet appelant. Ce
+    # module N'EXISTE PAS - start-direct.sh le constate deja - et le seul
+    # appelant reel est start.sh. Le decrire comme existant a fait regler plus
+    # bas une option sur une configuration imaginaire, que personne ne pose.
     #
     # start-direct.sh pose donc cette variable par defaut, et --regen la leve
     # pour qui veut vraiment repartir des gabarits.
@@ -312,7 +317,9 @@ apply_config_templates() {
     # qui tienne d'accord les trois fichiers - osmo-stp, osmo-msc, osmo-bsc - et
     # leurs point codes croises. On le rejoue APRES la substitution plutot que
     # de dupliquer ici un sed qui divergerait le jour ou le plan changerait.
-    _apply_node_ss7_addressing "$dest"
+    # Son echec est celui de la generation : des configs porteuses du point-code
+    # du gabarit ne valent pas mieux que des configs non generees.
+    _apply_node_ss7_addressing "$dest" || return 1
 }
 
 # Rejoue l'adressage SS7 du noeud sur les configs fraichement generees.
@@ -328,12 +335,12 @@ _apply_node_ss7_addressing() {
     [ -d "$dest/osmocom" ] || return 0
 
     # ── L'ENVIRONNEMENT D'ABORD, le fichier de role ensuite ─────────────────
-    # Cette fonction s'execute AUSSI dans un conteneur : run.sh y rejoue
-    # apply_config_templates (qemu-src, run_modules/08-gabarits.sh), ce qui
-    # regenere tout /etc/osmocom a partir des gabarits - et efface l'identite
-    # SS7 que start.sh venait d'ecrire. Le conteneur repartait alors avec le
-    # plan du gabarit : point-code 1.1.2 pour TOUS les operateurs, donc deux
-    # equipements a la meme adresse SS7 et aucun ASP attache.
+    # Cette fonction s'execute AUSSI dans un conteneur : run.sh (qemu-src) peut
+    # y rejouer apply_config_templates, ce qui regenere tout /etc/osmocom a
+    # partir des gabarits - et efface l'identite SS7 que start.sh venait
+    # d'ecrire. Le conteneur repartait alors avec le plan du gabarit :
+    # point-code 1.1.2 pour TOUS les operateurs, donc deux equipements a la meme
+    # adresse SS7 et aucun ASP attache.
     #
     # Or le conteneur n'a pas de /etc/osmo-role - il a des VARIABLES, que
     # start.sh lui passe (OSMO_WAN_NODE, OSMO_HUB_IP). On les lit en premier :
@@ -360,7 +367,14 @@ _apply_node_ss7_addressing() {
     # start.sh calcule lui-meme l'identite de chaque conteneur, il n'a besoin
     # de personne.
 
-    [ "$role" = "operator" ] || return 0
+    # OSMO_WAN_NODE pose dans l'ENVIRONNEMENT vaut declaration lui aussi :
+    # c'est ce que start.sh passe au conteneur (-e OSMO_WAN_NODE), et un
+    # conteneur n'a pas de /etc/osmo-role, donc pas de OSMO_ROLE. Avec le seul
+    # test sur le role, le rattrapage sortait ici sans un mot la ou il est
+    # justement necessaire, et le conteneur gardait le point-code du gabarit.
+    # WAN_NODE_ID, lui, ne vaut PAS declaration : sur l'hote il designe le noeud
+    # de la MACHINE, pas celui du conteneur dont on genere les configs.
+    [ "$role" = "operator" ] || [ -n "${OSMO_WAN_NODE:-}" ] || return 0
     [[ "$node" =~ ^[1-9]$ ]] || return 0
 
     local setid="$here/network/set-node-id.sh"
@@ -372,7 +386,14 @@ _apply_node_ss7_addressing() {
     # apres la creation du reseau de l'operateur, sans un mot.
     [ -n "$hub" ] || hub="${WAN_STP_TARGET:-${INTER_STP_IP:-}}"
 
-    local args=(--node "$node" --op "${OPS_PER_NODE:-1}" --native --conf-dir "$dest/osmocom")
+    # --op de set-node-id.sh est l'INDICE de l'operateur dans le point code
+    # 1.<noeud><op>.<role>, pas leur nombre. 1 en dur : un noeud de WAN n'en
+    # porte qu'un ici. OPS_PER_NODE, lue jusqu'ici, n'est posee nulle part dans
+    # le depot - elle valait donc toujours 1, mais par accident, et le jour ou
+    # quelqu'un l'aurait exportee l'identite du noeud aurait change sans raison.
+    # Ne pas y mettre l'identifiant d'operateur : dans start.sh il vaut l'indice
+    # du CONTENEUR, et le noeud 2 passerait de 1.21.2 a 1.22.2.
+    local args=(--node "$node" --op 1 --native --conf-dir "$dest/osmocom")
     [ -n "$hub" ] && args+=(--hub-ip "$hub")
 
     # </dev/null : cette reecriture est automatique, elle ne pose JAMAIS de
@@ -382,6 +403,11 @@ _apply_node_ss7_addressing() {
     else
         echo "  ⚠ adressage SS7 du noeud ${node} NON reapplique - l'ASP inter-STP" >&2
         echo "    gardera les defauts du gabarit (127.0.0.1, shutdown)." >&2
+        # Avertir puis rendre 0, c'etait laisser le demarrage se poursuivre sur
+        # des configs dont l'identite SS7 est restee au gabarit : rien en amont
+        # ne relit le point code qui vient d'etre ecrit, et la panne ne se
+        # voyait qu'a l'ASP qui ne s'attachait jamais.
+        return 1
     fi
 }
 

@@ -1027,9 +1027,14 @@ AIRREC      = os.environ.get("PONT_AIRREC", "1") not in ("0", "", "no")
 AIRREC_DIR  = os.environ.get("PONT_AIRREC_DIR", "/root/osmo-rec")
 AIRREC_OSR  = int(os.environ.get("PONT_AIRREC_OSR", "4"))            # 4 -> 1083333 sps
 # PLAFOND DUR, par sens. Atteint, on ARRETE d'ecrire — on ne fait PAS
-# tourner : le fichier reste entier et decodable. 16 Gio = ~31 min a
-# 8,67 Mo/s, largement au-dela de toute fenetre d'analyse utile.
-AIRREC_MAX  = int(os.environ.get("PONT_AIRREC_MAX_MB",   "16384")) * 1024 * 1024
+# tourner : le fichier reste entier et decodable.
+# [2026-08-26] PLAFOND RAMENE DE 16384 A 512 Mo. 16 Gio par sens, c'etait plus
+# que la RAM totale de la machine (10,4 Go) et la racine de la VM est en RAM :
+# le plafond ne pouvait donc JAMAIS etre atteint avant que le systeme de
+# fichiers soit plein. Il l'a ete — racine a 100 %, 4,6 Go, 2,46 Go par cfile —
+# et le banc est tombe avec. 512 Mo = ~1 min a 8,67 Mo/s, ce qui tient dans ce
+# que la machine peut reellement offrir.
+AIRREC_MAX  = int(os.environ.get("PONT_AIRREC_MAX_MB",   "512")) * 1024 * 1024
 # Alerte (sans effacer) quand le repertoire depasse ce total : plusieurs runs
 # s'y accumulent, et supprimer les captures de l'operateur sans le lui dire
 # serait pire que de le prevenir.
@@ -1246,6 +1251,16 @@ class _AirRec:
                    "rien n'est efface automatiquement, faites le menage"
                    % (AIRREC_DIR, total / 1e9, AIRREC_DIRMAX / 1e9))
 
+    def _espace_ok(s):
+        """Espace libre restant sur le volume qui porte le cfile. Rend True quand
+        la mesure echoue : couper une capture sur un statvfs en erreur serait pire
+        que la laisser sous la seule surveillance du plafond."""
+        try:
+            st = os.statvfs(os.path.dirname(s.path or s.fixe or "") or AIRREC_DIR)
+        except OSError:
+            return True
+        return st.f_bavail * st.f_frsize >= AIRREC_FREE
+
     def rotate(s):
         """Ouvre LE fichier du run (un seul, continu). Conserve son nom d'origine
         parce que SIGUSR1 permet encore d'en forcer un neuf a la main."""
@@ -1370,6 +1385,22 @@ class _AirRec:
             s.n_frames += 1
         except OSError as e:
             ST.log("airrec %s ecriture ECHEC (%s) — COUPE" % (s.sens, e))
+            s.off = True
+            return True
+        # GARDE D'ESPACE REJOUEE EN COURS D'ECRITURE. Elle n'existait que dans
+        # rotate(), qui n'est appelee qu'au demarrage : avec un chemin de fichier
+        # FIXE, plus rien ne la reevaluait ensuite, et les deux cfile ont rempli
+        # la racine de la VM a 100 % (4,6 Go) pendant que le pont tournait — le
+        # seul plafond en vigueur portait sur la taille du fichier, pas sur ce
+        # qui restait sous lui. Toutes les 2000 trames (~9 s, ~80 Mo par sens) :
+        # assez souvent pour s'arreter avant le mur, assez rare pour ne rien
+        # couter au chemin d'ecriture.
+        if s.n_frames % 2000 == 0 and not s._espace_ok():
+            ST.log("airrec %s : moins de %d Mo libres sur %s — ARRET de "
+                   "l'ecriture, le fichier reste complet et decodable"
+                   % (s.sens, AIRREC_FREE // 1048576, s.path))
+            try: s.fh.flush()
+            except OSError: pass
             s.off = True
             return True
         # PLUS DE ROTATION A LA TAILLE. Au plafond on ARRETE : le fichier reste

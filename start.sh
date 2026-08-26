@@ -624,8 +624,13 @@ start_inter_stp() {
 
     echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.0.0)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
+    # --restart, PAS --rm : avec --rm, un reboot de l'hote ne laissait pas le hub
+    # arrete, il le faisait DISPARAITRE - au retour, plus rien a redemarrer, et
+    # des ASP qui ouvrent leur SCTP vers personne. Les deux options sont
+    # exclusives (docker refuse la combinaison au parsing), et le "docker rm -f"
+    # ci-dessus tient deja le role de --rm : aucun reliquat du lancement d'avant.
     docker run -d \
-        --rm \
+        --restart unless-stopped \
         --name "$INTER_STP_CONTAINER" \
         --hostname "$INTER_STP_CONTAINER" \
         --network "$INTER_NET" \
@@ -936,9 +941,13 @@ wan_mesh_apply() {
 
 # ── Rendre au trafic sortant son adresse d'origine ───────────────────────────
 # Docker masque tout ce qui quitte un bridge : vues du LAN, les associations des
-# conteneurs semblent toutes venir de l'hote. Or l'inter-STP identifie ses ASP
-# par leur ADRESSE SOURCE - trois operateurs derriere une seule IP sont
-# indiscernables, et il les rattache au mauvais AS ou les refuse.
+# conteneurs semblent toutes venir de l'hote. Ce n'est PAS ce qui empeche un ASP
+# de rejoindre son AS : l'inter-STP est en "accept-asp-connections
+# dynamic-permitted" (helpers/create_interop.sh) et apparie par ROUTING CONTEXT,
+# pas par adresse source - il n'a aucun bloc "match=", contrairement a ce qui
+# etait ecrit ici. Preserver l'adresse reste utile pour autre chose : un
+# diagnostic qui nomme l'operateur au lieu de montrer trois fois l'hote
+# (checks/diag-interstp.sh), et un pare-feu qui peut distinguer les sources.
 # network/setup-docker-lan-route.sh pose donc un RETURN en tete de POSTROUTING.
 #
 # POURQUOI LE REJOUER ICI
@@ -962,9 +971,81 @@ reassert_docker_lan_return() {
     # au bridge : on s'abstient plutot que de deviner.
     [ "${lan_net%%/*}" = "${INTER_NET_SUBNET%%/*}" ] && return 0
 
-    iptables -t nat -D POSTROUTING -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null
+    local _was_first=1
+    iptables -t nat -C POSTROUTING -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null \
+        && [ "$(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | awk '/RETURN/{print $1; exit}')" = "1" ] \
+        || _was_first=0
+
+    # || true : sous "set -eu", un -D qui ne trouve pas la regle - le cas du
+    # PREMIER passage, ou d'un pare-feu remis a plat - renvoie 1 et faisait
+    # sortir start.sh sur-le-champ, au milieu de la creation des reseaux. Sans
+    # un mot, la fonction etant appelee la avec sa sortie redirigee.
+    iptables -t nat -D POSTROUTING -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null || true
     if iptables -t nat -I POSTROUTING 1 -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null; then
-        echo -e "  ${CYAN}[WAN] adresse source preservee vers ${lan_net} (RETURN en tete de POSTROUTING)${NC}"
+        [ "$_was_first" = 1 ] || \
+            echo -e "  ${CYAN}[WAN] adresse source preservee vers ${lan_net} (RETURN en tete de POSTROUTING)${NC}"
+    fi
+
+    # ── Le FORWARD, sans quoi le routage ne sert a rien ─────────────────────
+    # Docker pose un FORWARD par defaut a DROP : un paquet du LAN vers le
+    # backbone (ou l'inverse) est jete avant d'atteindre le conteneur, sans
+    # refus ni trace - cote VM, on ne voit qu'un silence. DOCKER-USER est
+    # consultee AVANT les regles de docker et il ne la reecrit pas.
+    # network/setup-docker-lan-route.sh pose ces deux memes regles, mais aucun
+    # chemin automatique ne l'appelle : elles n'existaient donc sur le banc que
+    # si on avait pense a lancer ce script a la main. On les pose ici, ou la
+    # fonction est deja rejouee apres chaque reseau cree.
+    iptables -N DOCKER-USER 2>/dev/null || true
+    local _spec
+    for _spec in "-s ${lan_net} -d ${INTER_NET_SUBNET}" "-s ${INTER_NET_SUBNET} -d ${lan_net}"; do
+        # shellcheck disable=SC2086
+        if iptables -C DOCKER-USER $_spec -j ACCEPT 2>/dev/null; then
+            continue
+        fi
+        # shellcheck disable=SC2086
+        if iptables -I DOCKER-USER 1 $_spec -j ACCEPT 2>/dev/null; then
+            echo -e "  ${CYAN}[WAN] FORWARD autorise (${_spec})${NC}"
+        fi
+    done
+
+    # ── Les traductions DEJA etablies ───────────────────────────────────────
+    # La regle ne vaut que pour les nouvelles associations. Celles qui ont ete
+    # masquees avant elle gardent leur traduction tant qu'elles vivent : le hub
+    # continue de les voir sous l'adresse de l'hote, et l'on croit la regle
+    # inoperante alors qu'elle est bien la. On efface donc ces entrees - les
+    # piles se reconnectent, cette fois avec leur vraie adresse.
+    #
+    # SAUF quand docker 29 a pose son DROP. Sa table "ip raw" jette, en
+    # prerouting, tout paquet entrant vers le backbone qui n'arrive pas par le
+    # bridge : une association qui repart avec sa vraie adresse source ne recoit
+    # alors plus aucune reponse et reste en COOKIE_WAIT. Purger conntrack dans
+    # cet etat coupe des ASP qui ne tiennent QUE par le masquage, pour les faire
+    # renaitre muets - c'est exactement la panne qu'on croit corriger.
+    local _nft_drop=0
+    if command -v nft >/dev/null 2>&1; then
+        if nft list table ip raw 2>/dev/null \
+           | grep -F "${INTER_NET_SUBNET%.*}." | grep -q 'drop'; then
+            _nft_drop=1
+        fi
+    fi
+    if [ "$_nft_drop" = "1" ]; then
+        echo -e "  ${YELLOW}[WAN] DROP nft de docker actif sur ${INTER_NET_SUBNET} :${NC}"
+        echo -e "  ${YELLOW}      purge conntrack SAUTEE (elle couperait les ASP attaches).${NC}"
+        echo -e "  ${CYAN}      Backbone en mode routed pour le lever : OSMO_DOCKER_ROUTED=1${NC}"
+    elif command -v conntrack >/dev/null 2>&1; then
+        # BORNEE a la destination LAN. Sans -d, la meme commande effacait aussi
+        # les flux 172.20.0.x <-> 172.20.0.x, c'est-a-dire tout le SS7
+        # intra-backbone : les ASP du hub local tombaient d'un seul coup, et le
+        # message parlait pourtant de "traductions heritees".
+        local _purged
+        _purged="$(conntrack -D -s "$INTER_NET_SUBNET" -d "$lan_net" 2>/dev/null | grep -c . || true)"
+        echo -e "  ${CYAN}[WAN] ${_purged} traduction(s) heritee(s) effacee(s) vers ${lan_net}${NC}"
+    else
+        # Le cas de l'hote du banc. Le bloc etait saute sans un mot : on croyait
+        # les traductions effacees alors qu'elles vivaient encore, et le hub
+        # continuait de voir l'adresse de l'hote sans que rien ne l'explique.
+        echo -e "  ${YELLOW}[WAN] conntrack absent : les associations deja masquees gardent${NC}"
+        echo -e "  ${YELLOW}      leur traduction jusqu'a leur reconnexion (apt install conntrack)${NC}"
     fi
 }
 
@@ -1133,12 +1214,30 @@ start_bridge_mode() {
     fi
 
     # ── Reseau backbone ──────────────────────────────────────────────────────
+    # OSMO_DOCKER_ROUTED=1 : bridge en mode "routed" (docker >= 28). Docker
+    # cesse alors de masquer ce qui sort du backbone, et surtout n'installe pas
+    # dans sa table "ip raw" le DROP qui jette, en prerouting, tout paquet
+    # entrant vers 172.20.0.x n'arrivant pas par le bridge. Avec ce DROP, un
+    # conteneur joint depuis le LAN a sa VRAIE adresse ne recoit jamais de
+    # reponse : son association SCTP reste en COOKIE_WAIT, sans un mot dans les
+    # journaux. C'est le seul reglage qui leve les deux a la fois.
+    # Optionnel et non fatal : docker < 28 ne connait pas l'option et refuse la
+    # creation, on retombe alors en silence sur le reseau ordinaire (masque),
+    # celui avec lequel le banc a toujours tourne.
     if docker network inspect "$INTER_NET" &>/dev/null; then
         echo -e "  ${CYAN}Reseau backbone ${INTER_NET} deja present${NC}"
-    elif docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" "$INTER_NET" &>/dev/null; then
-        echo -e "  ${GREEN}✓ Reseau backbone ${INTER_NET} (${INTER_NET_SUBNET}) cree${NC}"
     else
-        echo -e "  ${RED}✗ Echec creation reseau backbone ${INTER_NET} (${INTER_NET_SUBNET})${NC}"; exit 1
+        if [ "${OSMO_DOCKER_ROUTED:-0}" = "1" ] \
+           && docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" \
+                -o com.docker.network.bridge.gateway_mode_ipv4=routed "$INTER_NET" &>/dev/null; then
+            echo -e "  ${GREEN}✓ Reseau backbone ${INTER_NET} (${INTER_NET_SUBNET}) cree - mode routed${NC}"
+        elif docker network create --subnet="$INTER_NET_SUBNET" --gateway="$INTER_NET_GATEWAY" "$INTER_NET" &>/dev/null; then
+            [ "${OSMO_DOCKER_ROUTED:-0}" = "1" ] \
+                && echo -e "  ${YELLOW}  (mode routed refuse par ce docker - reseau ordinaire)${NC}"
+            echo -e "  ${GREEN}✓ Reseau backbone ${INTER_NET} (${INTER_NET_SUBNET}) cree${NC}"
+        else
+            echo -e "  ${RED}✗ Echec creation reseau backbone ${INTER_NET} (${INTER_NET_SUBNET})${NC}"; exit 1
+        fi
     fi
 
     # ── SMS Routing ──────────────────────────────────────────────────────────
@@ -1235,6 +1334,17 @@ start_bridge_mode() {
             echo -e "  ${RED}✗ Echec creation reseau ${net_name} (${subnet})${NC}"; exit 1
         fi
 
+        # ── La regle de non-masquage, AVANT que la pile ne se connecte ───────
+        # Une decision de NAT se prend sur le PREMIER paquet d'une association :
+        # conntrack la conserve ensuite pour toute sa duree. Poser la regle en
+        # fin de lancement arrivait donc trop tard - l'ASP s'etait deja attache,
+        # masque, et le hub le voyait sous l'adresse de l'hote jusqu'a sa
+        # prochaine reconnexion. Deux operateurs y devenaient indiscernables.
+        #
+        # Ici, elle est reaffirmee apres CHAQUE reseau cree (docker reinsere ses
+        # MASQUERADE en tete a chacun) et donc avant tout demarrage de pile.
+        reassert_docker_lan_return >/dev/null
+
         local tmpdir
         tmpdir=$(mktemp -d)
         # Plan de point codes. Hors WAN : 1.<op>.<role>, comme toujours. En WAN :
@@ -1314,9 +1424,21 @@ start_bridge_mode() {
         docker rm -f "$container_name" 2>/dev/null || true
         ensure_host_audio_relay
 
+        # --restart, PAS --rm : au reboot, les conteneurs operateurs ne se
+        # retrouvaient pas arretes mais DISPARUS - avec leur base HLR alimentee
+        # et tout ce qui n'est pas monte depuis l'hote. Le banc etait a remonter
+        # entierement apres une simple coupure. Le "docker rm -f" juste au-dessus
+        # rend --rm inutile, et docker refuse --rm avec --restart au parsing.
+        #
+        # OSMO_ROLE=operator : le conteneur regenere ses configs quand run.sh
+        # rejoue apply_config_templates, et le rattrapage d'identite SS7 de
+        # generate_configs.sh s'arrete net sur un role vide - sans rien
+        # reappliquer et sans rien dire. Le conteneur repartait alors sur le
+        # point code du gabarit, 1.1.2 pour TOUS, donc deux equipements a la
+        # meme adresse SS7 et aucun ASP attache.
         # shellcheck disable=SC2086
         docker run -d \
-            --rm \
+            --restart unless-stopped \
             --name "$container_name" \
             --hostname "$container_name" \
             --network "$INTER_NET" \
@@ -1336,6 +1458,7 @@ start_bridge_mode() {
             --tmpfs /run:exec,size=64m \
             --tmpfs /run/lock \
             -e OPERATOR_ID="$i" \
+            -e OSMO_ROLE=operator \
             -e N_MS="${OP_MS[$i]}" \
             -e CONTAINER_IP="$container_ip" \
             -e GATEWAY_IP="$gateway" \
@@ -1575,6 +1698,12 @@ start_bridge_mode() {
         # pourtant vivante.
         _launch_stack() {             # $1=conteneur  $2=arguments de noeud
             local _ct="$1" _na="$2"
+            # Seule la branche d'erreur reste : "docker exec -d" ne rend compte
+            # que de la REMISE de la commande, pas de ce qu'elle devient. Il
+            # reussit tout autant quand start-direct.sh meurt a sa premiere
+            # ligne - on annoncait donc "pile complete lancee" sur un conteneur
+            # vide, et on cherchait la panne ailleurs. L'etat reel se verifie
+            # apres la boucle, au VTY.
             docker exec -d "$_ct" bash -c \
                 "cd /opt/GSM/osmo_egprs && \
                  ./start-direct.sh --stop >/dev/null 2>&1; \
@@ -1582,8 +1711,7 @@ start_bridge_mode() {
                  ENCRYPTION='a5 1' CALYPSO_BRIDGE='pont' CALYPSO_MODE='shunt_legit' \
                  ${_wan_env} \
                  ./start-direct.sh ${_na} --force > /var/log/osmocom/run.sh.log 2>&1" \
-                && echo -e "  ${GREEN}[*] ${_ct} : pile complete lancee${NC}" \
-                || echo -e "  ${YELLOW}[!] ${_ct} : lancement en echec${NC}"
+                || echo -e "  ${YELLOW}[!] ${_ct} : docker exec refuse (conteneur absent ou mort)${NC}"
         }
 
         local _c _cnode _cargs
@@ -1598,11 +1726,31 @@ start_bridge_mode() {
             _launch_stack "$(op_container "$_c")" "$_cargs"
         done
 
-        # Laisser aux piles le temps d'ouvrir leurs sessions avant de s'attacher.
+        # ── L'etat REEL de chaque pile, avant de rendre la main ────────────
+        # La barriere d'avant attendait une session tmux "calypso" sur le seul
+        # premier conteneur. Une session RESIDUELLE - celle du lancement
+        # precedent, que start-direct.sh --stop ne ferme pas toujours - la
+        # satisfaisait immediatement : on repartait en annoncant des piles
+        # debout alors que rien n'avait redemarre.
+        #
+        # Le VTY du STP, lui, ne discrimine pas : le port 4239 n'ecoute que si
+        # osmo-stp tourne dans CE conteneur, maintenant. wait_stp_vty le sonde
+        # via /dev/tcp, borne a 60 s, et on le fait pour chaque operateur.
         echo -e "  ${CYAN}[*] demarrage des piles...${NC}"
-        local _try=0
-        until [ "$_try" -ge 30 ] || docker exec "$_qemu_container" tmux has-session -t calypso 2>/dev/null; do
-            _try=$(( _try + 1 )); sleep 2
+        # start-direct.sh commence par un --stop : pendant quelques secondes,
+        # l'osmo-stp pose par run.sh ecoute encore sur 4239. Sonder tout de
+        # suite validerait la pile qu'on vient justement d'arreter.
+        sleep 5
+        local _cw _ctw
+        for _cw in $(seq 1 "$n_operators"); do
+            _ctw="$(op_container "$_cw")"
+            echo -e "  ${CYAN}${_ctw}${NC}"
+            if wait_stp_vty "$_ctw"; then
+                echo -e "  ${GREEN}[*] ${_ctw} : pile complete lancee${NC}"
+            else
+                echo -e "  ${RED}[!] ${_ctw} : pile absente (VTY STP 4239 muet)${NC}"
+                echo -e "      ${CYAN}docker exec ${_ctw} tail -50 /var/log/osmocom/run.sh.log${NC}"
+            fi
         done
 
         # La session a rejoindre : c'est run.sh qui la nomme, pas nous.
@@ -1613,26 +1761,23 @@ start_bridge_mode() {
             else echo "|"; fi
         }
 
-        for _c in $(seq 2 "$n_operators"); do
+        # ── Les commandes d'attache, et RIEN de plus ────────────────────────
+        # Aucune attache automatique : start.sh rend la main. S'attacher tout
+        # seul au premier conteneur monopolisait le terminal de lancement et
+        # masquait la fin de la sequence - or c'est la qu'on lit ce qui a
+        # demarre, et ce qui n'a pas demarre.
+        echo ""
+        echo -e "  ${BOLD}Les piles tournent. Pour les suivre :${NC}"
+        for _c in $(seq 1 "$n_operators"); do
             local _ct _ss
             _ct="$(op_container "$_c")"; _ss="$(_stack_session "$_ct")"
             if [ -n "${_ss#*|}" ]; then
                 echo -e "      ${CYAN}docker exec -ti ${_ct} tmux ${_ss%%|*} attach -t ${_ss#*|}${NC}"
             else
-                echo -e "      ${YELLOW}${_ct} : pas encore de session - ${CYAN}docker exec ${_ct} tail -f /var/log/osmocom/run.sh.log${NC}"
+                echo -e "      ${YELLOW}${_ct}${NC} : session pas encore ouverte - ${CYAN}docker exec ${_ct} tail -f /var/log/osmocom/run.sh.log${NC}"
             fi
         done
         echo -e "\n  ${CYAN}Ctrl-b puis d${NC} pour vous detacher sans rien arreter.\n"
-
-        # Le premier prend le terminal courant.
-        _s1="$(_stack_session "$_qemu_container")"
-        if [ -n "${_s1#*|}" ]; then
-            # shellcheck disable=SC2086
-            exec docker exec -ti "$_qemu_container" tmux ${_s1%%|*} attach -t "${_s1#*|}"
-        else
-            echo -e "  ${YELLOW}${_qemu_container} : aucune session tmux - journal :${NC}"
-            exec docker exec -ti "$_qemu_container" tail -f /var/log/osmocom/run.sh.log
-        fi
     fi
 }
 
@@ -1674,6 +1819,13 @@ start_host_mode() {
     local nethost_relay=""
     [ -n "$HOST_AUDIO_RELAY" ] && nethost_relay="tcp:127.0.0.1:${WSLG_TCP_PORT}"
 
+    # --rm CONSERVE ici, contrairement aux conteneurs operateurs. Celui-la a
+    # pour commande run.sh et non "sleep infinity" : il s'arrete des que run.sh
+    # rend la main, et --restart le relancerait alors en boucle - sur le reseau
+    # de l'HOTE, en concurrence avec le gnome-terminal qui ouvre sa propre
+    # session juste apres. Il depend en outre de prepare_host_tun (apn0), qui
+    # n'existe plus apres un reboot : un redemarrage automatique repartirait
+    # dans un environnement incomplet. Ce mode se relance donc a la main.
     # shellcheck disable=SC2086
     docker run -d --rm --name egprs --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW \

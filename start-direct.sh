@@ -241,6 +241,13 @@ else
     [ -n "$NODE_ID" ] && NODE_ID_SRC="${_detected#*|}"
     unset _detected
 fi
+# L'adresse du hub arrive par le MEME chemin que le noeud : start.sh la pose
+# dans l'environnement du conteneur (OSMO_HUB_IP, et INTER_STP_IP pour les
+# scripts plus anciens). Sans ce repli, HUB_IP restait vide alors que la
+# reponse etait deja la, et le lanceur ouvrait une boite whiptail pour
+# redemander l'adresse du hub : dans un conteneur lance sans terminal,
+# personne ne repond et le demarrage se figeait la, sans un mot.
+[ -n "$HUB_IP" ] || HUB_IP="${OSMO_HUB_IP:-${INTER_STP_IP:-}}"
 # Pour les scripts qui ne connaissent que deux mondes : docker, ou tout le reste.
 case "$RUNTIME_ENV" in docker) NODE_MODE=docker ;; *) NODE_MODE=native ;; esac
 
@@ -682,6 +689,12 @@ esac
 # cache sait deja. Sans terminal, rien n'est demande : les defauts s'appliquent,
 # une ISO qui demarre seule ne peut pas rester bloquee sur une question.
 ask_node_identity() {
+    # NO_MENU=1 est ce que start.sh pose devant le lanceur quand les choix ont
+    # deja ete faits sur l'hote. Il n'etait lu NULLE PART ici : le conteneur
+    # arrivait donc sur les questions d'identite avec toutes les reponses en
+    # poche, et attendait sur une boite que personne n'allait valider. Un
+    # lanceur automatique ne pose pas de question.
+    [ "${NO_MENU:-0}" = "1" ] && return 0
     [ -t 0 ] || return 0
     [ "$DRY" -eq 1 ] && return 0
 
@@ -695,11 +708,10 @@ ask_node_identity() {
     # ses configs par defaut (point-code 1.1.2, ASP vers le hub docker, en
     # shutdown) et ecrasait celle que start.sh venait d'ecrire. Le fichier
     # portait les bonnes valeurs juste avant, les mauvaises juste apres.
-    if [ "$cached_src" = "environnement" ] && [ -z "$NODE_ID" ]; then
-        NODE_ID="$cached_node"
-        [ -n "$HUB_IP" ] || HUB_IP="${OSMO_HUB_IP:-}"
-        return 0
-    fi
+    # Le rattrapage qui se trouvait ici ne servait plus a rien : il exigeait un
+    # NODE_ID vide, alors que la resolution du noeud, bien plus haut, l'a deja
+    # rempli depuis cette meme source. NODE_ID et HUB_IP sont donc repris de
+    # l'environnement la-bas, une fois, et pas ici.
     cached_hub="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' /etc/osmo-role 2>/dev/null)"
     [ -n "$cached_hub" ] || cached_hub="192.168.1.49"
 
@@ -738,6 +750,17 @@ ask_node_identity
 if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
     unset OSMO_NO_REGEN
     printf '  %sgabarits%s   regeneration demandee (--regen)\n' "${C_DIM:-}" "${C_Z:-}"
+    # generate_configs.sh ne retablit l'adressage SS7 apres regeneration que
+    # s'il sait QUI il sert, et il ne le lit que dans l'environnement
+    # (OSMO_ROLE / OSMO_WAN_NODE). NODE_ID n'est qu'une variable locale du
+    # lanceur : sans ces exports, --regen rendait tous les noeuds au plan du
+    # gabarit - point-code 1.1.2 pour tout le monde, ASP vers 127.0.0.1 - et
+    # l'interco mourait au moment precis ou l'on demandait des configs neuves.
+    if [ -n "${NODE_ID:-${WAN_NODE_ID:-}}" ]; then
+        export OSMO_ROLE=operator
+        export OSMO_WAN_NODE="${NODE_ID:-${WAN_NODE_ID:-}}"
+        [ -n "$HUB_IP" ] && export OSMO_HUB_IP="$HUB_IP"
+    fi
 elif [ "${RUNTIME_ENV:-native}" = "docker" ]; then
     # DANS UN CONTENEUR seulement. Les configs y sont deja ecrites par start.sh,
     # avec l'identite du noeud : les regenerer les remplace par les valeurs des

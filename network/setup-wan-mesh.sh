@@ -64,6 +64,26 @@ wan_sms_port()  { echo $(( SMS_RELAY_BASE + $1 - 1 )); }
 op_backbone_ip(){ echo "172.20.0.$((10 + $1))"; }
 op_container()  { echo "${CONTAINER_PREFIX}$1"; }
 
+# Un pair dont l'adresse est celle du backbone est joint DANS le bridge : le
+# trafic n'y traverse pas la table nat de l'hote (br_netfilter n'est pas
+# charge), donc les ports PUBLIES sur l'hote - 5080/5082 pour SIP, 7891 pour le
+# relais SMS du second operateur - ne repondent a personne. Les contacts et les
+# routes visaient ces ports-la : le qualify restait KO et les SMS partaient dans
+# le vide. Vers un tel pair il faut viser ce que le conteneur ecoute vraiment,
+# 5060 et le port de base du relais.
+peer_is_backbone() { case "$1" in 172.20.0.*) return 0 ;; *) return 1 ;; esac; }
+
+# Nombre d'operateurs portes par un noeud DISTANT. Le compteur local ne le dit
+# pas : avec un noeud par conteneur il vaut 2 et fabriquait un trunk vers un
+# operateur inexistant, un pattern _<indicatif>2XXXX et une route SMS que
+# personne ne sert. WAN_NOPS vient de la table ; repli a 1 quand elle est
+# ancienne et ne porte pas encore le champ.
+node_nops() {
+    local n="${WAN_NOPS[$1]:-1}"
+    [[ "$n" =~ ^[1-9][0-9]*$ ]] || n=1
+    echo "$n"
+}
+
 # ── Piege `pipefail` + `grep -q` ─────────────────────────────────────────────
 # `grep -q` sort des la PREMIERE correspondance ; le producteur du pipeline
 # recoit alors SIGPIPE et meurt en 141, et sous `set -o pipefail` c'est 141 que
@@ -173,6 +193,22 @@ mesh_set_context() {
 mesh_set_context "${OP_IDS[0]}"
 [ "${#REMOTES[@]}" -ge 1 ] || { echo -e "${RED}Aucun pair distant.${NC}" >&2; exit 1; }
 
+# Union des pairs de TOUS les operateurs locaux. mesh_set_context recalcule
+# REMOTES a chaque appel : ce qui ne depend pas d'un operateur - l'ouverture du
+# pare-feu, les compteurs affiches - lisait la liste du DERNIER operateur et
+# oubliait les pairs des autres.
+ALL_REMOTES=(); _seen=""
+for _i in "${OP_IDS[@]}"; do
+    mesh_set_context "$_i"
+    for _r in "${REMOTES[@]}"; do
+        case " $_seen " in
+            *" $_r "*) ;;
+            *) _seen="$_seen $_r"; ALL_REMOTES+=("$_r") ;;
+        esac
+    done
+done
+mesh_set_context "${OP_IDS[0]}"
+
 run() { if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $*"; else "$@"; fi; }
 
 # ── Acces aux fichiers de conf, docker ou natif ──────────────────────────────
@@ -225,7 +261,7 @@ echo ""
 # ══════════════════════════════════════════════════════════════════════════════
 # [2/6] iptables - entree depuis chaque pair
 # ══════════════════════════════════════════════════════════════════════════════
-echo -e "${GREEN}[2/6] iptables - ouverture entrante depuis ${#REMOTES[@]} pair(s)...${NC}"
+echo -e "${GREEN}[2/6] iptables - ouverture entrante depuis ${#ALL_REMOTES[@]} pair(s)...${NC}"
 if [ "$CONFIG_ONLY" -eq 1 ]; then
     echo -e "  ${YELLOW}--config-only : ni iptables ni firewall. Les ports WAN resteront fermes${NC}"
     echo -e "  ${YELLOW}tant que ce script n'aura pas ete relance sans --config-only.${NC}"
@@ -239,18 +275,29 @@ if [ "$DRY" -eq 0 ]; then
     iptables -t nat -N "$CHAIN"
 fi
 
-for r in "${REMOTES[@]}"; do
-    rip="${WAN_IP[$r]}"
-    for i in "${OP_IDS[@]}"; do
-        mesh_set_context "$i"
-        sip=$(wan_sip_port "$i"); rs=$(wan_rtp_start "$i"); re=$(wan_rtp_end "$i")
-        sms=$(wan_sms_port "$i")
+# L'operateur local est la boucle EXTERIEURE : mesh_set_context recalcule
+# REMOTES, et prise dans l'autre sens la boucle des pairs lisait la liste laissee
+# par le dernier appel - une seule vue servait tous les operateurs, si bien que
+# les pairs des autres n'avaient aucune regle et que les seules sources presentes
+# dans la chaine etaient celles d'un seul operateur.
+for i in "${OP_IDS[@]}"; do
+    mesh_set_context "$i"
+    lip="$LOCAL_IP"
+    sip=$(wan_sip_port "$i"); rs=$(wan_rtp_start "$i"); re=$(wan_rtp_end "$i")
+    sms=$(wan_sms_port "$i")
+    for r in "${REMOTES[@]}"; do
+        rip="${WAN_IP[$r]}"
         if [ "$MODE" = "docker" ]; then
             bb=$(op_backbone_ip "$i")
-            run iptables -t nat -A "$CHAIN" -s "$rip" -p udp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
-            run iptables -t nat -A "$CHAIN" -s "$rip" -p tcp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
-            run iptables -t nat -A "$CHAIN" -s "$rip" -p udp --dport "${rs}:${re}" -j DNAT --to-destination "$bb"
-            run iptables -t nat -A "$CHAIN" -s "$rip" -p tcp --dport "$sms" -j DNAT --to-destination "${bb}:${SMS_RELAY_BASE}"
+            # -d "$lip" : filtrer la seule source attrapait aussi ce que CE noeud
+            # EMET vers le pair (meme source, meme port de destination). Le paquet
+            # ne quittait jamais l'hote, il repartait vers notre propre conteneur
+            # qui se repondait a lui-meme - le trunk affichait "Avail" alors que le
+            # pair n'avait rien recu.
+            run iptables -t nat -A "$CHAIN" -s "$rip" -d "$lip" -p udp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
+            run iptables -t nat -A "$CHAIN" -s "$rip" -d "$lip" -p tcp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
+            run iptables -t nat -A "$CHAIN" -s "$rip" -d "$lip" -p udp --dport "${rs}:${re}" -j DNAT --to-destination "$bb"
+            run iptables -t nat -A "$CHAIN" -s "$rip" -d "$lip" -p tcp --dport "$sms" -j DNAT --to-destination "${bb}:${SMS_RELAY_BASE}"
         else
             # Natif : Asterisk et le relais ecoutent deja sur l'hote. Seule la
             # translation de port WAN → port de service est necessaire ; le RTP
@@ -260,19 +307,28 @@ for r in "${REMOTES[@]}"; do
             [ "$sms" = "$SMS_RELAY_BASE" ] || \
                 run iptables -t nat -A "$CHAIN" -s "$rip" -p tcp --dport "$sms" -j REDIRECT --to-ports "$SMS_RELAY_BASE"
         fi
+        echo -e "  ${CYAN}node ${r}${NC} ${rip} → Op${i} SIP/RTP/SMS acceptes"
     done
-    echo -e "  ${CYAN}node ${r}${NC} ${rip} → SIP/RTP/SMS acceptes"
 done
 
 if [ "$DRY" -eq 0 ]; then
     iptables -t nat -I PREROUTING -j "$CHAIN"
-    if [ "$MODE" = "docker" ] && ! iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null; then
-        iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -j MASQUERADE
+    if [ "$MODE" = "docker" ]; then
+        # --ctstate DNAT : sans restriction, ce masquage prenait AUSSI les flux du
+        # LAN simplement routes vers un conteneur ; celui-ci repondait alors a
+        # l'hote et non au client, qui n'a jamais vu la reponse. On ne masque donc
+        # que ce que notre propre DNAT a redirige. Restreindre plutot sur l'adresse
+        # de l'hote ne matcherait rien : apres DNAT la source est celle du pair.
+        # L'ancienne regle large est retiree d'abord - le garde -C teste la spec
+        # exacte, sans cela les deux resteraient en place et la large gagnerait.
+        iptables -t nat -D POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null || true
+        iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null \
+            || iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE
     fi
 fi
 
 # Firewall INPUT - sans ca le DNAT redirige un trafic que l'INPUT jette.
-for r in "${REMOTES[@]}"; do
+for r in "${ALL_REMOTES[@]}"; do
     if [ -f "$SCRIPT_DIR/firewall-wan.sh" ]; then
         run bash "$SCRIPT_DIR/firewall-wan.sh" "${WAN_IP[$r]}" "$N_OPS" >/dev/null 2>&1 \
             && echo -e "  ${GREEN}✓${NC} firewall ouvert pour ${WAN_IP[$r]}" \
@@ -330,17 +386,27 @@ for i in "${OP_IDS[@]}"; do
         echo "; Trunks WAN - generes par network/setup-wan-mesh.sh"
         echo "; Noeud local ${WAN_NODE_ID} (${LOCAL_IP}, indicatif ${LOCAL_IND})"
         for r in "${REMOTES[@]}"; do
-            rip="${WAN_IP[$r]}"; rind="${WAN_IND[$r]}"
-            for j in $(seq 1 "$N_OPS"); do
+            rip="${WAN_IP[$r]}"; rind="${WAN_IND[$r]}"; rnops="$(node_nops "$r")"
+            # UN identify par adresse distante : identify ne regarde que l'adresse
+            # source, jamais le port. Un bloc par operateur distant en posait
+            # plusieurs pour la MEME adresse, et l'appel entrant etait attribue a
+            # l'un d'eux au hasard - donc parfois au mauvais contexte d'arrivee.
+            cat <<EOF
+
+; ── node ${r} (indicatif ${rind}) · ${rip} · ${rnops} operateur(s) ──
+[wan-id-n${r}]
+type=identify
+endpoint=wan_n${r}_op1
+match=${rip}
+EOF
+            for j in $(seq 1 "$rnops"); do
                 rsip=$(wan_sip_port "$j")
+                # Pair sur le backbone : le port publie sur l'hote n'est pas
+                # traverse dans le bridge, c'est 5060 que le conteneur ecoute.
+                if peer_is_backbone "$rip"; then rsip=5060; fi
                 cat <<EOF
 
-; ── node ${r} (indicatif ${rind}) · operateur ${j} · ${rip}:${rsip} ──
-[wan-id-n${r}op${j}]
-type=identify
-endpoint=wan_n${r}_op${j}
-match=${rip}$( [ "$MODE" = "docker" ] && printf '\nmatch=172.20.0.1' )
-
+; ── node ${r} · operateur ${j} · ${rip}:${rsip} ──
 [wan_n${r}_op${j}]
 type=endpoint
 transport=transport-udp
@@ -364,12 +430,28 @@ qualify_timeout=5.0
 EOF
             done
         done
+        # La passerelle du bridge une seule fois, hors de la boucle : le trafic
+        # WAN entrant est masque par l'hote et arrive donc avec 172.20.0.1 pour
+        # source. Repetee dans chaque bloc, elle donnait autant d'identify que de
+        # couples (noeud, operateur) pour cette unique adresse.
+        if [ "$MODE" = "docker" ]; then
+            cat <<EOF
+
+; ── passerelle du bridge - trafic WAN masque par l'hote ──
+[wan-id-gw]
+type=identify
+endpoint=wan_n${REMOTES[0]}_op1
+match=172.20.0.1
+EOF
+        fi
         echo "$END_MARK"
     } >> "$pj"
 
     ast_push "$i" /etc/asterisk/pjsip.conf < "$pj"
     rm -f "$pj"
-    echo -e "  ${CYAN}Op${i}${NC} $(( ${#REMOTES[@]} * N_OPS )) trunk(s) WAN"
+    ntrunk=0
+    for r in "${REMOTES[@]}"; do ntrunk=$(( ntrunk + $(node_nops "$r") )); done
+    echo -e "  ${CYAN}Op${i}${NC} ${ntrunk} trunk(s) WAN"
 done
 echo ""
 
@@ -402,7 +484,10 @@ for i in "${OP_IDS[@]}"; do
             rind="${WAN_IND[$r]}"; off="${#rind}"
             echo ""
             echo "; ── node ${r} - indicatif ${rind} (strip ${off}) ───────────────────"
-            for j in $(seq 1 "$N_OPS"); do
+            # Les operateurs du noeud DISTANT, pas les notres : compter les notres
+            # produisait un _<indicatif>2XXXX vers un operateur que ce noeud-la
+            # n'a pas - l'appel sortait et se perdait au lieu d'etre refuse ici.
+            for j in $(seq 1 "$(node_nops "$r")"); do
                 for pat in "XXXX" "XXXXX"; do
                     cat <<EOF
 exten => _${rind}${j}${pat},1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → ${WAN_IP[$r]} ===)
@@ -538,15 +623,21 @@ for i in "${OP_IDS[@]}"; do
         echo "# Noeuds WAN distants. Cle = <w><node><op>, valeur = ip:port du relais."
         echo "[operators]"
         for r in "${REMOTES[@]}"; do
-            for j in $(seq 1 "$N_OPS"); do
-                printf 'w%s%s = %s:%s\n' "$r" "$j" "${WAN_IP[$r]}" "$(wan_sms_port "$j")"
+            rip="${WAN_IP[$r]}"
+            for j in $(seq 1 "$(node_nops "$r")"); do
+                # Vers un pair du backbone, le relais distant est joint dans le
+                # bridge : son port publie sur l'hote (7891 pour l'operateur 2)
+                # n'y mene pas, il ecoute le port de base.
+                rsms="$(wan_sms_port "$j")"
+                if peer_is_backbone "$rip"; then rsms="$SMS_RELAY_BASE"; fi
+                printf 'w%s%s = %s:%s\n' "$r" "$j" "$rip" "$rsms"
             done
         done
         echo ""
         echo "# <indicatif><op> → noeud distant ; strip = chiffres d'indicatif a retirer."
         echo "[routes]"
         for r in "${REMOTES[@]}"; do
-            for j in $(seq 1 "$N_OPS"); do
+            for j in $(seq 1 "$(node_nops "$r")"); do
                 printf '%s%s = w%s%s strip=%s\n' "${WAN_IND[$r]}" "$j" "$r" "$j" "${#WAN_IND[$r]}"
             done
         done
@@ -554,7 +645,9 @@ for i in "${OP_IDS[@]}"; do
     } >> "$conf"
     ast_push "$i" /etc/osmocom/sms-routing.conf < "$conf"
     rm -f "$conf"
-    echo -e "  ${CYAN}Op${i}${NC} $(( ${#REMOTES[@]} * N_OPS )) route(s) SMS WAN"
+    nsms=0
+    for r in "${REMOTES[@]}"; do nsms=$(( nsms + $(node_nops "$r") )); done
+    echo -e "  ${CYAN}Op${i}${NC} ${nsms} route(s) SMS WAN"
 done
 echo ""
 

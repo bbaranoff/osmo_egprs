@@ -143,14 +143,6 @@ discover_docker_host() {
     return 1
 }
 
-if [ "$USE_DEFAULTS" = "1" ]; then
-    [ -n "$VIA" ] || VIA="$(awk -F= '/^OSMO_DOCKER_HOST=/{print $2}' "$STATE" 2>/dev/null | tr -d ' \r')"
-    [ -n "$VIA" ] || VIA="$(discover_docker_host || true)"
-    [ "$DOCKER_NET" = "172.20.0.0/24" ] && DOCKER_NET="$DEFAULT_DOCKER_NET"
-    PERSIST=1
-    echo -e "${CYAN}  --defaut : hote docker ${VIA}, backbone ${DOCKER_NET}, rejoue au boot${NC}"
-fi
-
 # ── L'interface : celle qui porte la route par defaut ───────────────────────
 [ -n "$IFACE" ] || IFACE="$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}')"
 [ -n "$IFACE" ] || { echo -e "${RED}Aucune interface par defaut - precisez --iface${NC}" >&2; exit 1; }
@@ -164,6 +156,21 @@ fi
 LAN_IP="$(ip route show default 2>/dev/null | awk '/^default/{print $9; exit}')"
 [ -n "$LAN_IP" ] || LAN_IP="$(ip -4 -o addr show dev "$IFACE" scope global 2>/dev/null \
           | awk '$0 !~ /\/32/ {print $4}' | cut -d/ -f1 | grep -vE '^172\.20\.' | head -1)"
+
+# ── --defaut : la table du banc, sans rien demander ─────────────────────────
+# Ce bloc vient APRES la lecture de l'interface et de l'adresse LAN, et il doit
+# y rester : discover_docker_host balaye le reseau lu sur l'interface. Tant
+# qu'il etait place avant, LAN_IP n'existait pas encore et set -u tuait le
+# sous-shell de la substitution - la recherche ne demarrait donc jamais, VIA
+# restait vide, et --defaut ressortait sur "--via manquant" (code 2) alors que
+# son role est justement de ne rien avoir a demander.
+if [ "$USE_DEFAULTS" = "1" ]; then
+    [ -n "$VIA" ] || VIA="$(awk -F= '/^OSMO_DOCKER_HOST=/{print $2}' "$STATE" 2>/dev/null | tr -d ' \r')"
+    [ -n "$VIA" ] || VIA="$(discover_docker_host || true)"
+    [ "$DOCKER_NET" = "172.20.0.0/24" ] && DOCKER_NET="$DEFAULT_DOCKER_NET"
+    PERSIST=1
+    echo -e "${CYAN}  --defaut : hote docker ${VIA}, backbone ${DOCKER_NET}, rejoue au boot${NC}"
+fi
 
 # Le prefixe du plan docker, pour reconnaitre les adresses a retirer :
 # 172.20.0.0/24 -> "172.20." (on ratisse le /16, car l'ISO pose aussi 172.20.1.x)

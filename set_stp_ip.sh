@@ -42,7 +42,10 @@
 #   --ips "a b c"          hub : IP des operateurs, dans l'ordre
 #   --hub-ip ADRESSE       operateur : IP de l'inter-STP
 #   --node N               operateur : son numero de noeud (1-9)
-#   --op K                 operateurs (PLMN) portes par le noeud (defaut 1)
+#   --op K                 COMBIEN d'operateurs (PLMN) ce noeud porte (defaut 1)
+#   --op-index K           LEQUEL de ces operateurs est celui de ce noeud, dans
+#                          le point code 1.<noeud><op>.<role> (1 a 9, pas plus
+#                          que --op ; defaut 1)
 #   --iface NOM            interface ou poser l'adresse (defaut : detectee)
 #   --port N               port M3UA (defaut 2908)
 #   --no-ip                ne touche pas a la configuration reseau
@@ -74,6 +77,13 @@ HUB_IP=""
 IPS=""
 NODE=""
 OPS=1
+# --op COMPTE les operateurs : il dimensionne le pare-feu, les blocs "as" du hub
+# et la table WAN. Il ne dit pas LEQUEL est celui de ce noeud - et c'est pourtant
+# lui qui partait en --op de set-node-id.sh, ou l'option est un INDICE. Avec
+# --op 2 sur le noeud 3, l'ecran annoncait STP 1.31.2 pendant que les fichiers
+# recevaient 1.32.2 et le routing context 3250 : l'ASP se presentait au hub sous
+# une identite que sa table ne connait pas.
+OP_INDEX=1
 IFACE=""
 PORT=2908
 SET_IP=1
@@ -109,6 +119,8 @@ while [ $# -gt 0 ]; do
         --op=*)     OPS="${1#*=}" ;;
         --ops)      OPS="${2:-1}"; shift ;;
         --ops=*)    OPS="${1#*=}" ;;
+        --op-index)   OP_INDEX="${2:-1}"; shift ;;
+        --op-index=*) OP_INDEX="${1#*=}" ;;
         --iface)    IFACE="${2:-}"; shift ;;
         --iface=*)  IFACE="${1#*=}" ;;
         --port)     PORT="${2:-2908}"; shift ;;
@@ -120,7 +132,7 @@ while [ $# -gt 0 ]; do
         --restart)  RESTART=1 ;;
         --dry-run)  DRY=1 ;;
         --show)     SHOW=1 ;;
-        -h|--help)  sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)  sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo -e "${RED}option inconnue : $1${NC}" >&2; exit 2 ;;
     esac
     shift
@@ -300,6 +312,11 @@ case "$ROLE" in
     *) echo -e "${RED}--role : interstp ou operator${NC}" >&2; exit 2 ;;
 esac
 [[ "$OPS" =~ ^[1-9]$ ]] || { echo -e "${RED}--op : un chiffre de 1 a 9${NC}" >&2; exit 2; }
+[[ "$OP_INDEX" =~ ^[1-9]$ ]] || { echo -e "${RED}--op-index : un chiffre de 1 a 9${NC}" >&2; exit 2; }
+# Un indice au-dela du compteur designe un operateur que ce noeud ne porte pas :
+# le point code partirait dans une plage dont personne n'a la route.
+[ "$OP_INDEX" -le "$OPS" ] \
+    || { echo -e "${RED}--op-index ${OP_INDEX} : ce noeud n'annonce que ${OPS} operateur(s) (--op)${NC}" >&2; exit 2; }
 
 DETECTED="$(bridge_ip || true)"
 echo -e "${BOLD}Role :${NC} ${CYAN}${ROLE}${NC}${DETECTED:+    IP de pont detectee : ${CYAN}${DETECTED}${NC}}"
@@ -459,7 +476,10 @@ fi
 
 echo ""
 echo -e "  ${BOLD}osmo-operator-${NODE}${NC}   ${CYAN}${SELF_IP}${NC}  ──M3UA──►  inter-STP ${CYAN}${HUB_IP}:${PORT}${NC}"
-echo -e "  STP ${CYAN}1.${NODE}1.2${NC}   MSC ${CYAN}1.${NODE}1.1${NC}   BSC ${CYAN}1.${NODE}1.3${NC}   (plan WAN 1.<noeud><op>.<role>)"
+# Le <op> du plan est l'indice, pas le compteur. Ces trois point codes portaient
+# un 1 en dur : ils annoncaient 1.<noeud>1.x quoi qu'on demande, pendant que
+# set-node-id.sh en ecrivait un autre dans les fichiers.
+echo -e "  STP ${CYAN}1.${NODE}${OP_INDEX}.2${NC}   MSC ${CYAN}1.${NODE}${OP_INDEX}.1${NC}   BSC ${CYAN}1.${NODE}${OP_INDEX}.3${NC}   (plan WAN 1.<noeud><op>.<role>)"
 echo ""
 
 ensure_ip "$SELF_IP"
@@ -469,7 +489,9 @@ ensure_ip "$SELF_IP"
 # (osmo-stp, osmo-msc, osmo-bsc) : son PC, son routing-key, et le PC du pair que
 # chacun appelle. En rater un donne un coeur qui demarre et des appels qui
 # n'aboutissent pas - d'ou la delegation plutot qu'un second sed ici.
-SNI_ARGS=(--node "$NODE" --op "$OPS" --native
+# Son --op est un INDICE d'operateur, pas un nombre : lui passer le compteur
+# revenait a lui demander le point code du DERNIER operateur du noeud.
+SNI_ARGS=(--node "$NODE" --op "$OP_INDEX" --native
           --local-ip "$SELF_IP" --hub-ip "$HUB_IP" --conf-dir "$CONF_DIR")
 [ "$DRY" = "1" ] && SNI_ARGS+=(--dry-run)
 bash "$HERE/network/set-node-id.sh" "${SNI_ARGS[@]}" || exit 1

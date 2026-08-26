@@ -418,7 +418,19 @@ else
 fi
 TMP_CID="$(docker create "$ISO_SRC_IMAGE" /bin/sh)"
 
-docker cp "$TEMP_CONFIG/osmocom/."  "$TMP_CID:/etc/osmocom/"  2>/dev/null || true
+# Le hub ne porte AUCUN operateur : lui pousser le jeu complet, c'est embarquer
+# un osmo-stp.cfg de point-code 1.1.2 avec local-ip 172.20.0.11 a cote du
+# osmo-stp-interop.cfg qui, lui, fait autorite. Deux configurations STP dans le
+# meme /etc/osmocom, l'une morte mais plausible : on relance la mauvaise, le hub
+# se presente au WAN avec le point-code d'un operateur, et le routage M3UA part
+# sur une adresse du plan docker que la VM n'a jamais eue.
+# On ne copie donc que la config du hub - et pas par lien symbolique : le pgrep
+# de start-interstp.sh discrimine sur le NOM du fichier de conf passe a osmo-stp.
+if [ "$ISO_ROLE" = "interstp" ]; then
+    docker cp "$TEMP_CONFIG/osmocom/osmo-stp-interop.cfg" "$TMP_CID:/etc/osmocom/" 2>/dev/null || true
+else
+    docker cp "$TEMP_CONFIG/osmocom/."  "$TMP_CID:/etc/osmocom/"  2>/dev/null || true
+fi
 # Le hub n'a pas d'Asterisk : lui pousser des configs SIP n'aurait pas de sens,
 # et l'image n'a meme pas /etc/asterisk.
 [ "$ISO_ROLE" = "interstp" ] || \
@@ -487,21 +499,21 @@ rm -rf "$stage"
 # MS suivants se voyaient refuser le rattachement ("IMSI unknown in HLR") -
 # panne lue a tort comme un defaut radio.
 #
-# environment/load.env source "coeur.env" s'il existe, et tout le depot suit
-# l'idiome ": "${VAR:=...}"" : la ligne de commande (N_MS=2 ./run.sh) garde
-# donc la priorite. On ecrit dans les arbres presents : l'ISO native resout
-# run.sh depuis osmo_egprs, qemu-src n'y survit que si ses sources sont gardees.
-for envdir in "$ROOTFS/opt/GSM/osmo_egprs/environment" \
-              "$ROOTFS/opt/GSM/qemu-src/environment"; do
-    [ -d "$envdir" ] || continue
-    cat > "$envdir/coeur.env" <<COEUR
+# PAS dans /opt/GSM/osmo_egprs/environment : ce fichier n'est pas dans git, et
+# osmo-update.service reclone ce depot au demarrage en EFFACANT l'arbre (wipe=1
+# dans update.sh). Le coeur.env qu'on y ecrivait disparaissait donc au premier
+# boot, pour ne jamais revenir - N_MS retombait a 1, MS#2 restait inconnu du HLR,
+# et start-direct.sh le lancait quand meme. /opt/GSM/qemu-src/environment, lui,
+# n'a jamais existe : ce depot-la nomme son repertoire "environnement".
+# /etc/osmocom ne fait partie d'aucun arbre reclone : ce qui y est ecrit reste.
+mkdir -p "$ROOTFS/etc/osmocom"
+cat > "$ROOTFS/etc/osmocom/coeur.env" <<COEUR
 # coeur.env - genere par build-iso.sh. Aligne le nombre d'abonnes provisionnes
 # dans le HLR sur le nombre de MS embarques par l'ISO (ISO_N_MS).
 : "\${N_MS:=$ISO_N_MS}"
 : "\${OPERATOR_ID:=1}"
 COEUR
-    echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (${envdir#$ROOTFS})"
-done
+echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (/etc/osmocom)"
 
 
 # ── qemu-src : checkout LOCAL (branche main, build/qemu-system-arm recompile) ──
@@ -510,10 +522,23 @@ done
 # build/ a jour. On retire .git (historique QEMU = lourd, inutile a l'execution).
 QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}/build}"
 echo -e "${GREEN}[5d/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
+# Le rm est HORS de la condition, et l'absence du binaire est FATALE. Avant, les
+# deux etaient dans la branche "binaire present" : sur une machine ou QEMU
+# n'avait pas ete recompile - le cas courant - on tombait dans le repli, qui se
+# contentait d'un avertissement jaune, et l'arbre source venu du docker cp
+# ($CID:/opt/GSM) partait tel quel dans le squashfs : 1,7 Go de sources QEMU
+# dans une ISO qui tient en RAM. Le message passait inapercu au milieu d'une
+# heure de construction, et la taille de l'ISO etait le seul indice.
+# Echouer ici coute une relance ; ne pas echouer coute une ISO inutilisable
+# (sans qemu-system-arm, MS#1 ne demarre pas) et deux fois plus lourde.
+rm -rf "$ROOTFS/opt/GSM/qemu-src"
+if [ ! -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ] && [ "$ISO_ROLE" != "interstp" ]; then
+    echo -e "${RED}${BOLD}[5d/9] qemu-system-arm introuvable : ${QEMU_BUILD_LOCAL}/qemu-system-arm${NC}" >&2
+    echo -e "  ${YELLOW}L'image d'operateur emule le Calypso : sans ce binaire elle n'a pas de MS.${NC}" >&2
+    echo -e "  ${YELLOW}Compilez qemu-src, ou pointez OSMO_QEMU_BUILD sur un build existant.${NC}" >&2
+    exit 1
+fi
 if [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
-    # aucune arborescence source dans l'image
-    rm -rf "$ROOTFS/opt/GSM/qemu-src"
-
     qpfx="$(sed -n 's/^prefix=//p' "$QEMU_BUILD_LOCAL/config-host.mak" 2>/dev/null)"
     qpfx="${qpfx:-/usr/local}"
 
@@ -528,7 +553,9 @@ if [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
     fi
     strip --strip-unneeded "$ROOTFS$qpfx/bin/qemu-system-arm" 2>/dev/null || true
 else
-    echo -e "  ${YELLOW}⚠ ${QEMU_BUILD_LOCAL}/qemu-system-arm absent - qemu de l'image conserve${NC}"
+    # Seul le hub arrive ici : il ne fait que router du M3UA, il n'a pas de MS a
+    # emuler. Pour l'operateur, le test ci-dessus a deja arrete la construction.
+    echo -e "  ${CYAN}Role inter-STP : pas de QEMU (aucun MS a emuler)${NC}"
 fi
 echo -e "${GREEN}[5c/9] Ajustements osmocom dans le rootfs...${NC}"
 echo -e "${GREEN}[5b/9] Patch configs ISO...${NC}"
@@ -688,7 +715,14 @@ P="$ROOTFS/opt/osmo_egprs"
 # l'echec ne disait rien : l'ISO partait SANS aucun script WAN, et le seul
 # symptome etait un "introuvable" au moment d'en avoir besoin.
 mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont,network,tools}
-for f in start.sh start-direct.sh start-interstp.sh build.sh network/loopback.sh \
+# set_stp_ip.sh et network/set-node-id.sh MANQUAIENT : ce sont les deux scripts
+# que start-direct.sh appelle des qu'on lui donne --node. Sans set-node-id.sh il
+# refuse net ("network/set-node-id.sh absent", exit 1) - et c'est pourtant CE
+# chemin que le message de login et le lien osmo-start-direct annoncent. Sans
+# set_stp_ip.sh, le noeud monte mais son ASP inter-STP reste sur 127.0.0.1 en
+# shutdown : l'interco SS7 ne s'etablit jamais, sans un mot pour le dire.
+for f in start.sh start-direct.sh start-interstp.sh build.sh set_stp_ip.sh \
+         network/loopback.sh network/set-node-id.sh \
          tools/vty-menu.sh tools/vty-connect.exp \
          network/firewall-wan.sh network/setup-wan-interop.sh network/setup-wan-sms.sh \
          network/wan-nodes.sh network/setup-wan-mesh.sh network/setup-vbox-interco.sh; do
@@ -698,7 +732,12 @@ ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct"
 # [2026-08-16] `pont` AJOUTE A LA LISTE. Dockerfile.run contient desormais
 # `COPY pont/pont.py`, donc sans ce repertoire dans la charge de l'ISO le
 # `docker build -f Dockerfile.run .` echoue net au premier demarrage.
-for d in scripts configs checks helpers lib pont; do
+# `network` AJOUTE A LA LISTE : le mkdir plus haut le cree, mais rien ne le
+# remplissait au-dela des quelques fichiers nommes un a un ci-dessus. Les
+# scripts WAN s'appellent entre eux (set-node-id.sh lit wan-nodes.sh,
+# set_ip_vm.sh...) : en copier une partie donne un repertoire qui a l'air
+# complet et casse au premier renvoi vers un voisin absent.
+for d in scripts configs checks helpers lib pont network; do
     [ -d "$DIR/$d" ] && cp -r "$DIR/$d/." "$P/$d/" && find "$P/$d" -name "*.sh" -exec chmod +x {} \;
 done
 [ -f "$DIR/Dockerfile" ]     && cp "$DIR/Dockerfile"     "$P/"
@@ -798,7 +837,7 @@ deb http://archive.ubuntu.com/ubuntu jammy-security   main universe multiverse
 SOURCES
 apt-get update -qq
 
-# ── Outils de diagnostic : nc, tcpdump, git ────────────────────────────────
+# ── Outils de diagnostic : nc, socat, tcpdump, git ─────────────────────────
 # ICI, en premier, et pas plus bas avec les autres : ce chroot tourne sous
 # set -e. Place dans un des groupes suivants, le moindre echec en amont - un
 # build-dep, un miroir qui bronche - emporterait cette ligne avec lui, et l ISO
@@ -812,7 +851,12 @@ apt-get update -qq
 #   tcpdump  les captures GSMTAP/M3UA. Sans lui, une capture lancee en arriere
 #            plan echoue en silence et le pcap reste vide.
 #   git      la synchro du depot depuis la VM (update.sh).
-apt-get install -y $APT_OPTS --no-install-recommends netcat-openbsd tcpdump git logrotate
+#   socat    le transport VTY que run_modules/_lib/core.sh prend EN PREMIER, et
+#            sans lequel 21-abonnes-hlr.sh se rabat sur telnet - qui ne rend pas
+#            la main sur EOF de stdin. Il manquait a l image : update.sh le
+#            reinstallait a CHAQUE boot, ce qui exige un reseau au demarrage et
+#            laisse le premier lancement sans provisionnement HLR.
+apt-get install -y $APT_OPTS --no-install-recommends netcat-openbsd socat tcpdump git logrotate
 
 # deb-src + build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw,
 # gmp, log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local.
@@ -868,7 +912,12 @@ setcap cap_net_raw,cap_net_admin+eip $(which dumpcap) 2>/dev/null || true
 KERNEL=$(ls /boot/vmlinuz-* | sort -V | tail -1 | sed "s|/boot/vmlinuz-||")
 update-initramfs -u -k "$KERNEL"
 
+# deb-src.list part avec le reste : les index Sources qu il fait telecharger
+# pesent ~80 Mo, et sur un live en toram ils sont repris en RAM au premier
+# "apt-get update" du boot (update.sh en fait un). Ils n ont servi qu au
+# build-dep gnuradio ci-dessus, qui est deja passe.
 apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+rm -f /etc/apt/sources.list.d/deb-src.list
 '
 
 # ── Etape 8b : Reequilibrage sur build.sh - cloture de dependances ldd ────────
@@ -1172,6 +1221,14 @@ cat >> "$ROOTFS/root/.bashrc" <<'BASH'
 # /opt/GSM/osmo_egprs/start-direct.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
 export VIRTUAL_ENV_DISABLE_PROMPT=1
 [ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
+# coeur.env est pose dans /etc/osmocom pour survivre au reclone de boot, mais
+# environment/load.env ne va le chercher QUE dans son propre repertoire : sorti
+# de l'arbre, personne ne le lit. On le charge donc ici, ou les deux arbres en
+# heritent - l'arbre fige /opt/osmo_egprs, qui n'embarque pas environment/, et
+# l'arbre reclone /opt/GSM/osmo_egprs, ou il ne survivrait pas. set -a : sans
+# export, la valeur ne franchirait pas le fork vers start-direct.sh. L'idiome
+# ":=" du fichier laisse gagner N_MS=3 ./start-direct.sh.
+if [ -f /etc/osmocom/coeur.env ]; then set -a; . /etc/osmocom/coeur.env; set +a; fi
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
 alias osmo-lab='cd /opt/GSM/osmo_egprs && ./start-direct.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
@@ -1202,7 +1259,11 @@ LOGO
   printf "${B}  ║${N} ${T}%-*s${N} ${B}║${N}\n" $((W-2)) "GSM / EGPRS  Multi-PLMN  Live System"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "SS7/SIGTRAN  -  Osmocom  -  Calypso/QEMU"
   printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
-  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/osmo_egprs/start-direct.sh"
+  # Le chemin annonce ici est celui de l'arbre FIGE, comme le message de login
+  # et comme le lien osmo-start-direct. Il nommait /opt/GSM/osmo_egprs, que
+  # osmo-update.service efface et reclone au demarrage : sans reseau au boot, la
+  # premiere chose que lit l'utilisateur designe un arbre qui peut ne pas etre la.
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/osmo_egprs/start-direct.sh"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab Calypso/QEMU (A5/1)"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "Dashboard web  ->  http://<vm-ip>:8080"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "FFT spectres   ->  http://<vm-ip>:8081"
@@ -1443,6 +1504,12 @@ find /tmp /var/tmp -maxdepth 2 -type f -name '*.pcap*' -delete 2>/dev/null || tr
 
 # Fichiers de travail : I/Q FFT (plusieurs centaines de Mo piece)
 find /dev/shm -maxdepth 1 -type f \( -name '*.cfile' -o -name '*.raw' \) -delete 2>/dev/null || true
+# Les MEMES fichiers HORS /dev/shm - ce sont eux qui ont rempli la RAM de la VM
+# (4,6 Go mesures). Le mode pont ecrit /root/record.cfile et /root/record_ul.cfile
+# en continu et empile /root/osmo-rec/*.cfile jusqu'a son propre plafond de 64 Go ;
+# sur un live la racine EST un tmpfs, donc ce plafond n'en est pas un. Ne purger
+# que /dev/shm laissait passer la totalite de ce qui se remplit vraiment.
+find /root /tmp /var/tmp -maxdepth 2 -type f \( -name '*.cfile' -o -name '*.raw' \) -delete 2>/dev/null || true
 
 # Repertoire d'execution du live, recree par la pile au demarrage
 rm -rf /run/user/0/osmo-nitb/logs/* 2>/dev/null || true

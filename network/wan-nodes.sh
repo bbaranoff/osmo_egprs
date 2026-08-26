@@ -31,14 +31,27 @@
 # genere UN bloc qui contient tous les pairs, en un seul passage.
 # -----------------------------------------------------------------------------
 
-# Table : WAN_IP[id] / WAN_IND[id], plus la liste ordonnee des ids.
+# Table : WAN_IP[id] / WAN_IND[id] / WAN_NOPS[id], plus la liste ordonnee des ids.
 declare -A WAN_IP  2>/dev/null || true
 declare -A WAN_IND 2>/dev/null || true
+# WAN_NOPS[id] : combien d'operateurs porte le noeud id. WAN_OPS ne parle que du
+# noeud LOCAL, donc tout ce qui genere le maillage devait SUPPOSER les autres
+# identiques a soi. L'hote docker en porte deux, une VM un seul : depuis l'hote,
+# on fabriquait donc vers la VM un trunk, un pattern _<indicatif>2XXXX et une
+# route SMS que personne ne sert - de quoi laisser partir des appels qui
+# n'arrivent nulle part. D'ou ce nombre par noeud, quatrieme champ de la table.
+declare -A WAN_NOPS 2>/dev/null || true
 WAN_NODE_LIST=()
 : "${WAN_NODE_COUNT:=0}"
 : "${WAN_NODE_ID:=0}"
 : "${WAN_OPS:=1}"          # operateurs (PLMN) portes par CE noeud
 : "${WAN_CONF_FILE:=/etc/osmo-wan.conf}"
+# WAN_DOCKER_HOST : l'adresse LAN de l'hote qui porte docker, celle par laquelle
+# une VM route vers le backbone des conteneurs. Elle est en DHCP et a deja
+# change sous nos pieds (.101 puis .31) : elle se DECOUVRE a l'execution
+# (network/set_ip_vm.sh) et ne se fige jamais ici - la table ne fait que la
+# transporter d'une machine a l'autre.
+: "${WAN_DOCKER_HOST:=}"
 
 _wanc() { [ -t 1 ] && printf '\033[0;36m%s\033[0m' "$1" || printf '%s' "$1"; }
 _wan_warn() { printf '  \033[1;33m⚠\033[0m %s\n' "$*" >&2; }
@@ -59,29 +72,52 @@ wan_default_ind() {
     fi
 }
 
-# ── Serialisation "id:ip:indicatif id:ip:indicatif ..." ──────────────────────
+# ── Serialisation "id:ip:indicatif[:operateurs] ..." ─────────────────────────
+# Le nombre d'operateurs doit repasser par ici, sinon il ne survit pas au
+# premier aller-retour : wan_nodes_save serialise avec cette fonction, et une
+# table relue annoncait alors 1 operateur partout, y compris pour le noeud qui
+# venait d'en declarer deux. Il n'est ecrit que lorsqu'il dit autre chose que 1,
+# pour que tout ce qui lit deja WAN_NODES a trois champs (build-iso.sh,
+# set_stp_ip.sh, les diagnostics) continue de voir la table qu'il connait.
 wan_nodes_spec() {
-    local id out=""
+    local id out="" nops
     for id in "${WAN_NODE_LIST[@]}"; do
         out="${out}${out:+ }${id}:${WAN_IP[$id]}:${WAN_IND[$id]}"
+        nops="${WAN_NOPS[$id]:-1}"
+        [ "$nops" = "1" ] || out="${out}:${nops}"
     done
     printf '%s' "$out"
 }
 
 wan_nodes_parse() {
-    local spec="${1:-}" entry id rest ip ind
-    WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=()
+    local spec="${1:-}" entry id rest ip ind nops
+    WAN_IP=(); WAN_IND=(); WAN_NOPS=(); WAN_NODE_LIST=()
     spec="${spec//,/ }"
     for entry in $spec; do
         [ -n "$entry" ] || continue
         case "$entry" in
             *:*:*) ;;
-            *) _wan_err "entree noeud invalide : '$entry' (attendu id:ip:indicatif)"; return 1 ;;
+            *) _wan_err "entree noeud invalide : '$entry' (attendu id:ip:indicatif[:operateurs])"; return 1 ;;
         esac
         id="${entry%%:*}"; rest="${entry#*:}"
         ip="${rest%%:*}";  ind="${rest#*:}"
         ind="${ind%%:*}"
-        WAN_IP[$id]="$ip"; WAN_IND[$id]="$ind"
+        # Quatrieme champ optionnel. Toutes les tables ecrites avant lui - celle
+        # de l'ISO, celle deja posee dans /etc/osmo-wan.conf - n'ont que trois
+        # champs : elles doivent continuer de se lire, un noeud sans nombre
+        # portant un operateur, ce qui est le cas d'une VM.
+        nops=1
+        case "$entry" in
+            *:*:*:*) nops="${rest#*:}"; nops="${nops#*:}"; nops="${nops%%:*}" ;;
+        esac
+        [ -n "$nops" ] || nops=1
+        # Un champ present mais illisible n'est pas rabattu en silence sur 1 :
+        # ce serait un maillage prive des operateurs 2..n sans un mot dans le
+        # journal - le genre de panne qu'on cherche longtemps.
+        if ! [[ "$nops" =~ ^[1-9][0-9]*$ ]]; then
+            _wan_err "noeud $id : '$nops' operateurs - attendu un entier >= 1"; return 1
+        fi
+        WAN_IP[$id]="$ip"; WAN_IND[$id]="$ind"; WAN_NOPS[$id]="$nops"
         WAN_NODE_LIST+=("$id")
     done
     WAN_NODE_COUNT=${#WAN_NODE_LIST[@]}
@@ -275,11 +311,19 @@ wan_nodes_prompt() {
 
 # ── Persistance ──────────────────────────────────────────────────────────────
 wan_nodes_save() {
-    local f="${1:-$WAN_CONF_FILE}"
+    local f="${1:-$WAN_CONF_FILE}" host="${WAN_DOCKER_HOST:-}"
     mkdir -p "$(dirname "$f")"
+    # L'hote docker n'est connu que de qui vient de le decouvrir. Comme ce
+    # fichier est reecrit ENTIER a chaque sauvegarde, une sauvegarde faite par un
+    # script qui ne l'a pas dans son environnement effacait l'adresse : la VM
+    # perdait, sans rien dire, la seule indication de par ou joindre le
+    # backbone. On relit donc celle qui est deja dans le fichier avant d'ecrire.
+    if [ -z "$host" ] && [ -r "$f" ]; then
+        host="$(sed -n 's/^WAN_DOCKER_HOST=//p' "$f" | tr -d "\"' " | tail -1)"
+    fi
     cat > "$f" <<EOF
 # /etc/osmo-wan.conf - table des noeuds WAN (genere par network/wan-nodes.sh)
-# Format : WAN_NODES="id:ip:indicatif ..."
+# Format : WAN_NODES="id:ip:indicatif[:operateurs] ..."  (operateurs : defaut 1)
 WAN_NODES="$(wan_nodes_spec)"
 WAN_NODE_COUNT=${WAN_NODE_COUNT}
 WAN_NODE_ID=${WAN_NODE_ID}
@@ -287,11 +331,24 @@ WAN_OPS=${WAN_OPS}
 # WAN_AUTO=1 : les lanceurs appliquent le WAN sans qu'on repasse --wan.
 WAN_AUTO=${WAN_AUTO:-0}
 EOF
+    # Ecrite seulement si on la connait : une ligne vide serait lue comme une
+    # passerelle, et une passerelle vide ne se distingue pas d'une passerelle
+    # fausse au moment de poser la route.
+    if [ -n "$host" ]; then
+        {
+            printf '# Hote qui porte docker, par ou une VM route vers le backbone des\n'
+            printf '# conteneurs. Adresse DHCP : elle se redecouvre, elle ne se fige pas.\n'
+            printf 'WAN_DOCKER_HOST="%s"\n' "$host"
+        } >> "$f"
+    fi
+    return 0
 }
 
 wan_nodes_load() {
     local f="${1:-$WAN_CONF_FILE}"
     [ -r "$f" ] || return 1
+    # Le sourcing ramene WAN_NODES, le noeud local, et WAN_DOCKER_HOST quand le
+    # fichier la porte - c'est par elle qu'une VM sait vers qui router 172.20.
     # shellcheck disable=SC1090
     . "$f"
     wan_nodes_parse "${WAN_NODES:-}" || return 1

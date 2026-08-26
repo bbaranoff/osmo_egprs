@@ -149,9 +149,16 @@ done
 iptables -t nat -I PREROUTING -j OSMO_WAN_INTEROP
 
 # MASQUERADE pour le retour (le container voit le trafic comme venant du host)
-# Verifie si la regle existe deja
-if ! iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null; then
-    iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -j MASQUERADE
+# --ctstate DNAT : sans restriction, ce masquage prenait AUSSI les flux du LAN
+# simplement routes vers un conteneur ; celui-ci repondait alors a l'hote et non
+# au client, qui n'a jamais vu la reponse. On ne masque que ce que le DNAT
+# ci-dessus a redirige. Restreindre plutot sur l'adresse de l'hote ne matcherait
+# rien : apres DNAT la source est celle du serveur distant, pas la notre.
+# L'ancienne regle large est retiree d'abord - le garde -C teste la spec exacte,
+# sans cela les deux resteraient en place et la large gagnerait.
+iptables -t nat -D POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null || true
+if ! iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null; then
+    iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE
 fi
 
 echo -e "  ${GREEN}✓ iptables configure${NC}"
@@ -243,17 +250,31 @@ local_net=127.0.0.0/8
 ; ══════════════════════════════════════════════════════════════════════════════
 "
 
+    # Un identify par ADRESSE, hors de la boucle : identify ne regarde que
+    # l'adresse source, jamais le port. Un bloc par operateur distant en posait
+    # autant pour la meme adresse, et l'appel entrant etait attribue a l'un
+    # d'eux au hasard. Deux adresses seulement : la passerelle du bridge, par
+    # laquelle arrive le trafic WAN masque par l'hote, et le serveur distant
+    # lui-meme quand il n'est pas masque.
+    pjsip_wan+="
+; ── Identification des appels entrants du WAN ─────────────────────────────────
+[wan-identify-remote]
+type=identify
+endpoint=wan_trunk_op1
+match=${REMOTE_IP}
+
+[wan-identify-gw]
+type=identify
+endpoint=wan_trunk_op1
+match=172.20.0.1
+"
+
     # Un trunk par operateur distant
     for j in $(seq 1 "$N_OPS"); do
         remote_sip_port=$(op_sip_port "$j")
 
         pjsip_wan+="
 ; ── Trunk WAN → Serveur distant Op${j} (${REMOTE_IP}:${remote_sip_port}) ─────
-[wan-identify-op${j}]
-type=identify
-endpoint=wan_trunk_op${j}
-match=172.20.0.1
-
 [wan_trunk_op${j}]
 type=endpoint
 transport=transport-udp
