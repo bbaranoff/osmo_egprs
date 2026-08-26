@@ -183,6 +183,21 @@ gc_load() {
 #                           INTER_STP INTER_STP_SHUTDOWN N_OPERATORS
 apply_config_templates() {
     local dest=$1 container_ip=$2 gateway_ip=$3 op_id=$4
+
+    # ── OSMO_NO_REGEN : ne pas refaire ce qui vient d'etre fait ─────────────
+    # run.sh rejoue cette fonction au demarrage (qemu-src,
+    # run_modules/08-gabarits.sh). Dans un conteneur, c'est une REGRESSION : les
+    # configs viennent d'etre generees par start.sh, avec l'identite du noeud,
+    # ses point codes et son inter-STP. Les regenerer depuis les gabarits les
+    # remplace par les valeurs par defaut - 1.1.2 pour tout le monde, ASP vers
+    # le hub docker, en shutdown - et l'interco meurt sans un mot.
+    #
+    # start-direct.sh pose donc cette variable par defaut, et --regen la leve
+    # pour qui veut vraiment repartir des gabarits.
+    if [ "${OSMO_NO_REGEN:-0}" = "1" ]; then
+        echo "  gabarits : conserves (OSMO_NO_REGEN=1 ; --regen pour regenerer)"
+        return 0
+    fi
     local pc_msc=$5 pc_stp=$6 pc_bsc=$7 mcc=$8 mnc=$9 op_name=${10}
     local inter_stp=${11} inter_stp_shutdown=${12} n_operators=${13}
 
@@ -311,15 +326,31 @@ _apply_node_ss7_addressing() {
 
     [ "${OSMO_NO_STP_IP:-0}" = "1" ] && return 0
     [ -d "$dest/osmocom" ] || return 0
-    [ -r "$role_file" ]    || return 0
 
+    # ── L'ENVIRONNEMENT D'ABORD, le fichier de role ensuite ─────────────────
+    # Cette fonction s'execute AUSSI dans un conteneur : run.sh y rejoue
+    # apply_config_templates (qemu-src, run_modules/08-gabarits.sh), ce qui
+    # regenere tout /etc/osmocom a partir des gabarits - et efface l'identite
+    # SS7 que start.sh venait d'ecrire. Le conteneur repartait alors avec le
+    # plan du gabarit : point-code 1.1.2 pour TOUS les operateurs, donc deux
+    # equipements a la meme adresse SS7 et aucun ASP attache.
+    #
+    # Or le conteneur n'a pas de /etc/osmo-role - il a des VARIABLES, que
+    # start.sh lui passe (OSMO_WAN_NODE, OSMO_HUB_IP). On les lit en premier :
+    # c'est la seule source disponible la ou le probleme se produit.
     local role node hub
-    role="$(awk -F= '/^OSMO_ROLE=/{gsub(/[ \r\t]/,"",$2);v=$2}    END{print v}' "$role_file")"
-    node="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$role_file")"
-    hub="$(awk  -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2}  END{print v}' "$role_file")"
+    node="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
+    hub="${OSMO_HUB_IP:-}"
+    role="${OSMO_ROLE:-}"
+    if [ -r "$role_file" ]; then
+        [ -n "$role" ] || role="$(awk -F= '/^OSMO_ROLE=/{gsub(/[ \r\t]/,"",$2);v=$2}    END{print v}' "$role_file")"
+        [ -n "$node" ] || node="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$role_file")"
+        [ -n "$hub"  ] || hub="$(awk  -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2}  END{print v}' "$role_file")"
+    fi
+    # Un noeud connu vaut declaration d'operateur : le hub, lui, n'a jamais de
+    # numero de noeud (sa config sort de helpers/create_interop.sh).
+    [ -n "$role" ] || { [ -n "$node" ] && role="operator"; }
 
-    # Le hub n'a pas de config d'operateur a corriger : la sienne sort de
-    # helpers/create_interop.sh, qui recoit deja son adresse d'ecoute.
     [ "$role" = "operator" ] || return 0
     [[ "$node" =~ ^[1-9]$ ]] || return 0
 

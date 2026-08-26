@@ -53,6 +53,10 @@ VBOX_HOST_NODE=1
 NODE_ID=""
 NODE_OP=1
 HUB_IP=""
+# Les gabarits ne sont PAS regeneres par defaut : run.sh le ferait au demarrage
+# et effacerait l'identite SS7 posee juste avant. --regen retablit l'ancien
+# comportement pour qui veut repartir des gabarits.
+REGEN_GABARITS=0
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -81,6 +85,8 @@ Usage : ./start-direct.sh [options] [mode]
     --wan-id N          numero du noeud local (sinon deduit des IP locales)
     --wan-conf FICHIER  table a lire/ecrire (defaut /etc/osmo-wan.conf)
     --node N            numero de CE noeud, 1 a 9. DEDUIT AUTOMATIQUEMENT s'il
+    --regen             regenere les configs depuis les gabarits (par defaut on
+                        CONSERVE celles deja en place : run.sh les ecraserait)
                         est omis : environnement, puis /etc/osmo-role, puis la
                         table WAN comparee aux adresses locales. Cette option
                         ne sert qu'a forcer. Reecrit son identite SS7
@@ -129,6 +135,7 @@ while [ $# -gt 0 ]; do
         --vbox-node=*)  VBOX_HOST_NODE="${1#*=}" ;;
         --node)         NODE_ID="${2:-}"; shift ;;
         --node=*)       NODE_ID="${1#*=}" ;;
+        --regen)        REGEN_GABARITS=1 ;;
         --op)           NODE_OP="${2:-1}"; shift ;;
         --op=*)         NODE_OP="${1#*=}" ;;
         --hub-ip)       HUB_IP="${2:-}"; shift ;;
@@ -721,9 +728,41 @@ ask_node_identity() {
 }
 ask_node_identity
 
+# ── Les gabarits : conserves, sauf --regen ──────────────────────────────────
+# run.sh appelle run_modules/08-gabarits.sh, qui rejoue apply_config_templates
+# et REGENERE tout /etc/osmocom depuis les gabarits. Dans un conteneur, ce que
+# start.sh vient d'y ecrire - point codes du noeud, inter-STP, ASP actif -
+# disparait alors au profit des valeurs par defaut. C'est ce qui rendait
+# l'identite SS7 si volatile : le fichier etait juste, puis faux 80 secondes
+# plus tard, sans que rien ne l'annonce.
+if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
+    unset OSMO_NO_REGEN
+    printf '  %sgabarits%s   regeneration demandee (--regen)\n' "${C_DIM:-}" "${C_Z:-}"
+else
+    export OSMO_NO_REGEN=1
+fi
+
 # --- 7ter. Identite de noeud (--node) -------------------------------------------
 # AVANT le WAN et avant run.sh : les point codes sont lus par osmo-stp, osmo-msc
 # et osmo-bsc a leur demarrage. Les changer apres ne servirait a rien.
+#
+# UNE SEULE SOURCE DE VERITE. start.sh calcule deja l'identite d'un conteneur et
+# la lui passe par l'environnement ; la recalculer ici en donnerait deux, et
+# c'est la mauvaise qui gagnait. On reprend donc la sienne quand elle existe.
+if [ -z "$NODE_ID" ] && [ -n "${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}" ]; then
+    NODE_ID="${OSMO_WAN_NODE:-$WAN_NODE_ID}"
+    [ -n "$HUB_IP" ] || HUB_IP="${OSMO_HUB_IP:-}"
+fi
+
+# Sans identite alors que le WAN est demande, on ne part PAS en silence : la
+# pile demarrerait avec les point codes du gabarit (1.1.2 pour tout le monde),
+# deux noeuds porteraient la meme adresse SS7, et aucun ASP ne s'attacherait -
+# sans qu'une seule ligne ne le signale.
+if [ -z "$NODE_ID" ] && [ "${WAN_MESH:-0}" -eq 1 ]; then
+    say_end " KO " "$C_KO" "Identite SS7" "WAN demande mais aucun noeud : --node N, ou WAN_NODE_ID"
+    exit 1
+fi
+
 if [ -n "$NODE_ID" ]; then
     if ! [[ "$NODE_ID" =~ ^[1-9]$ ]]; then
         say_end " KO " "$C_KO" "--node" "un chiffre de 1 a 9"; exit 2
@@ -740,6 +779,15 @@ if [ -n "$NODE_ID" ]; then
         bash "$SETID" "${setid_args[@]}" --dry-run 2>&1 | sed 's/^/  /'
     elif bash "$SETID" "${setid_args[@]}" > "${LOG_DIR:-/tmp}/set-node-id.log" 2>&1; then
         say_end " OK " "$C_OK" "Identite SS7" "noeud $NODE_ID · PC 1.${NODE_ID}${NODE_OP}.x · mode $NODE_MODE"
+        # Ce qui a REELLEMENT ete ecrit, relu dans le fichier. Jusqu'ici il
+        # fallait deduire l'identite d'un routing-key pour savoir si elle avait
+        # pris - et une regeneration ulterieure pouvait l'effacer sans bruit.
+        _pc_now="$(awk "/^cs7 instance/{c=1} c && /^ *point-code /{print \$2; exit}" \
+                   "${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg" 2>/dev/null)"
+        _hub_now="$(awk "/asp asp-to-inter/{f=1} f&&/remote-ip/{print \$2; exit}" \
+                   "${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg" 2>/dev/null)"
+        printf "  %sSS7%s        point-code %s   inter-STP %s\n" \
+            "${C_DIM:-}" "${C_Z:-}" "${_pc_now:-?}" "${_hub_now:-?}"
     else
         say_end " KO " "$C_KO" "Identite SS7" "voir ${LOG_DIR:-/tmp}/set-node-id.log"
         exit 1
