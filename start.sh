@@ -1374,11 +1374,18 @@ start_bridge_mode() {
         # tee : le journal reste ecrit meme quand personne n'est attache, sinon
         # un incident survenu hors session serait perdu. Repli sans tmux pour
         # une image qui n'en aurait pas - le comportement d'avant, a l'identique.
-        # PAS de session "osmo" ici : run.sh cree la sienne, nommee "osmocom",
-        # sur le socket /tmp/osmocom_tmux. En ajouter une deuxieme donnait deux
-        # conventions pour la meme chose - et celle qu'on annoncait disparaissait
-        # des que run.sh rendait la main ("no sessions" a l'attache).
-        docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
+        # UN SEUL chemin de demarrage par conteneur.
+        # En mode QEMU, chaque conteneur est demarre par start-direct.sh - le
+        # premier dans le terminal courant, les autres en session tmux. Lancer
+        # run.sh EN PLUS donnait deux piles concurrentes dans le meme
+        # conteneur : la seconde commencait par "--stop" et coupait ce que la
+        # premiere venait de monter. L'ASP de l'operateur 2 s'attachait, puis
+        # tout s'arretait - "Client connected" suivi d'un silence.
+        if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
+            echo -e "  ${CYAN}[*] demarrage par start-direct.sh (plus bas)${NC}"
+        else
+            docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
+        fi
 
         # Attente HLR
         echo -ne "  ${GREEN}[*] Attente HLR (4258)${NC}"
@@ -1562,16 +1569,19 @@ start_bridge_mode() {
             local _cargs=""
             [ "${WAN_MESH:-0}" = "1" ] && _cargs="--node ${_cnode} --op 1 --hub-ip ${WAN_STP_TARGET}"
             echo -e "  ${CYAN}[*] $(op_container "$_c") : meme pile, detachee (noeud ${_cnode})${NC}"
+            # Session "osmo", sur le socket PAR DEFAUT : c'est ce que l'on tape
+            # naturellement une fois dans le conteneur - "tmux attach -t osmo",
+            # sans avoir a se souvenir d'un socket. Et plus de "--stop" : rien
+            # d'autre ne tourne dans ce conteneur, il n'y a rien a arreter.
             docker exec -d "$(op_container "$_c")" bash -c \
                 "cd /opt/GSM/osmo_egprs && \
-                 ./start-direct.sh --stop >/dev/null 2>&1; \
-                 tmux -S /tmp/osmocom_tmux new-session -d -s osmocom \
+                 tmux new-session -d -s osmo \
                    \"NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' \
                      ENCRYPTION='a5 1' CALYPSO_BRIDGE='pont' CALYPSO_MODE='shunt_legit' \
                      ${_wan_env} ./start-direct.sh ${_cargs} --force 2>&1 \
                      | tee /var/log/osmocom/run.sh.log\"" \
                 || echo -e "  ${YELLOW}[!] $(op_container "$_c") : lancement detache en echec${NC}"
-            echo -e "      ${CYAN}docker exec -ti $(op_container "$_c") tmux -S /tmp/osmocom_tmux attach -t osmocom${NC}"
+            echo -e "      ${CYAN}docker exec -ti $(op_container "$_c") tmux attach -t osmo${NC}"
         done
 
         # Correction : on execute directement start-direct.sh avec les bonnes variables
