@@ -757,9 +757,25 @@ wan_mesh_configure() {
     if [ -n "${WAN_NODES:-}" ]; then
         wan_nodes_parse "$WAN_NODES" || exit 1
         if [ "${WAN_NODE_ID:-0}" = "0" ]; then
-            wan_nodes_detect_self || {
-                echo -e "${RED}[WAN] aucune IP locale ne correspond a la table : passez --wan-id N${NC}" >&2
-                exit 1; }
+            # La detection par IP echoue par construction quand les premiers
+            # noeuds sont des CONTENEURS : leurs adresses (172.20.0.11, .12)
+            # appartiennent au backbone docker, pas a l'hote. L'hote n'est donc
+            # dans la table sous aucune de ses adresses - et il n'a pas a y
+            # etre : il porte des noeuds, il n'en est pas un.
+            #
+            # Son numero est celui de son PREMIER conteneur, c'est-a-dire 1
+            # dans le modele "conteneur i = noeud i". On ne s'arrete donc plus :
+            # on le pose, et on ne demande --wan-id que si la table ne contient
+            # meme pas ce noeud-la.
+            if wan_nodes_detect_self 2>/dev/null; then
+                :
+            elif [ -n "${WAN_IP[1]:-}" ]; then
+                WAN_NODE_ID=1
+                echo -e "  ${CYAN}[WAN] cette machine porte les conteneurs : noeud de base 1${NC}"
+            else
+                echo -e "${RED}[WAN] table vide ou sans noeud 1 : passez --wan-id N${NC}" >&2
+                exit 1
+            fi
         fi
         wan_nodes_validate || exit 1
     else
