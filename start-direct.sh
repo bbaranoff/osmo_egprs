@@ -738,8 +738,27 @@ ask_node_identity
 if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
     unset OSMO_NO_REGEN
     printf '  %sgabarits%s   regeneration demandee (--regen)\n' "${C_DIM:-}" "${C_Z:-}"
-else
+elif [ "${RUNTIME_ENV:-native}" = "docker" ]; then
+    # DANS UN CONTENEUR seulement. Les configs y sont deja ecrites par start.sh,
+    # avec l'identite du noeud : les regenerer les remplace par les valeurs des
+    # gabarits, et l'interco meurt.
     export OSMO_NO_REGEN=1
+else
+    # SUR UNE VM, au contraire, le module des gabarits EST le generateur : c'est
+    # lui qui applique le chiffrement, les MCC/MNC, l'ARFCN. L'en empecher
+    # laissait une configuration incomplete, et le module echouait sur ce qu'il
+    # venait lui-meme de ne pas ecrire ("le chiffrement demande n'est pas dans
+    # la configuration installee").
+    #
+    # L'identite SS7 survit malgre la regeneration : ces variables la
+    # retablissent a la fin de apply_config_templates (voir generate_configs.sh,
+    # _apply_node_ss7_addressing).
+    unset OSMO_NO_REGEN
+    if [ -n "$NODE_ID" ]; then
+        export OSMO_ROLE=operator
+        export OSMO_WAN_NODE="$NODE_ID"
+        [ -n "$HUB_IP" ] && export OSMO_HUB_IP="$HUB_IP"
+    fi
 fi
 
 # --- 7ter. Identite de noeud (--node) -------------------------------------------
@@ -838,8 +857,17 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
 
     if [ -n "${WAN_NODES:-}" ]; then
         wan_nodes_parse "$WAN_NODES" || exit 1
+        # --node DIT DEJA quel noeud est cette machine : c'est la meme notion
+        # que --wan-id, vue depuis le SS7. S'en servir evite d'echouer sur une
+        # detection par IP quand la table embarquee est plus ancienne que la
+        # machine - le cas d'une ISO gravee avant le dernier plan d'adressage.
+        if [ "${WAN_NODE_ID:-0}" = "0" ] && [ -n "$NODE_ID" ]; then
+            WAN_NODE_ID="$NODE_ID"
+            printf '  %sWAN%s        noeud %s (repris de --node)\n' "$C_DIM" "$C_Z" "$WAN_NODE_ID"
+        fi
         [ "${WAN_NODE_ID:-0}" != "0" ] || wan_nodes_detect_self || {
             printf '  %sWAN%s : aucune IP locale dans la table - passez --wan-id N\n' "$C_KO" "$C_Z"
+            printf '  %s      (ou --node N : le numero de noeud vaut pour les deux)%s\n' "$C_DIM" "$C_Z"
             exit 1; }
     else
         wan_nodes_load "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null || true

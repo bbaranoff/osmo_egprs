@@ -981,7 +981,12 @@ start_bridge_mode() {
             n_operators="$OPERATOR_COUNT_HINT"
             echo -e "  ${CYAN}Conteneurs a lancer : ${n_operators} (choisis dans le menu WAN)${NC}"
         else
-            n_operators=$(wt_input "Operateurs" "Nombre d'operateurs (1-36) :" "2") || exit 1
+            # 3 par defaut : c'est la taille du banc (deux conteneurs et une
+            # VM). Un defaut qui correspond au montage courant evite la moitie
+            # des saisies, et surtout evite qu'un oubli produise une table plus
+            # courte que la realite - un noeud absent de la table n'existe pour
+            # personne, et son absence ne se voit qu'a l'appel qui n'aboutit pas.
+            n_operators=$(wt_input "Operateurs" "Nombre d'operateurs (1-36) :" "3") || exit 1
         fi
         n_operators=${n_operators:-2}
         if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 36 ]; then
