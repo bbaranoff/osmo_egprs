@@ -73,7 +73,7 @@ SMSEOF2
             # Route prefixe : 66 + operateur + numero
             echo \"${WAN_PREFIX}\${j}0000 = \${wan_op_id}\" >> \"\$CONF\"
             for ms in \$(seq 1 8); do
-                msisdn=\$(( j * 10000 + ms ))
+                msisdn=\$(( 600000 + j * 100 + ms ))
                 echo \"${WAN_PREFIX}\${msisdn} = \${wan_op_id}\" >> \"\$CONF\"
             done
         done

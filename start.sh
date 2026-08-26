@@ -524,7 +524,7 @@ _generate_sms_routing_conf_fallback() {
     done
     printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        for ms in 1 2; do printf '%s = %s\n' "$(( i * 10000 + ms ))" "$i"; done   # MSISDN exacts op*10000+ms (10001,10002,...) - PAS de concatenation
+        for ms in 1 2; do printf '%s = %s\n' "$(( 600000 + i * 100 + ms ))" "$i"; done   # MSISDN exacts 600000+op*100+ms (600101,600102,...) - PAS de concatenation
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
@@ -1395,7 +1395,14 @@ start_bridge_mode() {
         for ms_idx in $(seq 1 "$n_ms"); do
             local msin; msin=$(printf '%04d%06d' "${op_id}" "${ms_idx}")
             local imsi="${mcc}${mnc}${msin}"
-            local msisdn=$(( op_id * 10000 + ms_idx ))
+            # MSISDN a SIX chiffres : 600000 + operateur * 100 + rang.
+            # L'ancien plan, op * 10000 + rang, commencait a 10001 - cinq
+            # chiffres dont le premier EST le numero d'operateur, ce qui melait
+            # le plan d'abonnes au plan de composition (les services du dialplan
+            # sont a 100, 200, 500, 600, 700) et obligeait chaque motif local a
+            # dependre de l'operateur. Ici le prefixe 600 est commun, l'operateur
+            # tient sur le 4e chiffre : 600101, 600102, 600201, 600202.
+            local msisdn=$(( 600000 + op_id * 100 + ms_idx ))
             local ki; ki=$(printf '00112233445566778899aabbccdd%02x%02x' "${ms_idx}" "${op_id}")
             echo "${op_id}:${ms_idx}:${imsi}:${msisdn}:${ki}" >> "$all_subscribers_file"
             printf '%s;%s;%s;%s;%s;%s;%s;%s %s;%s\n' \
@@ -1658,8 +1665,13 @@ start_bridge_mode() {
 
         force_update_trees "$container_name"
 
-        # run.sh selon le mode no-process choisi
-        local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} /etc/osmocom/run.sh"
+        # ── LE CONTENEUR S'ARRETE AU COEUR ──────────────────────────────────
+        # no-process par DEFAUT : run.sh monte STP, HLR, MSC, BSC, MGW, GGSN,
+        # SGSN et PCU, puis s'arrete la. Ni PHY, ni mobile, ni Asterisk, ni
+        # SMSC - c'est start-direct.sh qui les lance, et il est lance A LA MAIN
+        # (les commandes sont imprimees a la fin de ce script).
+        # BRIDGE_NO_PROCESS=0 ./start.sh retablit l'ancien comportement.
+        local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-1} /etc/osmocom/run.sh"
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
         # DANS UN TMUX, pas en simple processus detache.
         #
@@ -1750,8 +1762,7 @@ start_bridge_mode() {
 
         if [ "${_sans_cle:-0}" -gt 0 ]; then
             echo -e "  ${RED}✗ HLR Op${i} : ${_sans_cle} abonne(s) SANS CLE - ils ne pourront pas s'authentifier${NC}"
-            echo -e "    ${CYAN}docker exec ${container_name} sqlite3 /var/lib/osmocom/hlr.db \\${NC}"
-            echo -e "    ${CYAN}  \"select s.imsi from subscriber s left join auc_2g a on a.subscriber_id=s.id where a.subscriber_id is null;\"${NC}"
+            echo -e "    ${CYAN}docker exec ${container_name} sqlite3 /var/lib/osmocom/hlr.db \"select s.imsi from subscriber s left join auc_2g a on a.subscriber_id=s.id where a.subscriber_id is null;\"${NC}"
         else
             echo -e "  ${GREEN}✓ HLR Op${i} alimente (${total_subs} abonnes, tous avec cle)${NC}"
         fi
@@ -1882,44 +1893,21 @@ start_bridge_mode() {
             echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (prefixe ${WAN_PREFIX})${NC}"
         fi
 
-        # ── LES AUTRES CONTENEURS : la MEME pile, mais detachee ─────────────
-        # Ils recevaient jusqu'ici "run.sh" en mode no-process : le coeur SS7
-        # montait, mais ni PHY, ni mobile, ni Asterisk, ni SMSC. Deux operateurs
-        # censes se telephoner, dont un seul avec une radio - l'appel n'aboutit
-        # pas, et rien ne dit pourquoi.
+        # ── LES PILES NE SONT PLUS LANCEES AUTOMATIQUEMENT ──────────────────
+        # Les conteneurs s'arretent au COEUR (no-process) : STP, HLR, MSC, BSC,
+        # MGW, GGSN, SGSN, PCU sont debout, mais ni PHY, ni mobile, ni Asterisk,
+        # ni SMSC. La pile radio se lance A LA MAIN, conteneur par conteneur.
         #
-        # Ils lancent donc le meme start-direct.sh que le premier, avec LEUR
-        # numero de noeud. Le terminal courant reste au premier - c'est lui
-        # qu'on regarde - les autres tournent dans une session tmux nommee
-        # "osmocom", sur le socket que run.sh utilise deja :
-        #     docker exec -ti osmo-operator-2 tmux -S /tmp/osmocom_tmux attach -t osmocom
-        # ── TOUS lancés comme l'etait osmo-operator-1 ───────────────────────
-        # Exactement la commande que recevait le premier : start-direct.sh, qui
-        # arrete le coeur pose par run.sh puis demarre la pile COMPLETE - PHY,
-        # mobile, Asterisk, SMSC. C'est run.sh qui cree alors ses propres
-        # sessions tmux (calypso, gapk) ; on n'en ajoute pas une par-dessus.
+        # POURQUOI. Le lancement automatique enchainait un --stop puis un
+        # demarrage complet dans chaque conteneur, en tache de fond : quand une
+        # pile ne montait pas, le journal restait dans le conteneur pendant que
+        # le terminal annoncait la suite. A la main, on voit ce qui se passe,
+        # tout de suite, et on peut s'arreter au premier operateur avant de
+        # lancer le second.
         #
-        # Une session maison mourait avec le lanceur : start-direct rend la main
-        # une fois la pile debout, et tmux ferme la session des que sa commande
-        # se termine - d'ou le "[server exited]" puis "no sessions" sur une pile
-        # pourtant vivante.
-        _launch_stack() {             # $1=conteneur  $2=arguments de noeud
-            local _ct="$1" _na="$2"
-            # Seule la branche d'erreur reste : "docker exec -d" ne rend compte
-            # que de la REMISE de la commande, pas de ce qu'elle devient. Il
-            # reussit tout autant quand start-direct.sh meurt a sa premiere
-            # ligne - on annoncait donc "pile complete lancee" sur un conteneur
-            # vide, et on cherchait la panne ailleurs. L'etat reel se verifie
-            # apres la boucle, au VTY.
-            docker exec -d "$_ct" bash -c \
-                "cd /opt/GSM/osmo_egprs && \
-                 ./start-direct.sh --stop >/dev/null 2>&1; \
-                 NO_MENU=1 MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}' \
-                 ENCRYPTION='a5 1' CALYPSO_BRIDGE='pont' CALYPSO_MODE='shunt_legit' \
-                 ${_wan_env} \
-                 ./start-direct.sh ${_na} --force > /var/log/osmocom/run.sh.log 2>&1" \
-                || echo -e "  ${YELLOW}[!] ${_ct} : docker exec refuse (conteneur absent ou mort)${NC}"
-        }
+        # Les commandes ci-dessous ne sont pas indicatives : ce sont EXACTEMENT
+        # celles que start.sh executait - meme identite de noeud, meme hub,
+        # meme table WAN. Les recopier telles quelles donne la meme pile.
 
         # Les arguments de noeud d'un conteneur : sa place dans le plan WAN.
         _node_args() {                # $1=indice du conteneur
@@ -1930,99 +1918,29 @@ start_bridge_mode() {
             return 0
         }
 
-        # La session a rejoindre : c'est run.sh qui la nomme, pas nous.
-        _stack_session() {            # $1=conteneur -> "socket|session"
-            local _ct="$1"
-            if docker exec "$_ct" tmux has-session -t calypso 2>/dev/null; then echo "|calypso"
-            elif docker exec "$_ct" tmux -S /tmp/osmocom_tmux has-session -t osmocom 2>/dev/null; then echo "-S /tmp/osmocom_tmux|osmocom"
-            else echo "|"; fi
-        }
-
-        # ── Le premier operateur devant, le reste derriere ───────────────────
-        # Le terminal de lancement finit dans la session tmux d'osmo-operator-1
-        # : c'est la pile qu'on regarde vivre. Mais s'attacher ARRETE le script
-        # la ou il en est - les operateurs suivants ne seraient jamais lances,
-        # et la sonde VTY jamais executee. Toute la suite part donc dans un
-        # sous-shell detache qui ecrit dans un journal ; l'attache ne bloque
-        # plus rien, et ce qui a demarre reste lisible apres coup.
-        local _bg_log="${OSMO_START_LOG:-/var/tmp/osmo-start-suite.log}"
-        : > "$_bg_log" 2>/dev/null || _bg_log=/dev/null
-
-        _launch_stack "$(op_container 1)" "$(_node_args 1)"
-
-        (
-            local _c _cw _ctw _ct _ss
-            for _c in $(seq 2 "$n_operators"); do
-                _launch_stack "$(op_container "$_c")" "$(_node_args "$_c")"
-            done
-
-            # ── L'etat REEL de chaque pile ───────────────────────────────
-            # La barriere d'avant attendait une session tmux "calypso" sur le
-            # seul premier conteneur. Une session RESIDUELLE - celle du
-            # lancement precedent, que start-direct.sh --stop ne ferme pas
-            # toujours - la satisfaisait immediatement : on repartait en
-            # annoncant des piles debout alors que rien n'avait redemarre.
-            #
-            # Le VTY du STP, lui, ne discrimine pas : le port 4239 n'ecoute
-            # que si osmo-stp tourne dans CE conteneur, maintenant.
-            # start-direct.sh commence par un --stop : pendant quelques
-            # secondes, l'osmo-stp pose par run.sh ecoute encore sur 4239.
-            # Sonder tout de suite validerait la pile qu'on vient d'arreter.
-            sleep 5
-            for _cw in $(seq 1 "$n_operators"); do
-                _ctw="$(op_container "$_cw")"
-                if wait_stp_vty "$_ctw"; then
-                    echo "[*] ${_ctw} : pile complete lancee"
-                else
-                    echo "[!] ${_ctw} : pile absente (VTY STP 4239 muet)"
-                    echo "    docker exec ${_ctw} tail -50 /var/log/osmocom/run.sh.log"
-                fi
-            done
-
+        echo ""
+        echo -e "  ${BOLD}Le coeur tourne. La pile radio se lance a la main :${NC}"
+        echo ""
+        # UNE SEULE LIGNE par conteneur, sans antislash de continuation.
+        # Une commande coupee sur cinq lignes se recopie mal, et surtout le
+        # "\\${NC}" de fin de ligne ne rend pas ce qu'on croit : les deux
+        # antislashs s'apparient avant que echo -e ne voie la sequence de
+        # couleur, qui ressort alors en toutes lettres - "\033[0m" imprime au
+        # bout de chaque ligne. Une ligne, un copier-coller, rien a echapper.
+        local _c _ct _na _cmd
+        for _c in $(seq 1 "$n_operators"); do
+            _ct="$(op_container "$_c")"; _na="$(_node_args "$_c")"
+            _cmd="cd /opt/GSM/osmo_egprs && NO_MENU=1"
+            _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
+            _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
+            [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
+            _cmd="$_cmd ./start-direct.sh ${_na} --force"
+            echo -e "    ${CYAN}docker exec -ti ${_ct} bash -c \"${_cmd}\"${NC}"
             echo ""
-            echo "Pour rejoindre les autres piles :"
-            for _c in $(seq 1 "$n_operators"); do
-                _ct="$(op_container "$_c")"; _ss="$(_stack_session "$_ct")"
-                if [ -n "${_ss#*|}" ]; then
-                    echo "    docker exec -ti ${_ct} tmux ${_ss%%|*} attach -t ${_ss#*|}"
-                else
-                    echo "    ${_ct} : pas de session - docker exec ${_ct} tail -f /var/log/osmocom/run.sh.log"
-                fi
-            done
-        ) >> "$_bg_log" 2>&1 &
-
+        done
+        echo -e "  ${BOLD}Puis, pour suivre :${NC}  ${CYAN}docker exec -ti <conteneur> tmux attach -t calypso${NC}"
+        echo -e "  ${CYAN}Ctrl-b puis d${NC} pour se detacher sans rien arreter."
         echo ""
-        echo -e "  ${CYAN}[*] osmo-operator-1 demarre ; les autres suivent en fond.${NC}"
-        echo -e "      journal de la suite : ${CYAN}tail -f ${_bg_log}${NC}"
-        echo -e "      ${CYAN}Ctrl-b puis d${NC} pour vous detacher sans rien arreter."
-        echo ""
-
-        # ── L'attache, une fois la session ouverte ──────────────────────────
-        # run.sh cree ses sessions APRES avoir monte la pile : s'attacher des
-        # le retour de "docker exec -d" tombe sur "no sessions" et rend la main
-        # aussitot, ce qui ressemble a un plantage. On attend donc la session
-        # elle-meme, borne a 90 s, avant de passer la main.
-        # Sans terminal (lancement automatique, CI), on ne s'attache a rien :
-        # "docker exec -ti" y echouerait sur l'absence de tty.
-        local _ct1 _ss1 _try
-        _ct1="$(op_container 1)"
-        if [ -t 1 ] && [ "${NO_ATTACH:-0}" != "1" ]; then
-            echo -ne "  ${GREEN}[*] Attente de la session tmux de ${_ct1}${NC}"
-            _try=0; _ss1="$(_stack_session "$_ct1")"
-            while [ -z "${_ss1#*|}" ] && [ "$_try" -lt 90 ]; do
-                sleep 1; echo -n "."; _try=$(( _try + 1 ))
-                _ss1="$(_stack_session "$_ct1")"
-            done
-            if [ -n "${_ss1#*|}" ]; then
-                echo -e " ${GREEN}✓${NC}"
-                # exec : le lanceur n'a plus rien a faire, et le sous-shell de
-                # fond survit a son remplacement (processus a part).
-                # shellcheck disable=SC2086
-                exec docker exec -ti "$_ct1" tmux ${_ss1%%|*} attach -t "${_ss1#*|}"
-            fi
-            echo -e " ${YELLOW}pas de session${NC}"
-            echo -e "      ${CYAN}docker exec ${_ct1} tail -50 /var/log/osmocom/run.sh.log${NC}"
-        fi
     fi
 }
 

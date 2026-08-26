@@ -7,7 +7,7 @@
 #   sms_routing_summary   <n_ops>         [op1_nms op2_nms ...]
 #
 # Formules COMMUNES (identiques a run.sh, hlr-feed-subscribers.sh) :
-#   MSISDN  = op_id * 10000 + ms_idx
+#   MSISDN  = 600000 + op_id * 100 + ms_idx   (600101, 600102, 600201...)
 #   IMSI    = MCC(3) + MNC(2) + printf('%04d%06d', op_id, ms_idx)
 #   KI      = 00 11 22 33 44 55 66 77 88 99 aa bb cc dd <ms_hex> <op_hex>
 #
@@ -36,7 +36,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _sms_op_backbone_ip() { echo "172.20.0.$((10 + $1))"; }
-_sms_op_msisdn()      { echo $(( $1 * 10000 + $2 )); }   # op_id ms_idx
+_sms_op_msisdn()      { echo $(( 600000 + $1 * 100 + $2 )); }   # op_id ms_idx
 _sms_op_ms_imsi()     {                                   # mcc mnc op_id ms_idx
     local mcc=$1 mnc=$2 op=$3 ms=$4
     printf '%s%s%04d%06d' "$mcc" "$mnc" "$op" "$ms"
@@ -91,7 +91,7 @@ sms_routing_generate() {
 # MS par operateur : $(for i in $(seq 1 "$n_ops"); do printf 'Op%s=%s ' "$i" "${nms[$i]}"; done)
 #
 # Routage MSISDN :
-#   MSISDN = op_id × 10000 + ms_idx
+#   MSISDN = 600000 + op_id × 100 + ms_idx
 #   Regle longest-prefix match (prefixe le plus long l'emporte)
 #
 # ═══════════════════════════════════════════════════════════════════════════════

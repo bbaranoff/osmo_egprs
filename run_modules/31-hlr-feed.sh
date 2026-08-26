@@ -82,7 +82,7 @@ _hlrf_vty() {
 # L'abonne est-il DANS la base ? osmo-hlr repond "% No subscriber ..." quand
 # il ne l'est pas ; on exige en plus de retrouver l'IMSI dans la fiche, pour ne
 # pas prendre un message d'erreur inattendu pour un succes.
-# MSISDN = operateur * 10000 + rang, les deux lus dans l'IMSI (voir plus bas).
+# MSISDN = 600000 + operateur * 100 + rang, les deux lus dans l'IMSI.
 _hlrf_msisdn() {                       # $1 = IMSI a 15 chiffres
     local imsi="$1" op ms
     case "$imsi" in
@@ -92,7 +92,7 @@ _hlrf_msisdn() {                       # $1 = IMSI a 15 chiffres
     op="${imsi:5:4}"; ms="${imsi:9:6}"
     op="${op#"${op%%[!0]*}"}"; : "${op:=1}"      # zeros de tete
     ms="${ms#"${ms%%[!0]*}"}"; : "${ms:=1}"
-    echo $(( op * 10000 + ms ))
+    echo $(( 600000 + op * 100 + ms ))
 }
 
 _hlrf_present() {
@@ -153,7 +153,7 @@ mod_hlr_feed_start() {
     # ── Le numero d'appel : UN SEUL plan pour tout le banc ──────────────────
     # Trois endroits provisionnent ce HLR. start.sh, run_modules/21-abonnes-hlr.sh
     # et scripts/sms-routing-setup.sh calculent tous
-    #       MSISDN = operateur * 10000 + rang du mobile
+    #       MSISDN = 600000 + operateur * 100 + rang du mobile
     # soit 10001, 10002 pour l'operateur 1, 20001, 20002 pour le 2. C'est ce
     # plan que le dialplan reconnait (motif <operateur>XXXX dans
     # configs/extensions.conf) et que le routage SMS attend.

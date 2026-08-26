@@ -394,7 +394,7 @@ fi
 #     suivent pas ISO_N_MS : au-dela du 5e MS, "No route for destination".
 #
 # On reecrit donc la meme structure, mais avec UNE route par MS reellement
-# embarque. MSISDN = op * 10000 + ms, la formule du depot (21-abonnes-hlr.sh,
+# embarque. MSISDN = 600000 + op * 100 + ms, la formule du depot (21-abonnes-hlr.sh,
 # scripts/sms-routing-setup.sh) - pour ISO_N_MS=2 : 10001 et 10002.
 ISO_SMS_SC="1999001${ISO_OP_ID}444"
 {
@@ -403,7 +403,7 @@ ISO_SMS_SC="1999001${ISO_OP_ID}444"
     printf '[operators]\n%s = %s\n\n' "$ISO_OP_ID" "$HOST_IP"
     printf '[routes]\n'
     for ms in $(seq 1 "$ISO_N_MS"); do
-        printf '%s = %s\n' "$(( ISO_OP_ID * 10000 + ms ))" "$ISO_OP_ID"
+        printf '%s = %s\n' "$(( 600000 + ISO_OP_ID * 100 + ms ))" "$ISO_OP_ID"
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 } > "$TEMP_CONFIG/osmocom/sms-routing.conf"

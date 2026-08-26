@@ -472,14 +472,27 @@ ms 1
 EOF
     fi
 }
-# ⚠️ [2026-08-08] CE FICHIER N'EST PEUT-ETRE PAS CELUI QUE LE RUN UTILISE.
-# Constate sur le deploiement conteneurise : le mobile Calypso tourne avec
+# ⚠️ [2026-08-08, resolu le 26/08] LE RUN N'UTILISE PAS mobile.cfg POUR MS#1.
+# Le mobile Calypso tourne avec
 #     mobile -c /root/.osmocom/bb/mobile_group1.cfg
-# alors qu'on genere ici mobile.cfg. Les deux sont des MONTAGES BIND fournis par
-# docker (compose), donc il y a DEUX sources de verite, et elles divergent :
-# mobile.cfg porte IMSI 001010000000001, mobile_group1.cfg 001010001000001.
-# Tant que le lanceur du conteneur designe mobile_group1.cfg, ce qu'on ecrit ici
-# est inerte. Verifier avant de croire un reglage pose ici :
+# alors qu'on ne generait ici que mobile.cfg. mobile_group1.cfg, lui, est COPIE
+# tel quel par qemu-src (run_modules/20-mobile-cfg.sh, depuis $QEMU_TREE/cfgs) :
+# un fichier statique, jamais derive de l'operateur. Il porte donc l'identite de
+# l'operateur 1 - IMSI 001010001000001, ARFCN 514 - quel que soit l'operateur.
+#
+# Constate sur le banc, operateur 2 : le HLR attend 002010002000001, la BTS
+# emet sur 516, et le mobile se presentait avec 001010001000001 sur 514.
+#     Mobile Subscriber of MS '1':
+#      IMSI: 001010001000001
+#      Status: U2_NOT_UPDATED  IMSI detached  LAI: invalid
+#      Registered PLMN: MCC-MNC 001-01
+# Tout le reste etait juste - clefs, MSISDN, point codes, ARFCN des BTS - et
+# l'abonne restait detache, parce que la seule carte SIM qui compte n'etait
+# generee nulle part.
+#
+# On ecrit donc MS#1 dans LES DEUX fichiers. mobile.cfg reste la reference
+# (d'autres modules la lisent), mobile_group1.cfg est celui que le lanceur
+# ouvre. Verifier lequel tourne, avant de croire un reglage pose ici :
 #     pgrep -a mobile
 # ── IMSI et Ki des MS : le plan du HLR, pas celui de l'operateur 1 ──────────
 # Ces valeurs etaient ecrites EN DUR sur le PLMN de l'operateur 1 (001-01) et
@@ -568,6 +581,21 @@ generate_mobile_cfg "$MS1_CFG" \
     "$MS_ARFCN1" \
     "$(ms_imsi 1)" \
     "$(ms_ki 1)"
+# La copie que le lanceur ouvre reellement. On la REGENERE plutot que de la
+# copier : generate_mobile_cfg fixe aussi le port VTY, les sockets et l'ARFCN,
+# et un simple cp propagerait le fichier statique de qemu-src.
+MS1_GROUP_CFG="$BB_DIR/mobile_group1.cfg"
+if [ "$MS1_GROUP_CFG" != "$MS1_CFG" ]; then
+    generate_mobile_cfg "$MS1_GROUP_CFG" \
+        4247 \
+        /tmp/osmocom_l2 \
+        /tmp/osmocom_sap_1 \
+        "$MS_ARFCN1" \
+        "$(ms_imsi 1)" \
+        "$(ms_ki 1)"
+    printf '  %sMS#1%s       aussi ecrit dans %s (le fichier que run.sh ouvre)\n' \
+        "${C_DIM:-}" "${C_Z:-}" "$MS1_GROUP_CFG"
+fi
 say_end " OK " "$C_OK" "Generation mobile MS#1" "$MS1_CFG"
 say_begin "Generation mobile MS#2 (faketrx)"
 MS2_CFG="$BB_DIR/mobile_faketrx_bts1.cfg"

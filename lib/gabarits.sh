@@ -130,7 +130,7 @@ _generate_sms_routing_conf_fallback() {
         # i0002... (MS#1 = 10001, MS#2 = 10002). Sans lui, aucun prefixe ne
         # couvrait ces numeros et le relais rejetait tout SMS local avec
         # "No route for destination". Constate le 2026-07-29.
-        for ms in 1 2; do printf '%s = %s\n' "$(( i * 10000 + ms ))" "$i"; done   # MSISDN exacts op*10000+ms (10001,10002,...)
+        for ms in 1 2; do printf '%s = %s\n' "$(( 600000 + i * 100 + ms ))" "$i"; done   # MSISDN exacts 600000+op*100+ms (600101,600102,...)
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }

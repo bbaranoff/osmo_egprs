@@ -139,9 +139,9 @@ wan_nodes_validate() {
         [[ "${WAN_IP[$id]}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { _wan_err "noeud $id : '${WAN_IP[$id]}' n'est pas une IPv4"; rc=1; }
         # ── L'INDICATIF NE DOIT PAS MORDRE SUR LE PLAN DE NUMEROTATION LOCAL ──
-        # Les MSISDN du depot valent op×10000 + ms (10001, 20001, ...) : cinq
-        # chiffres dont les deux premiers sont "<op>0". Un indicatif "10"
-        # produirait donc "exten => _10." dans [gsm_in], qui avalerait 10001
+        # Les MSISDN du depot valent 600000 + op×100 + ms (600101, 600201...) :
+        # six chiffres qui commencent tous par "600". Un indicatif "60"
+        # produirait donc "exten => _60." dans [gsm_in], qui avalerait 600101
         # - l'abonne local deviendrait injoignable et l'appel partirait sur le
         # WAN. Un indicatif d'UN chiffre a le meme defaut, en pire.
         # Les defauts 11/22/.../99 passent tous cette regle.

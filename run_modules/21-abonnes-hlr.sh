@@ -6,7 +6,7 @@
 #            rejete ("IMSI unknown in HLR") et l'on croit a une panne radio.
 #            Reprend la derivation exacte de feed_hlr (start-direct.sh) :
 #              IMSI   = MCC MNC %04d(op) %06d(ms)
-#              MSISDN = op * 10000 + ms
+#              MSISDN = 600000 + op * 100 + ms  (600101, 600102, 600201...)
 #              Ki     = 00112233445566778899aabbccdd %02x(ms) %02x(op)
 #  PREREQUIS HLR pret (VTY joignable) ; socat ou telnet pour parler au VTY.
 #  SUCCES    le DERNIER abonne de la serie est reellement relu depuis le HLR -
@@ -71,7 +71,7 @@ mod_abonnes_hlr_start() {
     cmds+=("enable")
     for m in $(seq 1 "$N_MS"); do
         imsi="$(_abo_imsi "$m")"
-        msisdn=$(( OPERATOR_ID * 10000 + m ))
+        msisdn=$(( 600000 + OPERATOR_ID * 100 + m ))
         cmds+=("subscriber imsi $imsi create")
         cmds+=("subscriber imsi $imsi update msisdn $msisdn")
         cmds+=("subscriber imsi $imsi update aud2g comp128v1 ki $(_abo_ki "$m")")
