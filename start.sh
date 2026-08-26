@@ -1178,6 +1178,43 @@ start_bridge_mode() {
             wt_msg "Nombre invalide (1-36)."; exit 1
         fi
 
+        # ── LE PLAN DE NOEUDS SE DECIDE AVANT LE PLMN ────────────────────────
+        # Ce bloc etait 50 lignes plus bas, APRES le menu des operateurs. Or
+        # c'est lui qui repond a "chaque conteneur est-il un noeud a part
+        # entiere ?", donc lui qui fixe WAN_NODE_PER_OP - et le MCC vaut le
+        # numero de NOEUD. Le menu calculait donc les PLMN alors que la reponse
+        # n'etait pas encore connue : tout le monde recevait le MCC du noeud 1.
+        # Constate sur le banc - "Operateur 2 : MCC=001 MNC=02" annonce juste au-
+        # dessus de "STP PC 1.21.2", c'est-a-dire noeud 2. Deux plans dans le
+        # meme ecran, le point code juste et le PLMN faux.
+        # Les questions de WAN passent donc devant. Elles ne dependent que du
+        # nombre d'operateurs, connu ci-dessus.
+        # ── WAN ──────────────────────────────────────────────────────────────
+        if [ "${WAN_MESH:-0}" = "1" ]; then
+            wan_mesh_configure "$n_operators"
+        elif wt_yesno "WAN Interop" "Activer WAN vers un serveur distant (2 serveurs, prefixe 66) ?"; then
+            WAN_ENABLED="true"
+            local auto_ip=""
+            auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
+            [ -z "$auto_ip" ] && auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+            local wan_local wan_remote wan_nremote wan_pfx
+            wan_local=$(wt_input "WAN" "IP publique locale :" "$auto_ip") || exit 1
+            WAN_LOCAL_IP="${wan_local:-$auto_ip}"
+            [ -z "$WAN_LOCAL_IP" ] && WAN_ENABLED="false"
+            if [ "$WAN_ENABLED" = "true" ]; then
+                wan_remote=$(wt_input "WAN" "IP publique distante :" "") || exit 1
+                WAN_REMOTE_IP="$wan_remote"
+                [ -z "$WAN_REMOTE_IP" ] && WAN_ENABLED="false"
+            fi
+            if [ "$WAN_ENABLED" = "true" ]; then
+                wan_nremote=$(wt_input "WAN" "Nb operateurs distants :" "$n_operators") || exit 1
+                WAN_N_REMOTE="${wan_nremote:-$n_operators}"
+                wan_pfx=$(wt_input "WAN" "Prefixe WAN :" "$WAN_PREFIX") || exit 1
+                WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
+                echo -e "  ${GREEN}WAN: ${WAN_LOCAL_IP} ↔ ${WAN_REMOTE_IP} (local=${n_operators} remote=${WAN_N_REMOTE} prefix=${WAN_PREFIX})${NC}"
+            fi
+        fi
+
         local use_defaults="N"
         wt_yesno "Valeurs par defaut" "Valeurs par defaut pour tous (MCC=001/002/... MNC=01/02/...) ?" && use_defaults="O"
 
@@ -1229,31 +1266,6 @@ start_bridge_mode() {
             fi
         fi
 
-        # ── WAN ──────────────────────────────────────────────────────────────
-        if [ "${WAN_MESH:-0}" = "1" ]; then
-            wan_mesh_configure "$n_operators"
-        elif wt_yesno "WAN Interop" "Activer WAN vers un serveur distant (2 serveurs, prefixe 66) ?"; then
-            WAN_ENABLED="true"
-            local auto_ip=""
-            auto_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
-            [ -z "$auto_ip" ] && auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
-            local wan_local wan_remote wan_nremote wan_pfx
-            wan_local=$(wt_input "WAN" "IP publique locale :" "$auto_ip") || exit 1
-            WAN_LOCAL_IP="${wan_local:-$auto_ip}"
-            [ -z "$WAN_LOCAL_IP" ] && WAN_ENABLED="false"
-            if [ "$WAN_ENABLED" = "true" ]; then
-                wan_remote=$(wt_input "WAN" "IP publique distante :" "") || exit 1
-                WAN_REMOTE_IP="$wan_remote"
-                [ -z "$WAN_REMOTE_IP" ] && WAN_ENABLED="false"
-            fi
-            if [ "$WAN_ENABLED" = "true" ]; then
-                wan_nremote=$(wt_input "WAN" "Nb operateurs distants :" "$n_operators") || exit 1
-                WAN_N_REMOTE="${wan_nremote:-$n_operators}"
-                wan_pfx=$(wt_input "WAN" "Prefixe WAN :" "$WAN_PREFIX") || exit 1
-                WAN_PREFIX="${wan_pfx:-$WAN_PREFIX}"
-                echo -e "  ${GREEN}WAN: ${WAN_LOCAL_IP} ↔ ${WAN_REMOTE_IP} (local=${n_operators} remote=${WAN_N_REMOTE} prefix=${WAN_PREFIX})${NC}"
-            fi
-        fi
 
         # ── RAN / Encryption ─────────────────────────────────────────────────
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
@@ -1707,42 +1719,28 @@ start_bridge_mode() {
             echo "VTYCMDS"
         } | docker exec -i "$container_name" bash
 
-        # Le compte des refus etait CALCULE PUIS JETE : "grep -cE ^%" en fin de
-        # tube, sa valeur perdue, et la ligne verte affichee quoi qu'il arrive.
-        # Un abonne dont le "create" passe mais dont l'ecriture de la cle est
-        # refusee existe alors sans cle - et c'est pire qu'un abonne absent :
-        # osmo-msc le trouve, reclame ses vecteurs d'authentification, n'obtient
-        # rien, et rejette le mobile avec un motif qui accuse la carte SIM. On
-        # cherche du cote du mobile pendant que la panne est dans le HLR.
-        local _feed_out _refus _sans_cle
-        _feed_out="$(docker exec "$container_name" bash -c '
+        # ON NE COMPTE PAS LES REFUS. Le compte n'a pas de valeur ici : osmo-hlr
+        # prefixe d'un '%' TOUTES ses reponses, succes compris, et un
+        # "Subscriber already exists" est la reponse NORMALE d'une relance -
+        # le banc est reprovisionne a chaque demarrage. Toute variante de ce
+        # comptage finissait par signaler un probleme la ou il n'y en a pas,
+        # et un controle qui crie au loup ne sert plus a rien le jour ou il a
+        # raison.
+        #
+        # La seule preuve qu'un abonne est servi, c'est sa fiche : on RELIT la
+        # base. Un abonne sans cle est pire qu'un abonne absent - osmo-msc le
+        # trouve, reclame ses vecteurs d'authentification, n'obtient rien, et
+        # rejette le mobile avec un motif qui accuse la carte SIM.
+        local _sans_cle
+        docker exec "$container_name" bash -c '
             if command -v nc >/dev/null 2>&1; then
                 (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) | nc -q2 127.0.0.1 4258 2>/dev/null
             else
                 (sleep 1; cat /tmp/hlr_feed.vty; sleep 3) | telnet 127.0.0.1 4258 2>/dev/null
             fi
             rm -f /tmp/hlr_feed.vty
-        ' 2>/dev/null)" || true
-        # ATTENTION AU '%'. Ce n'est pas un marqueur d'erreur : osmo-hlr prefixe
-        # AINSI TOUTES ses reponses, succes compris -
-        #     % Created subscriber 001010001000001
-        #     % Updated subscriber IMSI='...' to MSISDN='10001'
-        #     % Error: cannot update MSISDN for subscriber IMSI='...'
-        # Compter les lignes en '^%' revenait donc a compter les commandes, et
-        # ce controle annoncait "9 commande(s) refusee(s)" sur un provisionnement
-        # entierement reussi. Un controle qui crie au loup se fait ignorer, puis
-        # il ne sert plus a rien le jour ou il a raison.
-        # On ne retient que les vrais refus. "Subscriber already exists" n'en est
-        # pas un : c'est la reponse NORMALE d'une relance, le banc etant
-        # reprovisionne a chaque demarrage.
-        _refus="$(printf '%s\n' "$_feed_out" \
-            | grep -E '^%' \
-            | grep -viE 'already exists' \
-            | grep -cE 'Error|No subscriber|Unknown command|failed' || true)"
+        ' >/dev/null 2>&1 || true
 
-        # ON RELIT plutot que de croire la sortie : la seule preuve qu'un abonne
-        # est servi, c'est sa fiche, et la fiche d'un abonne sans cle n'a pas de
-        # ligne "KI=". C'est exactement ce qui manquait pour voir le probleme.
         _sans_cle="$(docker exec "$container_name" bash -c '
             command -v sqlite3 >/dev/null 2>&1 || exit 0
             sqlite3 /var/lib/osmocom/hlr.db "
@@ -1750,9 +1748,8 @@ start_bridge_mode() {
                 left join auc_2g a on a.subscriber_id = s.id
                 where a.subscriber_id is null;" 2>/dev/null' 2>/dev/null)" || true
 
-        if [ "${_refus:-0}" -gt 0 ] || [ "${_sans_cle:-0}" -gt 0 ]; then
-            echo -e "  ${RED}✗ HLR Op${i} : ${_refus:-0} commande(s) refusee(s), ${_sans_cle:-0} abonne(s) SANS CLE${NC}"
-            echo -e "    ${YELLOW}Un abonne sans cle ne peut pas s'authentifier : le mobile sera rejete.${NC}"
+        if [ "${_sans_cle:-0}" -gt 0 ]; then
+            echo -e "  ${RED}✗ HLR Op${i} : ${_sans_cle} abonne(s) SANS CLE - ils ne pourront pas s'authentifier${NC}"
             echo -e "    ${CYAN}docker exec ${container_name} sqlite3 /var/lib/osmocom/hlr.db \\${NC}"
             echo -e "    ${CYAN}  \"select s.imsi from subscriber s left join auc_2g a on a.subscriber_id=s.id where a.subscriber_id is null;\"${NC}"
         else
