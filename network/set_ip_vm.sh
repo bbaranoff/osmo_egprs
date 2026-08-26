@@ -34,6 +34,9 @@
 #   --iface NOM        interface (defaut : celle de la route par defaut)
 #   --keep ADRESSE     adresse a NE PAS retirer (repetable)
 #   --force            retire meme les adresses sur lesquelles un demon ecoute
+#   --hub-ip ADRESSE   ecrit l'inter-STP a viser dans osmo-stp.cfg, leve le
+#                      shutdown de l'ASP, puis aligne la source sur la route
+#                      qui y mene. Sans elle, on ne fait qu'aligner la source.
 #   --no-stp           ne touche pas a osmo-stp.cfg (source de l'ASP)
 #   --defaut           applique la configuration du banc sans rien demander.
 #                      L'hote docker n'est PAS suppose : il est cherche sur le
@@ -52,6 +55,12 @@ VIA=""
 IFACE=""
 FORCE=0
 NO_STP=0
+# --hub-ip : l'inter-STP que cet ASP doit viser. Sans elle, on ne fait
+# qu'ALIGNER la source sur le remote-ip deja ecrit - ce qui ne vaut rien quand
+# ce remote-ip est reste le defaut du gabarit (127.0.0.1) : on validerait une
+# configuration qui ne joindra jamais personne. Avec elle, on ECRIT la
+# destination, puis la source qui y mene.
+HUB_IP=""
 USE_DEFAULTS=0
 # ── La configuration du banc, en un mot ─────────────────────────────────────
 # --defaut applique ce qui est vrai sur toutes nos VM sans rien demander :
@@ -77,6 +86,8 @@ while [ $# -gt 0 ]; do
         --keep)         KEEP+=("${2:-}"); shift ;;
         --keep=*)       KEEP+=("${1#*=}") ;;
         --force)        FORCE=1 ;;
+        --hub-ip)       HUB_IP="${2:-}"; shift ;;
+        --hub-ip=*)     HUB_IP="${1#*=}" ;;
         --no-stp)       NO_STP=1 ;;
         --defaut|--default) USE_DEFAULTS=1 ;;
         --persist)      PERSIST=1 ;;
@@ -316,7 +327,24 @@ fi
 # pour joindre le hub - la meme regle que network/set-node-id.sh.
 STP_CFG="${STP_CFG:-/etc/osmocom/osmo-stp.cfg}"
 if [ "${NO_STP:-0}" != "1" ] && [ -w "$STP_CFG" ]; then
-    _hub="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$STP_CFG")"
+    # --hub-ip fait autorite ; sinon on lit ce que le fichier declare deja.
+    if [ -n "$HUB_IP" ]; then
+        _hub="$HUB_IP"
+        _cur_hub="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$STP_CFG")"
+        if [ "$_cur_hub" != "$_hub" ]; then
+            if [ "$DRY" = 1 ]; then
+                echo -e "  [dry-run] ASP remote-ip ${_cur_hub:-?} -> ${_hub}"
+            else
+                sed -i "/asp asp-to-inter/,/^ *as / s/^\( *remote-ip \).*/\1${_hub}/" "$STP_CFG"
+                # Un ASP en shutdown ne s'attache pas, meme bien adresse : on le
+                # leve, sinon la correction reste sans effet visible.
+                sed -i "/asp asp-to-inter/,/^ *as / s/^\( *\)shutdown[[:space:]]*$/\1no shutdown/" "$STP_CFG"
+                echo -e "  ${GREEN}✓${NC} ASP : hub ${CYAN}${_hub}${NC} (etait ${_cur_hub:-aucun})"
+            fi
+        fi
+    else
+        _hub="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$STP_CFG")"
+    fi
     # Un remote-ip en boucle locale n'est pas un hub : c'est le defaut du
     # gabarit, laisse par une regeneration qui a efface l'identite du noeud.
     # Aligner la source dessus validerait une configuration morte - "source
