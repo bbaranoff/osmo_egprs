@@ -777,7 +777,7 @@ if [ -n "$NODE_ID" ]; then
     if [ "$DRY" -eq 1 ]; then
         say_end " -- " "$C_DIM" "Identite SS7 du noeud $NODE_ID" "dry-run"
         bash "$SETID" "${setid_args[@]}" --dry-run 2>&1 | sed 's/^/  /'
-    elif bash "$SETID" "${setid_args[@]}" > "${LOG_DIR:-/tmp}/set-node-id.log" 2>&1; then
+    elif bash "$SETID" "${setid_args[@]}" </dev/null > "${LOG_DIR:-/tmp}/set-node-id.log" 2>&1; then
         say_end " OK " "$C_OK" "Identite SS7" "noeud $NODE_ID · PC 1.${NODE_ID}${NODE_OP}.x · mode $NODE_MODE"
         # Ce qui a REELLEMENT ete ecrit, relu dans le fichier. Jusqu'ici il
         # fallait deduire l'identite d'un routing-key pour savoir si elle avait
@@ -892,7 +892,10 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
             printf '  [dry-run] %s %s\n' "$STP_IP_SH" "${stp_args[*]}"
         else
             say_begin "Adressage SS7 - inter-STP ${hub_ip:-?}"
-            if bash "$STP_IP_SH" "${stp_args[@]}" > "${LOG_DIR:-/tmp}/set-stp-ip.log" 2>&1; then
+            # </dev/null : appel automatique, jamais interactif (set_stp_ip.sh
+            # demande l'adresse du hub quand elle manque - ici, personne ne
+            # repondrait et le lancement resterait fige).
+            if bash "$STP_IP_SH" "${stp_args[@]}" </dev/null > "${LOG_DIR:-/tmp}/set-stp-ip.log" 2>&1; then
                 say_end " OK " "$C_OK" "Adressage SS7" "noeud $WAN_NODE_ID -> inter-STP ${hub_ip:-?}"
             else
                 # Non fatal : la pile locale tourne tres bien sans interco. On le

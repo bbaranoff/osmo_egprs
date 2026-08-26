@@ -357,10 +357,18 @@ _apply_node_ss7_addressing() {
     local setid="$here/network/set-node-id.sh"
     [ -r "$setid" ] || return 0
 
+    # Le hub, quelle qu'en soit la source. Sans lui, set-node-id.sh DEMANDE -
+    # et comme il est appele ici depuis une boucle de demarrage, il attendait
+    # une reponse que personne ne venait donner : le lancement se figeait juste
+    # apres la creation du reseau de l'operateur, sans un mot.
+    [ -n "$hub" ] || hub="${WAN_STP_TARGET:-${INTER_STP_IP:-}}"
+
     local args=(--node "$node" --op "${OPS_PER_NODE:-1}" --native --conf-dir "$dest/osmocom")
     [ -n "$hub" ] && args+=(--hub-ip "$hub")
 
-    if bash "$setid" "${args[@]}" >/dev/null 2>&1; then
+    # </dev/null : cette reecriture est automatique, elle ne pose JAMAIS de
+    # question. Si une valeur manque, on prefere un echec signale a un blocage.
+    if bash "$setid" "${args[@]}" </dev/null >/dev/null 2>&1; then
         echo "  ✓ adressage SS7 du noeud ${node} reapplique (set-node-id.sh)"
     else
         echo "  ⚠ adressage SS7 du noeud ${node} NON reapplique - l'ASP inter-STP" >&2
