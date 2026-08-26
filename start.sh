@@ -846,7 +846,6 @@ wan_mesh_apply() {
             || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue${NC}"
     fi
 
-    reassert_docker_lan_return
 }
 
 # ── Rendre au trafic sortant son adresse d'origine ───────────────────────────
@@ -1398,6 +1397,13 @@ start_bridge_mode() {
             bash "$_lab" start || echo -e "  ${YELLOW}⚠ demarrage des VM incomplet${NC}"
         fi
     fi
+
+    # ICI, et pas plus tot : docker reinsere ses MASQUERADE en tete de
+    # POSTROUTING a CHAQUE reseau cree, et il y en a un par operateur. Rejouee
+    # depuis l'application du WAN, la regle se retrouvait derriere eux - donc
+    # inerte, alors qu'"iptables -L" la montrait toujours. A cet endroit, tous
+    # les reseaux existent : plus rien ne passera devant.
+    reassert_docker_lan_return
 
     echo -e "\n${GREEN}${BOLD}Stack prete !${NC}"
 

@@ -202,13 +202,31 @@ if [ "$MODE" != "docker" ]; then
     SET_LOCAL_IP=1
     case "$LOCAL_IP" in
         "" | auto)
-            if ! command -v wan_detect_local_ip >/dev/null 2>&1; then
+            # ── L'adresse qui ROUTE vers le hub, avant toute heuristique ────
+            # Le noyau sait exactement quelle source il utilisera pour joindre
+            # le hub : c'est ce que "ip route get" repond. Toute autre methode
+            # devine - et devine mal des que la machine porte plusieurs
+            # adresses privees. Une VM du banc en a trois (192.168.1.2 le pont,
+            # 192.168.2.1 et .2.10 le plan prive de l'ISO) : l'heuristique
+            # choisissait 192.168.2.1, une adresse que le hub ne peut pas
+            # joindre en retour. L'ASP partait alors dans le vide et le journal
+            # ne disait que "connect failed (-110)" - un timeout, sans indice
+            # sur la source fautive.
+            if [ -n "$HUB_IP" ]; then
+                ASP_LOCAL_IP="$(ip route get "$HUB_IP" 2>/dev/null \
+                                | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+                [ -n "$ASP_LOCAL_IP" ] && LOCAL_IP_SRC="route vers le hub"
+            fi
+            if [ -n "$ASP_LOCAL_IP" ]; then
+                :
+            elif ! command -v wan_detect_local_ip >/dev/null 2>&1; then
                 echo -e "${RED}wan_detect_local_ip introuvable - network/wan-nodes.sh non charge${NC}" >&2
                 exit 1
+            else
+                ASP_LOCAL_IP="$(wan_detect_local_ip || true)"
             fi
-            ASP_LOCAL_IP="$(wan_detect_local_ip || true)"
             if [ -n "$ASP_LOCAL_IP" ]; then
-                LOCAL_IP_SRC="detectee sur le segment"
+                [ -n "${LOCAL_IP_SRC:-}" ] || LOCAL_IP_SRC="detectee sur le segment"
             else
                 ASP_LOCAL_IP="0.0.0.0"
                 LOCAL_IP_SRC="aucune adresse detectee - repli"

@@ -347,9 +347,18 @@ _apply_node_ss7_addressing() {
         [ -n "$node" ] || node="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$role_file")"
         [ -n "$hub"  ] || hub="$(awk  -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2}  END{print v}' "$role_file")"
     fi
-    # Un noeud connu vaut declaration d'operateur : le hub, lui, n'a jamais de
-    # numero de noeud (sa config sort de helpers/create_interop.sh).
-    [ -n "$role" ] || { [ -n "$node" ] && role="operator"; }
+    # UN ROLE EXPLICITE, ET RIEN D'AUTRE.
+    # Deduire "operateur" de la simple presence d'un numero de noeud etait faux
+    # sur l'hote : start.sh y porte WAN_NODE_ID = le noeud de la MACHINE, alors
+    # qu'il genere les configs de CONTENEURS qui sont, eux, d'autres noeuds. Le
+    # hook reappliquait donc le noeud de l'hote a chaque operateur : tous se
+    # retrouvaient avec le meme point code, et deux equipements a la meme
+    # adresse SS7 ne peuvent pas s'attacher tous les deux.
+    #
+    # Ce rattrapage ne vaut donc QUE pour une machine qui se declare operateur
+    # dans /etc/osmo-role (une VM, un noeud natif) ou via OSMO_ROLE. Quand
+    # start.sh calcule lui-meme l'identite de chaque conteneur, il n'a besoin
+    # de personne.
 
     [ "$role" = "operator" ] || return 0
     [[ "$node" =~ ^[1-9]$ ]] || return 0
