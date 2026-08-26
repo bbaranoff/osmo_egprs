@@ -33,6 +33,7 @@
 #   --iface NOM   interface ou poser l'adresse (defaut : detectee)
 #   --port N      port M3UA (defaut 2908)
 #   --menu        pose les questions meme si une table existe deja
+#   --defaut      applique la table du banc, en ignorant celle deja posee
 #   --ips "a b c" les IP des noeuds operateurs, dans l'ordre (sans question)
 #   --no-ip       ne touche pas a la configuration reseau
 #   --foreground  reste au premier plan (journal a l'ecran)
@@ -51,6 +52,7 @@ PIDFILE="/run/osmo-interstp.pid"
 NODES=""
 OPS=1
 MENU=0
+USE_DEFAULTS=0
 IPS=""
 # Le hub du banc, en acces par pont. L'ancien defaut (192.168.56.1, host-only
 # VirtualBox) n'existe sur aucun segment des que les VM sont pontees : le hub
@@ -90,6 +92,7 @@ while [ $# -gt 0 ]; do
         --port)       PORT="${2:-2908}"; shift ;;
         --port=*)     PORT="${1#*=}" ;;
         --menu)       MENU=1 ;;
+        --defaut|--default) USE_DEFAULTS=1 ;;
         --ips)        IPS="${2:-}"; shift ;;
         --ips=*)      IPS="${1#*=}" ;;
         --no-ip)      SET_IP=0 ;;
@@ -200,6 +203,17 @@ ask_ips() {
     WAN_NODE_ID=0
     WAN_OPS="$OPS"
 }
+
+# --defaut : la table du banc, quoi qu'il y ait sur la machine.
+# Sans cette option, une table deja posee dans /etc/osmo-wan.conf est rechargee
+# telle quelle - c'est le bon comportement au quotidien, mais c'est aussi ce qui
+# fait qu'un hub garde indefiniment des adresses perimees apres un changement de
+# plan : le nouveau defaut du script n'est jamais consulte.
+if [ "$USE_DEFAULTS" = "1" ] && [ -z "$IPS" ]; then
+    IPS="$(printf '%s' "$WAN_NODES_DEFAULT" | tr ' ' '\n' | awk -F: '{print $2}' | tr '\n' ' ')"
+    [ -n "$NODES" ] || NODES="$(printf '%s' "$WAN_NODES_DEFAULT" | wc -w)"
+    echo -e "  ${CYAN}--defaut : table du banc${NC} ${WAN_NODES_DEFAULT}"
+fi
 
 if [ -n "$IPS" ]; then
     # Forme scriptable : --ips "10.0.0.11 10.0.0.12 10.0.0.13"
