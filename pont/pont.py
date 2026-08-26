@@ -1388,8 +1388,9 @@ class _AirRec:
             s.off = True
             return True
         # GARDE D'ESPACE REJOUEE EN COURS D'ECRITURE. Elle n'existait que dans
-        # rotate(), qui n'est appelee qu'au demarrage : avec un chemin de fichier
-        # FIXE, plus rien ne la reevaluait ensuite, et les deux cfile ont rempli
+        # rotate() : avec un chemin de fichier FIXE, rotate() n'est appelee qu'au
+        # demarrage (le seul autre appel, plus bas, est declenche par SIGUSR1),
+        # donc plus rien ne la reevaluait ensuite, et les deux cfile ont rempli
         # la racine de la VM a 100 % (4,6 Go) pendant que le pont tournait — le
         # seul plafond en vigueur portait sur la taille du fichier, pas sur ce
         # qui restait sous lui. Toutes les 2000 trames (~9 s, ~80 Mo par sens) :

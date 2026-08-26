@@ -218,9 +218,11 @@ apply_config_templates() {
     # l'interco meurt sans un mot.
     #
     # Ce commentaire nommait run_modules/08-gabarits.sh comme cet appelant. Ce
-    # module N'EXISTE PAS - start-direct.sh le constate deja - et le seul
-    # appelant reel est start.sh. Le decrire comme existant a fait regler plus
-    # bas une option sur une configuration imaginaire, que personne ne pose.
+    # module N'EXISTE PAS - start-direct.sh le constate deja. Les appelants
+    # reels sont start.sh (deux fois : la boucle des operateurs et le mode
+    # net-host) et build-iso.sh, qui construit l'arbre de l'image. Decrire un
+    # module imaginaire a fait regler plus bas une option sur une configuration
+    # que personne ne pose.
     #
     # start-direct.sh pose donc cette variable par defaut, et --regen la leve
     # pour qui veut vraiment repartir des gabarits.
@@ -229,6 +231,21 @@ apply_config_templates() {
         return 0
     fi
     local pc_msc=$5 pc_stp=$6 pc_bsc=$7 mcc=$8 mnc=$9 op_name=${10}
+
+    # ── Le PLMN, avant d'ecrire quoi que ce soit ────────────────────────────
+    # osmo-msc REFUSE "network country code 000" : il abandonne la lecture du
+    # fichier a cette ligne, sort, et systemd le relance - trois fois par
+    # seconde, indefiniment. Le journal du lanceur, lui, affiche une croix a
+    # cote d'osmo-msc puis annonce "Core Osmocom pret" : on cherche la panne
+    # dans le SS7 ou dans la BTS pendant que la cause tient en trois chiffres.
+    # Un MCC vide donne 000 par printf ; c'est ainsi que c'est arrive.
+    # On s'arrete ICI, ou le nom du parametre est encore connu.
+    case "$mcc" in
+        ''|000|00|0) echo "  ERREUR : MCC invalide ('$mcc') pour l'operateur $op_id - osmo-msc refuserait la config" >&2; return 1 ;;
+    esac
+    case "$mnc" in
+        ''|'-') echo "  ERREUR : MNC vide pour l'operateur $op_id" >&2; return 1 ;;
+    esac
     local inter_stp=${11} inter_stp_shutdown=${12} n_operators=${13}
 
     mkdir -p "$dest/osmocom" "$dest/asterisk" "$dest/bb"

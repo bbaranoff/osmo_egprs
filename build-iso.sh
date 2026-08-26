@@ -1242,7 +1242,13 @@ export VIRTUAL_ENV_DISABLE_PROMPT=1
 # ":=" du fichier laisse gagner N_MS=3 ./start-direct.sh.
 if [ -f /etc/osmocom/coeur.env ]; then set -a; . /etc/osmocom/coeur.env; set +a; fi
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
-alias osmo-lab='cd /opt/GSM/osmo_egprs && ./start-direct.sh'
+# Trois annonces designaient trois arbres differents. Le MOTD et le message de
+# login pointent /opt/osmo_egprs (l'arbre fige, present meme sans reseau) ;
+# l'alias visait /opt/GSM/osmo_egprs (l'arbre reclone au demarrage). Les deux
+# fonctionnent, mais un utilisateur qui suit l'un puis l'autre ne travaille pas
+# au meme endroit. On prend le premier chemin qui existe, dans l'ordre ou ils
+# sont les plus complets.
+alias osmo-lab='cd /opt/GSM/osmo_egprs 2>/dev/null || cd /opt/osmo_egprs; ./start-direct.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
 alias osmo-status='/etc/osmocom/status.sh status'
 export PATH="$HOME/.local/bin:$PATH"

@@ -228,8 +228,13 @@ fi
 # ---- verdict ----------------------------------------------------------------
 head "VERDICT"
 if [ -n "${AS_OUT:-}" ]; then
-  tot="$(printf '%s\n' "$AS_OUT" | grep -cE 'as-n[0-9]+op[0-9]+' || true)"
-  act="$(printf '%s\n' "$AS_OUT" | grep -E 'as-n[0-9]+op[0-9]+' | grep -c 'AS_ACTIVE' || true)"
+  # Deux conventions de nom coexistent : as-n<noeud>op<op> en mode WAN, et
+  # as-op<i> hors mode WAN (helpers/create_interop.sh). Le verdict ne comptait
+  # que la premiere : la section ci-dessus listait trois AS_ACTIVE et le verdict
+  # concluait juste en dessous "aucun AS actif". Une sortie qui se dement
+  # elle-meme fait chercher une panne qui n'existe pas.
+  tot="$(printf '%s\n' "$AS_OUT" | grep -cE 'as-(n[0-9]+)?op[0-9]+' || true)"
+  act="$(printf '%s\n' "$AS_OUT" | grep -E 'as-(n[0-9]+)?op[0-9]+' | grep -c 'AS_ACTIVE' || true)"
   if [ "${act:-0}" -gt 0 ] && [ "${act:-0}" = "${tot:-0}" ]; then
     printf '  %sINTERCO SS7 : UP%s  - %s/%s AS actifs\n' "$G$B" "$Z" "$act" "$tot"
   elif [ "${act:-0}" -gt 0 ]; then

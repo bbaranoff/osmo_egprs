@@ -165,8 +165,20 @@ op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
 # retombe a 01 ; sans lui, les conteneurs sont N operateurs d'un meme pays.
 op_plmn_node()  { if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then echo $(( ${WAN_NODE_ID:-1} + $1 - 1 )); else echo "${WAN_NODE_ID:-1}"; fi; }
 op_plmn_index() { if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then echo 1; else echo "$1"; fi; }
-op_mcc()        { printf '%03d' "$(op_plmn_node "$1")"; }
-op_mnc()        { printf '%02d' "$(op_plmn_index "$1")"; }
+# printf '%03d' sur une valeur vide ou nulle rend "000", et osmo-msc REFUSE
+# "network country code 000" : il abandonne la lecture a cette ligne et systemd
+# le relance trois fois par seconde jusqu'a y renoncer. Le lanceur, lui,
+# affichait une croix puis "Core Osmocom pret". Trois chiffres, une heure de
+# recherche dans le SS7. Un numero de noeud a zero est un bug, pas un MCC : on
+# le borne et on le dit, une fois.
+_plmn_borne() {                 # $1 = valeur, $2 = plancher, $3 = quoi
+    case "$1" in
+        ''|*[!0-9]*) echo "  ATTENTION : $3 illisible ('$1') - ramene a $2" >&2; echo "$2" ;;
+        *) if [ "$1" -lt "$2" ]; then echo "  ATTENTION : $3 vaut $1 - ramene a $2" >&2; echo "$2"; else echo "$1"; fi ;;
+    esac
+}
+op_mcc()        { printf '%03d' "$(_plmn_borne "$(op_plmn_node "$1")" 1 "numero de noeud (MCC)")"; }
+op_mnc()        { printf '%02d' "$(_plmn_borne "$(op_plmn_index "$1")" 1 "rang d'operateur (MNC)")"; }
 
 # Noms sans espace : la commande VTY "short name" d'osmo-msc prend un mot, et
 # un nom coupe en deux y passe pour un argument surnumeraire.
@@ -971,6 +983,24 @@ wan_mesh_apply() {
     if [ ! -f "$script_path" ]; then
         echo -e "${RED}[WAN] network/setup-wan-mesh.sh introuvable${NC}"; return 1
     fi
+    # ── Le 4e champ de la table : combien d'operateurs porte chaque noeud ────
+    # WAN_NOPS n'avait AUCUN producteur dans le depot : la table sortait
+    # toujours a trois champs, setup-wan-mesh.sh se repliait sur une supposition
+    # et fabriquait - ou supprimait - des trunks au jugee. On l'ecrit ici, ou
+    # l'information est certaine : avec --op-is-node chaque noeud EST un
+    # conteneur et porte donc un operateur ; sinon, notre noeud les porte tous.
+    # wan_nodes_spec n'ecrit le champ que lorsqu'il vaut autre chose que 1, donc
+    # une table de conteneurs garde exactement la forme que les autres lecteurs
+    # (build-iso.sh, set_stp_ip.sh, les diagnostics) lui connaissent.
+    local _k
+    if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
+        for _k in $(seq 1 "$n_operators"); do
+            WAN_NOPS[$(( ${WAN_NODE_ID:-1} + _k - 1 ))]=1
+        done
+    else
+        WAN_NOPS[${WAN_NODE_ID:-1}]="$n_operators"
+    fi
+
     if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
         # UN SEUL passage, avec --op-is-node : le script associe alors
         # l'operateur i au noeud i et recalcule SES pairs. Un passage par noeud,
@@ -1806,44 +1836,14 @@ start_bridge_mode() {
                 || echo -e "  ${YELLOW}[!] ${_ct} : docker exec refuse (conteneur absent ou mort)${NC}"
         }
 
-        local _c _cnode _cargs
-        for _c in $(seq 1 "$n_operators"); do
-            if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
-                _cnode=$(( ${WAN_NODE_ID:-1} + _c - 1 ))
-            else
-                _cnode="${WAN_NODE_ID:-1}"
-            fi
-            _cargs=""
-            [ "${WAN_MESH:-0}" = "1" ] && _cargs="--node ${_cnode} --op 1 --hub-ip ${WAN_STP_TARGET}"
-            _launch_stack "$(op_container "$_c")" "$_cargs"
-        done
-
-        # ── L'etat REEL de chaque pile, avant de rendre la main ────────────
-        # La barriere d'avant attendait une session tmux "calypso" sur le seul
-        # premier conteneur. Une session RESIDUELLE - celle du lancement
-        # precedent, que start-direct.sh --stop ne ferme pas toujours - la
-        # satisfaisait immediatement : on repartait en annoncant des piles
-        # debout alors que rien n'avait redemarre.
-        #
-        # Le VTY du STP, lui, ne discrimine pas : le port 4239 n'ecoute que si
-        # osmo-stp tourne dans CE conteneur, maintenant. wait_stp_vty le sonde
-        # via /dev/tcp, borne a 60 s, et on le fait pour chaque operateur.
-        echo -e "  ${CYAN}[*] demarrage des piles...${NC}"
-        # start-direct.sh commence par un --stop : pendant quelques secondes,
-        # l'osmo-stp pose par run.sh ecoute encore sur 4239. Sonder tout de
-        # suite validerait la pile qu'on vient justement d'arreter.
-        sleep 5
-        local _cw _ctw
-        for _cw in $(seq 1 "$n_operators"); do
-            _ctw="$(op_container "$_cw")"
-            echo -e "  ${CYAN}${_ctw}${NC}"
-            if wait_stp_vty "$_ctw"; then
-                echo -e "  ${GREEN}[*] ${_ctw} : pile complete lancee${NC}"
-            else
-                echo -e "  ${RED}[!] ${_ctw} : pile absente (VTY STP 4239 muet)${NC}"
-                echo -e "      ${CYAN}docker exec ${_ctw} tail -50 /var/log/osmocom/run.sh.log${NC}"
-            fi
-        done
+        # Les arguments de noeud d'un conteneur : sa place dans le plan WAN.
+        _node_args() {                # $1=indice du conteneur
+            local _n
+            if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then _n=$(( ${WAN_NODE_ID:-1} + $1 - 1 ))
+            else _n="${WAN_NODE_ID:-1}"; fi
+            [ "${WAN_MESH:-0}" = "1" ] && printf -- '--node %s --op 1 --hub-ip %s' "$_n" "$WAN_STP_TARGET"
+            return 0
+        }
 
         # La session a rejoindre : c'est run.sh qui la nomme, pas nous.
         _stack_session() {            # $1=conteneur -> "socket|session"
@@ -1853,23 +1853,91 @@ start_bridge_mode() {
             else echo "|"; fi
         }
 
-        # ── Les commandes d'attache, et RIEN de plus ────────────────────────
-        # Aucune attache automatique : start.sh rend la main. S'attacher tout
-        # seul au premier conteneur monopolisait le terminal de lancement et
-        # masquait la fin de la sequence - or c'est la qu'on lit ce qui a
-        # demarre, et ce qui n'a pas demarre.
+        # ── Le premier operateur devant, le reste derriere ───────────────────
+        # Le terminal de lancement finit dans la session tmux d'osmo-operator-1
+        # : c'est la pile qu'on regarde vivre. Mais s'attacher ARRETE le script
+        # la ou il en est - les operateurs suivants ne seraient jamais lances,
+        # et la sonde VTY jamais executee. Toute la suite part donc dans un
+        # sous-shell detache qui ecrit dans un journal ; l'attache ne bloque
+        # plus rien, et ce qui a demarre reste lisible apres coup.
+        local _bg_log="${OSMO_START_LOG:-/var/tmp/osmo-start-suite.log}"
+        : > "$_bg_log" 2>/dev/null || _bg_log=/dev/null
+
+        _launch_stack "$(op_container 1)" "$(_node_args 1)"
+
+        (
+            local _c _cw _ctw _ct _ss
+            for _c in $(seq 2 "$n_operators"); do
+                _launch_stack "$(op_container "$_c")" "$(_node_args "$_c")"
+            done
+
+            # ── L'etat REEL de chaque pile ───────────────────────────────
+            # La barriere d'avant attendait une session tmux "calypso" sur le
+            # seul premier conteneur. Une session RESIDUELLE - celle du
+            # lancement precedent, que start-direct.sh --stop ne ferme pas
+            # toujours - la satisfaisait immediatement : on repartait en
+            # annoncant des piles debout alors que rien n'avait redemarre.
+            #
+            # Le VTY du STP, lui, ne discrimine pas : le port 4239 n'ecoute
+            # que si osmo-stp tourne dans CE conteneur, maintenant.
+            # start-direct.sh commence par un --stop : pendant quelques
+            # secondes, l'osmo-stp pose par run.sh ecoute encore sur 4239.
+            # Sonder tout de suite validerait la pile qu'on vient d'arreter.
+            sleep 5
+            for _cw in $(seq 1 "$n_operators"); do
+                _ctw="$(op_container "$_cw")"
+                if wait_stp_vty "$_ctw"; then
+                    echo "[*] ${_ctw} : pile complete lancee"
+                else
+                    echo "[!] ${_ctw} : pile absente (VTY STP 4239 muet)"
+                    echo "    docker exec ${_ctw} tail -50 /var/log/osmocom/run.sh.log"
+                fi
+            done
+
+            echo ""
+            echo "Pour rejoindre les autres piles :"
+            for _c in $(seq 1 "$n_operators"); do
+                _ct="$(op_container "$_c")"; _ss="$(_stack_session "$_ct")"
+                if [ -n "${_ss#*|}" ]; then
+                    echo "    docker exec -ti ${_ct} tmux ${_ss%%|*} attach -t ${_ss#*|}"
+                else
+                    echo "    ${_ct} : pas de session - docker exec ${_ct} tail -f /var/log/osmocom/run.sh.log"
+                fi
+            done
+        ) >> "$_bg_log" 2>&1 &
+
         echo ""
-        echo -e "  ${BOLD}Les piles tournent. Pour les suivre :${NC}"
-        for _c in $(seq 1 "$n_operators"); do
-            local _ct _ss
-            _ct="$(op_container "$_c")"; _ss="$(_stack_session "$_ct")"
-            if [ -n "${_ss#*|}" ]; then
-                echo -e "      ${CYAN}docker exec -ti ${_ct} tmux ${_ss%%|*} attach -t ${_ss#*|}${NC}"
-            else
-                echo -e "      ${YELLOW}${_ct}${NC} : session pas encore ouverte - ${CYAN}docker exec ${_ct} tail -f /var/log/osmocom/run.sh.log${NC}"
+        echo -e "  ${CYAN}[*] osmo-operator-1 demarre ; les autres suivent en fond.${NC}"
+        echo -e "      journal de la suite : ${CYAN}tail -f ${_bg_log}${NC}"
+        echo -e "      ${CYAN}Ctrl-b puis d${NC} pour vous detacher sans rien arreter."
+        echo ""
+
+        # ── L'attache, une fois la session ouverte ──────────────────────────
+        # run.sh cree ses sessions APRES avoir monte la pile : s'attacher des
+        # le retour de "docker exec -d" tombe sur "no sessions" et rend la main
+        # aussitot, ce qui ressemble a un plantage. On attend donc la session
+        # elle-meme, borne a 90 s, avant de passer la main.
+        # Sans terminal (lancement automatique, CI), on ne s'attache a rien :
+        # "docker exec -ti" y echouerait sur l'absence de tty.
+        local _ct1 _ss1 _try
+        _ct1="$(op_container 1)"
+        if [ -t 1 ] && [ "${NO_ATTACH:-0}" != "1" ]; then
+            echo -ne "  ${GREEN}[*] Attente de la session tmux de ${_ct1}${NC}"
+            _try=0; _ss1="$(_stack_session "$_ct1")"
+            while [ -z "${_ss1#*|}" ] && [ "$_try" -lt 90 ]; do
+                sleep 1; echo -n "."; _try=$(( _try + 1 ))
+                _ss1="$(_stack_session "$_ct1")"
+            done
+            if [ -n "${_ss1#*|}" ]; then
+                echo -e " ${GREEN}✓${NC}"
+                # exec : le lanceur n'a plus rien a faire, et le sous-shell de
+                # fond survit a son remplacement (processus a part).
+                # shellcheck disable=SC2086
+                exec docker exec -ti "$_ct1" tmux ${_ss1%%|*} attach -t "${_ss1#*|}"
             fi
-        done
-        echo -e "\n  ${CYAN}Ctrl-b puis d${NC} pour vous detacher sans rien arreter.\n"
+            echo -e " ${YELLOW}pas de session${NC}"
+            echo -e "      ${CYAN}docker exec ${_ct1} tail -50 /var/log/osmocom/run.sh.log${NC}"
+        fi
     fi
 }
 

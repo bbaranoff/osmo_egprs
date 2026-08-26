@@ -158,7 +158,14 @@ iptables -t nat -I PREROUTING -j OSMO_WAN_INTEROP
 # sans cela les deux resteraient en place et la large gagnerait.
 iptables -t nat -D POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null || true
 if ! iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null; then
-    iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE
+    # Repli si le module conntrack d'iptables manque : sans lui le -A echoue et
+    # le script s'arretait la, la regle large ayant deja ete retiree - plus
+    # aucun masquage, donc plus aucun retour vers les conteneurs.
+    iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null || {
+        echo -e "  ${YELLOW}! -m conntrack indisponible : masquage large 172.20.0.0/24 (moins precis)${NC}"
+        iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null \
+            || iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -j MASQUERADE || true
+    }
 fi
 
 echo -e "  ${GREEN}✓ iptables configure${NC}"

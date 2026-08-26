@@ -41,6 +41,16 @@ start_svc() {
     local svc="$1" vty_port="$2" label="$3" timeout="${4:-30}"
 
     echo -e "  ${CYAN}${label}${NC}"
+    # ── reset-failed AVANT start ────────────────────────────────────────────
+    # systemd abandonne un service apres StartLimitBurst redemarrages (compteur
+    # a 10 sur osmo-bsc). Une config refusee suffit a l'y amener en dix
+    # secondes. Ensuite - et c'est le piege - REPARER LA CONFIG NE SUFFIT PLUS :
+    # "systemctl start" rend "start request repeated too quickly" et le service
+    # reste mort, sans que rien ne le relie a l'erreur d'origine. C'est ce qui
+    # a laisse le BSC de l'operateur 1 eteint alors que son fichier etait
+    # redevenu valide. On efface donc le compteur a chaque lancement : ce script
+    # EST le geste de demarrage, il ne doit pas heriter des echecs d'hier.
+    systemctl reset-failed "$svc" 2>/dev/null || true
     systemctl start "$svc" || {
         echo -e "    ${RED}✗ systemctl start ${svc} echoue${NC}"
         journalctl -u "$svc" -n 20 --no-pager >&2
@@ -117,13 +127,33 @@ chmod 777 /tmp/pcu_bts 2>/dev/null || true
 echo ""
 echo -e "${GREEN}=== Verification ===${NC}"
 SERVICES="osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc osmo-ggsn osmo-sgsn osmo-pcu"
+MORTS=""
 for svc in $SERVICES; do
     if systemctl is-active --quiet "$svc"; then
         echo -e "  ${GREEN}✓${NC} ${svc}"
     else
         echo -e "  ${RED}✗${NC} ${svc}"
+        MORTS="${MORTS} ${svc}"
     fi
 done
 
 echo ""
-echo -e "${GREEN}Core Osmocom pret. BTS et SIP connector geres par run.sh.${NC}"
+# Chaque start_svc porte un "|| true" : c'est voulu, un GGSN absent ne doit pas
+# emporter le reste. Mais la ligne finale disait "Core Osmocom pret" meme avec
+# osmo-msc et osmo-bsc en croix juste au-dessus - et c'est cette ligne-la qu'on
+# lit. Un coeur sans MSC ne fait pas d'attachement : autant le dire ici plutot
+# que de le decouvrir une heure plus tard dans "show bts".
+if [ -n "$MORTS" ]; then
+    echo -e "${RED}Coeur INCOMPLET -${NC}${MORTS}"
+    for svc in $MORTS; do
+        echo -e "  ${CYAN}journalctl -u ${svc} -n 30${NC}   ou   ${CYAN}tail -30 /var/log/osmocom/${svc}.log${NC}"
+    done
+    case "$MORTS" in
+        *osmo-msc*|*osmo-bsc*)
+            echo -e "  ${YELLOW}Sans MSC ni BSC, aucun mobile ne peut s'attacher.${NC}"
+            echo -e "  ${YELLOW}Cause frequente : la config est refusee a la lecture. La ligne fautive${NC}"
+            echo -e "  ${YELLOW}est nommee par :${NC} ${CYAN}osmo-msc -c /etc/osmocom/osmo-msc.cfg 2>&1 | grep -A2 'Error occurred'${NC}" ;;
+    esac
+else
+    echo -e "${GREEN}Core Osmocom pret. BTS et SIP connector geres par run.sh.${NC}"
+fi

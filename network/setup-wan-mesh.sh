@@ -73,6 +73,16 @@ op_container()  { echo "${CONTAINER_PREFIX}$1"; }
 # 5060 et le port de base du relais.
 peer_is_backbone() { case "$1" in 172.20.0.*) return 0 ;; *) return 1 ;; esac; }
 
+# L'adresse que la TABLE annonce pour nous n'est pas toujours celle que porte le
+# paquet a l'arrivee : derriere un routeur, la table donne l'adresse publique et
+# l'hote ne voit jamais que sa privee. Un "-d" sur une adresse absente de la
+# machine ne matche alors PLUS RIEN, et le WAN meurt en silence - le cas de
+# l'en-tete de ce fichier, deux serveurs derriere leur box. On ne restreint donc
+# la destination que si l'adresse est bien a nous.
+addr_is_local() {
+    ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -qx "$1"
+}
+
 # Nombre d'operateurs portes par un noeud DISTANT. Le compteur local ne le dit
 # pas : avec un noeud par conteneur il vaut 2 et fabriquait un trunk vers un
 # operateur inexistant, un pattern _<indicatif>2XXXX et une route SMS que
@@ -294,6 +304,10 @@ for i in "${OP_IDS[@]}"; do
     lip="$LOCAL_IP"
     sip=$(wan_sip_port "$i"); rs=$(wan_rtp_start "$i"); re=$(wan_rtp_end "$i")
     sms=$(wan_sms_port "$i")
+    # Le filtre de destination, calcule une fois par operateur local.
+    _dfil=()
+    if addr_is_local "$lip"; then _dfil=(-d "$lip")
+    else echo -e "  ${YELLOW}! ${lip} (table) n'est pas une adresse de cette machine : DNAT non restreint en destination${NC}"; fi
     for r in "${REMOTES[@]}"; do
         rip="${WAN_IP[$r]}"
         if [ "$MODE" = "docker" ]; then
@@ -303,10 +317,10 @@ for i in "${OP_IDS[@]}"; do
             # ne quittait jamais l'hote, il repartait vers notre propre conteneur
             # qui se repondait a lui-meme - le trunk affichait "Avail" alors que le
             # pair n'avait rien recu.
-            run iptables -t nat -A "$CHAIN" -s "$rip" -d "$lip" -p udp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
-            run iptables -t nat -A "$CHAIN" -s "$rip" -d "$lip" -p tcp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
-            run iptables -t nat -A "$CHAIN" -s "$rip" -d "$lip" -p udp --dport "${rs}:${re}" -j DNAT --to-destination "$bb"
-            run iptables -t nat -A "$CHAIN" -s "$rip" -d "$lip" -p tcp --dport "$sms" -j DNAT --to-destination "${bb}:${SMS_RELAY_BASE}"
+            run iptables -t nat -A "$CHAIN" -s "$rip" ${_dfil[@]+"${_dfil[@]}"} -p udp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
+            run iptables -t nat -A "$CHAIN" -s "$rip" ${_dfil[@]+"${_dfil[@]}"} -p tcp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
+            run iptables -t nat -A "$CHAIN" -s "$rip" ${_dfil[@]+"${_dfil[@]}"} -p udp --dport "${rs}:${re}" -j DNAT --to-destination "$bb"
+            run iptables -t nat -A "$CHAIN" -s "$rip" ${_dfil[@]+"${_dfil[@]}"} -p tcp --dport "$sms" -j DNAT --to-destination "${bb}:${SMS_RELAY_BASE}"
         else
             # Natif : Asterisk et le relais ecoutent deja sur l'hote. Seule la
             # translation de port WAN → port de service est necessaire ; le RTP
@@ -331,8 +345,18 @@ if [ "$DRY" -eq 0 ]; then
         # L'ancienne regle large est retiree d'abord - le garde -C teste la spec
         # exacte, sans cela les deux resteraient en place et la large gagnerait.
         iptables -t nat -D POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null || true
-        iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null \
-            || iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE
+        if ! iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null; then
+            # Sans le module conntrack d'iptables, le -A echoue et, sous set -e,
+            # le script mourait ICI : chaine deja inseree dans PREROUTING et
+            # regle large deja retiree, mais ni rtp.conf, ni pjsip, ni dialplan,
+            # ni routes SMS. On repose alors la regle large en le disant - moins
+            # precise, mais un maillage complet vaut mieux qu'un demi-maillage.
+            iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null || {
+                echo -e "  ${YELLOW}! -m conntrack indisponible : masquage large 172.20.0.0/24 (moins precis)${NC}"
+                iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null \
+                    || iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -j MASQUERADE || true
+            }
+        fi
     fi
 fi
 
@@ -444,14 +468,26 @@ EOF
         # source. Repetee dans chaque bloc, elle donnait autant d'identify que de
         # couples (noeud, operateur) pour cette unique adresse.
         if [ "$MODE" = "docker" ]; then
-            cat <<EOF
+            # Le trafic qui arrive masque en 172.20.0.1 est celui que l'hote a
+            # route depuis le LAN : il ne peut donc venir QUE d'un pair hors du
+            # backbone. Prendre REMOTES[0] attribuait ce trafic au premier pair
+            # de la liste - souvent un conteneur voisin, qui n'arrive jamais
+            # masque : on passait d'une attribution au hasard a une attribution
+            # systematiquement fausse.
+            _gwr=""
+            for _g in "${REMOTES[@]}"; do
+                peer_is_backbone "${WAN_IP[$_g]}" || { _gwr="$_g"; break; }
+            done
+            if [ -n "$_gwr" ]; then
+                cat <<EOF
 
-; ── passerelle du bridge - trafic WAN masque par l'hote ──
+; ── passerelle du bridge - trafic WAN masque par l'hote (noeud ${_gwr}) ──
 [wan-id-gw]
 type=identify
-endpoint=wan_n${REMOTES[0]}_op1
+endpoint=wan_n${_gwr}_op1
 match=172.20.0.1
 EOF
+            fi
         fi
         echo "$END_MARK"
     } >> "$pj"
@@ -507,11 +543,17 @@ exten => _${rind}${j}${pat},1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → ${
 EOF
                 done
             done
+            # L'operateur vise chez le pair, borne a ce qu'il porte reellement :
+            # cette ligne prenait l'indice de l'operateur LOCAL. Vers un noeud
+            # qui n'a qu'un operateur, elle appelait wan_n<r>_op2 - un endpoint
+            # qui n'est plus declare depuis que les trunks suivent node_nops :
+            # Asterisk journalise "endpoint not found" au lieu d'essayer.
+            _spop="$i"; [ "$_spop" -le "$(node_nops "$r")" ] || _spop=1
             for sp in $softphones; do
                 sp_num="${sp%%:*}"
                 cat <<EOF
 exten => ${rind}${sp_num},1,NoOp(=== WAN OUT node${r} softphone ${sp_num} ===)
- same => n,Dial(PJSIP/${sp_num}@wan_n${r}_op${i},,rT)
+ same => n,Dial(PJSIP/${sp_num}@wan_n${r}_op${_spop},,rT)
  same => n,Congestion()
  same => n,Hangup()
 EOF

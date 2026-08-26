@@ -95,6 +95,11 @@ Usage : ./start-direct.sh [options] [mode]
                         alors pour les neuf noeuds - le numero se choisit ici.
     --op N              operateur porte par ce noeud (defaut 1)
     --hub-ip ADRESSE    inter-STP a joindre (defaut : selon docker ou VM)
+    --air-mesh[=PORT]   maillage de BURSTS entre noeuds : le milieu radio
+                        devient commun et un mobile peut entendre - et choisir -
+                        la BTS d'un autre noeud. Les pairs viennent de la table
+                        WAN, la portee de data/air-mesh.txt. Declare deux
+                        mobiles de plus pour s'y brancher (voir pont/airmesh.py).
     --virtualbox[=N]    WAN entre CETTE machine et N-1 VM VirtualBox (implique
                         --wan). A lancer depuis l'hote, pas depuis une VM.
     --vbox-node N       numero de noeud porte par cette machine (defaut 1)
@@ -135,6 +140,8 @@ while [ $# -gt 0 ]; do
         --vbox-node=*)  VBOX_HOST_NODE="${1#*=}" ;;
         --node)         NODE_ID="${2:-}"; shift ;;
         --node=*)       NODE_ID="${1#*=}" ;;
+        --air-mesh)     AIR_MESH=1 ;;
+        --air-mesh=*)   AIR_MESH=1; AIRMESH_PORT="${1#*=}" ;;
         --regen)        REGEN_GABARITS=1 ;;
         --op)           NODE_OP="${2:-1}"; shift ;;
         --op=*)         NODE_OP="${1#*=}" ;;
@@ -639,6 +646,69 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         printf '  %spont: journal%s /dev/shm/pont.log (hors LOG_DIR, efface par le teardown)\n' "${C_DIM:-}" "${C_Z:-}"
     else
         printf '  pont introuvable (%s)\n' "$_PONT"
+    fi
+fi
+
+# --- MAILLAGE DE BURSTS (--air-mesh) : le milieu radio devient commun ---------
+# Jusqu'ici deux noeuds se parlaient tout en haut de la pile - un trunk SIP,
+# un relais SMS, du M3UA vers un hub - et chacun gardait sa radio hermetique :
+# le mobile de l'operateur 1 ne POUVAIT PAS entendre la BTS de l'operateur 2.
+# Ici c'est le burst qui traverse : pont/airmesh.py prend ce qui passe sur le
+# fake_trx local et l'echange avec les pairs. Voir l'en-tete d'airmesh.py pour
+# le detail - notamment pourquoi il faut DEUX emplacements de transceiver, et
+# comment on les obtient sans modifier une ligne de qemu-src.
+if [ "${AIR_MESH:-0}" = "1" ]; then
+    _AIRMESH="${AIRMESH_PY:-${HERE}/pont/airmesh.py}"
+    [ -f "$_AIRMESH" ] || _AIRMESH=/opt/GSM/osmo_egprs/pont/airmesh.py
+    if [ ! -f "$_AIRMESH" ]; then
+        printf '  %sair-mesh%s : airmesh.py introuvable - maillage de bursts non lance\n' "${C_KO:-}" "${C_Z:-}"
+    else
+        # DEUX MOBILES DE PLUS QUE LE BANC N'EN A. fake_trx cree un transceiver
+        # par mobile declare ; airmesh prend les deux derniers et les accorde
+        # autrement (l'un comme un mobile, l'autre comme une BTS). Sans ce +2,
+        # il n'y a aucun emplacement libre et airmesh se tait sans rien dire.
+        _NMS_REEL="${N_MS:-2}"
+        N_MS=$(( _NMS_REEL + 2 )); export N_MS
+        _BBP="${BB_BASE_PORT:-6700}"; _BBS="${BB_PORT_STEP:-3}"
+        _TRX_MS=$((  _BBP + (_NMS_REEL + 1 - 1) * _BBS ))   # emplacement N+1
+        _TRX_BTS=$(( _BBP + (_NMS_REEL + 2 - 1) * _BBS ))   # emplacement N+2
+
+        # Les pairs viennent de la table WAN : tout noeud qui n'est pas nous.
+        _PAIRS=""
+        for _tok in ${WAN_NODES:-}; do
+            _pid="${_tok%%:*}"; _rest="${_tok#*:}"; _pip="${_rest%%:*}"
+            [ -n "$_pid" ] && [ -n "$_pip" ] || continue
+            [ "$_pid" = "${NODE_ID:-1}" ] && continue
+            _PAIRS="$_PAIRS --pair ${_pid}:${_pip}:${AIRMESH_PORT:-4739}"
+        done
+
+        printf '  %sair-mesh%s   noeud %s  arfcn %s  emplacements TRXD %s et %s  pairs:%s\n' \
+            "${C_DIM:-}" "${C_Z:-}" "${NODE_ID:-1}" "${ARFCN:-514}" \
+            "$_TRX_MS" "$_TRX_BTS" "${_PAIRS:- aucun}"
+
+        # On attend que fake_trx ait BINDE l'emplacement, pas une duree : il ne
+        # demarre qu'apres le teardown de run.sh, dont la duree depend de la
+        # taille des journaux archives. Une temporisation ferait de ce lancement
+        # une course - c'est la lecon du pont, juste au-dessus.
+        ( _n=0
+          while [ "$_n" -lt 180 ] && ! ss -uln 2>/dev/null | grep -q ":$(( _TRX_MS + 1 ))\b"; do
+              _n=$((_n + 1)); sleep 1
+          done
+          if [ "$_n" -ge 180 ]; then
+              echo "[airmesh] emplacement $(( _TRX_MS + 1 )) jamais ouvert par fake_trx apres 180 s"
+              echo "[airmesh] verifiez que le banc tourne bien avec N_MS=${N_MS} (deux de plus que ${_NMS_REEL})"
+              exit 1
+          fi
+          echo "[airmesh] fake_trx a ouvert nos emplacements apres ${_n} s"
+          sleep 1
+          # shellcheck disable=SC2086
+          exec setsid python3 -u "$_AIRMESH" \
+              --node "${NODE_ID:-1}" --arfcn "${ARFCN:-514}" \
+              --port "${AIRMESH_PORT:-4739}" \
+              --trx-ms "$_TRX_MS" --trx-bts "$_TRX_BTS" \
+              --topologie "${HERE}/data/air-mesh.txt" \
+              $_PAIRS ) >/dev/shm/airmesh.log 2>&1 &
+        printf '  %sair-mesh: journal%s /dev/shm/airmesh.log\n' "${C_DIM:-}" "${C_Z:-}"
     fi
 fi
 

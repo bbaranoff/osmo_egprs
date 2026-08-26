@@ -93,6 +93,29 @@ else
 fi
 info "mode=${MODE} operateurs locaux=${N_OPS}"
 
+# ── Ce que porte un pair, et ou il ecoute ────────────────────────────────────
+# Ces deux fonctions repliquent ce que network/setup-wan-mesh.sh a REELLEMENT
+# ecrit dans les configs. Sans elles, ce controle bouclait sur le nombre
+# d'operateurs LOCAUX et cherchait chez chaque pair autant de trunks que nous en
+# avons : des qu'un pair en portait moins - le montage un noeud par conteneur,
+# soit le banc courant - il sortait "trunk wan_n2_op2 ABSENT, relancez
+# setup-wan-mesh.sh" et rendait 1. Un echec faux, avec un conseil qui n'y
+# changeait rien : le trunk manquant n'a jamais eu lieu d'exister.
+peer_nops() {   # $1 = id de noeud
+    local n="${WAN_NOPS[$1]:-}"
+    if [[ "$n" =~ ^[1-9][0-9]*$ ]]; then echo "$n"; return; fi
+    # Table sans le 4e champ (une table ecrite a la main, ou anterieure) : un
+    # pair du backbone est un conteneur, donc un operateur ; ailleurs, on
+    # suppose le pair monte comme nous. C'est la meme regle que node_nops dans
+    # network/setup-wan-mesh.sh - il faut lire ce que le maillage a ecrit, pas
+    # ce qu'on aurait souhaite qu'il ecrive.
+    if peer_is_backbone "${WAN_IP[$1]:-}"; then echo 1; else echo "${N_OPS:-1}"; fi
+}
+# Un pair du backbone docker est joint a son adresse propre : le conteneur y
+# ecoute sur 5060 et sur le port de base du relais SMS. Les 5080/5082 et 7891
+# sont les ports PUBLIES sur l'hote, ils ne veulent rien dire de ce cote.
+peer_is_backbone() { case "$1" in 172.20.0.*) return 0 ;; *) return 1 ;; esac; }
+
 ast() { # $1=op  $2=commande
     if [ "$MODE" = docker ]; then docker exec "osmo-operator-$1" asterisk -rx "$2" 2>/dev/null
     else asterisk -rx "$2" 2>/dev/null; fi
@@ -108,8 +131,9 @@ for r in "${REMOTES[@]}"; do
     rip="${WAN_IP[$r]}"
     if ping -c1 -W2 "$rip" >/dev/null 2>&1; then ok "node ${r} ${rip} repond au ping"
     else warn "node ${r} ${rip} ne repond pas au ping (ICMP filtre ? noeud eteint ?)"; fi
-    for i in $(seq 1 "$N_OPS"); do
-        sip=$(( 5080 + (i - 1) * 2 )); sms=$(( 7890 + i - 1 ))
+    for i in $(seq 1 "$(peer_nops "$r")"); do
+        if peer_is_backbone "$rip"; then sip=5060; sms=7890
+        else sip=$(( 5080 + (i - 1) * 2 )); sms=$(( 7890 + i - 1 )); fi
         if command -v nc >/dev/null 2>&1; then
             nc -z -w2 "$rip" "$sms" 2>/dev/null \
                 && ok "node ${r} op${i} : relais SMS ${rip}:${sms} ouvert" \
@@ -125,7 +149,7 @@ for i in $(seq 1 "$N_OPS"); do
     out="$(ast "$i" 'pjsip show endpoints')"
     if [ -z "$out" ]; then fail "op${i} : Asterisk ne repond pas"; continue; fi
     for r in "${REMOTES[@]}"; do
-        for j in $(seq 1 "$N_OPS"); do
+        for j in $(seq 1 "$(peer_nops "$r")"); do
             ep="wan_n${r}_op${j}"
             if echo "$out" | grep -q "$ep"; then
                 state="$(ast "$i" "pjsip show aor $ep" | grep -iE 'Avail|Unavail|Contact' | head -3 | tr '\n' ' ')"

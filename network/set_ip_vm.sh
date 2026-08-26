@@ -115,6 +115,21 @@ run() { if [ "$DRY" = 1 ]; then echo "    [dry-run] $*"; else "$@"; fi; }
 # echoue - rien ne subsiste d'une tentative infructueuse.
 discover_docker_host() {
     local prefix probe live c saved
+    # Cette fonction POSE des routes pour trouver la bonne : elle ne passe pas
+    # par run(), donc --dry-run modifiait quand meme la table de routage de la
+    # machine. Un mode qui annonce "montre, n'applique pas" doit tenir parole.
+    if [ "$DRY" = 1 ]; then
+        echo -e "    [dry-run] decouverte sautee : elle pose des routes a l'essai - donnez --via" >&2
+        return 1
+    fi
+    # Et sans root, "ip route replace" echoue silencieusement a chaque candidat :
+    # la boucle allait au bout, VIA ressortait vide, et --defaut sortait en
+    # "--via manquant" - un message qui designe la mauvaise cause. Le controle
+    # de root n'arrive que cinquante lignes plus bas, trop tard pour celui-ci.
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "    decouverte impossible sans root (elle pose des routes a l'essai) - donnez --via" >&2
+        return 1
+    fi
     # Le reseau se lit sur l'interface, il n'est jamais suppose.
     [ -n "$LAN_IP" ] || return 1
     prefix="${LAN_IP%.*}"

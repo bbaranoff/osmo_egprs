@@ -292,7 +292,24 @@ ensure_gapk() {
     # ecrivent dans gsm_out, on les rejouerait dans leur propre uplink.
     tmux new-session -d -s gapk \
         "GAPK_ALSA_DEV=gsm_out GAPK_ALSA_DEV_IN=gsm_in PULSE_SERVER=unix:${PULSE_SOCK} bash '$gapk_sh' auto gsm gsm_out gsm_in 2>&1 | tee ${LOG_DIR}/gapk-auto.log"
-    echo -e "  ${GREEN}[gapk] auto lance (RTP MGW → sink gsm_audio) - tmux 'gapk', log ${LOG_DIR}/gapk-auto.log${NC}"
+    # [2026-08-26] LA FENETRE "exited".
+    # `tmux new-session -d` rend 0 des que le serveur a pris la commande, pas
+    # quand celle-ci tourne. Si gapk-start.sh rend la main tout de suite - format
+    # refuse, sink pas encore la, binaire absent - la fenetre reste affichee avec
+    # "[exited]" en travers, et le message vert ci-dessous annonce quand meme un
+    # pont audio en place. On attend donc une seconde, et on regarde.
+    # La session morte est retiree : une fenetre "exited" au milieu des autres
+    # fait chercher une panne dans la pile alors que c'est le pont audio, seul,
+    # qui n'a pas demarre - et le journal, lui, dit pourquoi.
+    sleep 1
+    if tmux has-session -t gapk 2>/dev/null && \
+       [ "$(tmux list-panes -t gapk -F '#{pane_dead}' 2>/dev/null | head -1)" != "1" ]; then
+        echo -e "  ${GREEN}[gapk] auto lance (RTP MGW → sink gsm_audio) - tmux 'gapk', log ${LOG_DIR}/gapk-auto.log${NC}"
+    else
+        tmux kill-session -t gapk 2>/dev/null || true
+        echo -e "  ${YELLOW}[gapk] mort au demarrage - pas de pont audio (fenetre retiree)${NC}"
+        echo -e "         ${CYAN}tail -20 ${LOG_DIR}/gapk-auto.log${NC}"
+    fi
     ensure_host_audio   # (re)lance le pont voix → hote maintenant que pulse+sink sont up
 }
 
