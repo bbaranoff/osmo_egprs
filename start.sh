@@ -1364,6 +1364,17 @@ start_bridge_mode() {
     # ne peuvent alors pas porter le meme nom tant que le fichier n'est pas
     # epuise - et deux homonymes dans une trace, c'est une heure perdue.
     local ANNUAIRE_FILE="${OSMO_ANNUAIRE:-/var/tmp/osmo-annuaire.csv}"
+    # ── L'annuaire du SS7 : le meme service, un etage plus bas ──────────────
+    # L'annuaire d'abonnes met un nom sur un MSISDN. Celui-ci met un nom sur un
+    # POINT CODE. On lit "1.21.2" dans une trace M3UA sans savoir de quelle
+    # machine il s'agit, ni quel operateur elle porte, ni vers quel hub elle
+    # s'attache - et les trois se deduisent d'un plan qui n'est ecrit nulle
+    # part ailleurs que dans la tete de celui qui a lance le banc.
+    # Il est produit par la MEME boucle que les configurations : ce n'est pas
+    # une documentation a cote, c'est le releve de ce qui vient d'etre ecrit.
+    local ANNUAIRE_SS7="${OSMO_ANNUAIRE_SS7:-/var/tmp/osmo-annuaire-ss7.csv}"
+    printf 'noeud;operateur;pays;mcc;mnc;pc_msc;pc_stp;pc_bsc;rctx_msc;rctx_stp;rctx_bsc;rctx_inter;hub;as_inter;asp_inter;backbone;prive\n' \
+        > "$ANNUAIRE_SS7"
     local _pick=0
     printf 'imsi;msisdn;operateur;pays;mcc;mnc;nom;adresse;ki\n' > "$ANNUAIRE_FILE"
     for op_id in $(seq 1 "$n_operators"); do
@@ -1444,6 +1455,17 @@ start_bridge_mode() {
         # longtemps une panne quand le journal dit le contraire du fichier.
         echo -e "  STP PC     : 1.${_pc_mid}.2  RCTX : ${_rctx_inter:-$rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
 
+        # Le releve SS7 de CET operateur, avec les valeurs qui partent dans sa
+        # configuration deux lignes plus bas - pas une reconstitution.
+        printf '%s;%s;%s;%s;%s;1.%s.1;1.%s.2;1.%s.3;%s;%s;%s;%s;%s;as-n%sop%s;asp-n%sop%s;%s;%s\n' \
+            "$_node_i" "${OP_NAME[$i]}" "$(op_country "$i")" \
+            "${OP_MCC[$i]}" "${OP_MNC[$i]}" \
+            "$_pc_mid" "$_pc_mid" "$_pc_mid" \
+            "$(op_rctx_msc "$i")" "$(op_rctx_stp "$i")" "$(op_rctx_bsc "$i")" \
+            "${_rctx_inter:-$rctx_inter}" "${WAN_STP_TARGET:-127.0.0.1}" \
+            "$_node_i" "$_op_i" "$_node_i" "$_op_i" \
+            "$inter_local_ip" "$container_ip" >> "$ANNUAIRE_SS7"
+
         if docker network inspect "$net_name" &>/dev/null; then
             echo -e "  Reseau     : ${CYAN}${net_name}${NC} (deja present)"
         elif docker network create --subnet="$subnet" --gateway="$gateway" "$net_name" &>/dev/null; then
@@ -1496,6 +1518,30 @@ start_bridge_mode() {
         # L'annuaire voyage avec la pile : c'est dans le conteneur qu'on lit
         # un IMSI dans un journal, pas sur l'hote.
         [ -f "$ANNUAIRE_FILE" ] && cp "$ANNUAIRE_FILE" "$tmpdir/osmocom/annuaire.csv"
+        [ -f "$ANNUAIRE_SS7" ]   && cp "$ANNUAIRE_SS7"   "$tmpdir/osmocom/annuaire-ss7.csv"
+
+        # ── Les fiches du dialplan ─────────────────────────────────────────
+        # Asterisk ne sait pas lire un CSV. On lui ecrit donc les memes fiches
+        # sous la forme qu'il comprend : une extension par MSISDN dans le
+        # contexte sub-annuaire (voir configs/extensions.conf). L'appel arrive
+        # alors sur le combine avec un nom, et non avec cinq chiffres.
+        {
+            printf '; annuaire.conf - genere par start.sh, ne pas editer a la main.\n'
+            printf '; Une fiche par abonne du banc. Le repli _X. est dans extensions.conf.\n'
+            printf '[sub-annuaire]\n'
+            awk -F';' 'NR>1 && $2 != "" {
+                gsub(/[^A-Za-z0-9 ._-]/, "", $7); gsub(/[^A-Za-z0-9 ._-]/, "", $3)
+                gsub(/[^A-Za-z0-9 ._-]/, "", $4); gsub(/[^A-Za-z0-9 .,_-]/, "", $8)
+                printf "exten => %s,1,Set(CALLERID(name)=%s)\n", $2, $7
+                printf " same => n,Set(ANNU_OP=%s)\n", $3
+                printf " same => n,Set(ANNU_PAYS=%s)\n", $4
+                printf " same => n,Set(ANNU_ADR=%s)\n", $8
+                printf " same => n,Set(ANNU_IMSI=%s)\n", $1
+                printf " same => n,Set(CDR(userfield)=%s / %s / %s)\n", $7, $3, $4
+                printf " same => n,NoOp(=== ANNUAIRE %s = %s, %s (%s) ===)\n", $2, $7, $3, $4
+                printf " same => n,Return()\n"
+            }' "$ANNUAIRE_FILE"
+        } > "$tmpdir/asterisk/annuaire.conf" 2>/dev/null || true
 
         local vol_args alsa_args
         vol_args=$(build_vol_args "$tmpdir")
@@ -1661,15 +1707,42 @@ start_bridge_mode() {
             echo "VTYCMDS"
         } | docker exec -i "$container_name" bash
 
-        docker exec "$container_name" bash -c '
+        # Le compte des refus etait CALCULE PUIS JETE : "grep -cE ^%" en fin de
+        # tube, sa valeur perdue, et la ligne verte affichee quoi qu'il arrive.
+        # Un abonne dont le "create" passe mais dont l'ecriture de la cle est
+        # refusee existe alors sans cle - et c'est pire qu'un abonne absent :
+        # osmo-msc le trouve, reclame ses vecteurs d'authentification, n'obtient
+        # rien, et rejette le mobile avec un motif qui accuse la carte SIM. On
+        # cherche du cote du mobile pendant que la panne est dans le HLR.
+        local _feed_out _refus _sans_cle
+        _feed_out="$(docker exec "$container_name" bash -c '
             if command -v nc >/dev/null 2>&1; then
-                (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) | nc -q2 127.0.0.1 4258 2>/dev/null | grep -cE "^%" || true
+                (sleep 1; cat /tmp/hlr_feed.vty; sleep 2) | nc -q2 127.0.0.1 4258 2>/dev/null
             else
-                (sleep 1; cat /tmp/hlr_feed.vty; sleep 3) | telnet 127.0.0.1 4258 2>/dev/null | grep -cE "^%" || true
+                (sleep 1; cat /tmp/hlr_feed.vty; sleep 3) | telnet 127.0.0.1 4258 2>/dev/null
             fi
             rm -f /tmp/hlr_feed.vty
-        '
-        echo -e "  ${GREEN}✓ HLR Op${i} alimente${NC}"
+        ' 2>/dev/null)" || true
+        _refus="$(printf '%s\n' "$_feed_out" | grep -cE '^%' || true)"
+
+        # ON RELIT plutot que de croire la sortie : la seule preuve qu'un abonne
+        # est servi, c'est sa fiche, et la fiche d'un abonne sans cle n'a pas de
+        # ligne "KI=". C'est exactement ce qui manquait pour voir le probleme.
+        _sans_cle="$(docker exec "$container_name" bash -c '
+            command -v sqlite3 >/dev/null 2>&1 || exit 0
+            sqlite3 /var/lib/osmocom/hlr.db "
+                select count(*) from subscriber s
+                left join auc_2g a on a.subscriber_id = s.id
+                where a.subscriber_id is null;" 2>/dev/null' 2>/dev/null)" || true
+
+        if [ "${_refus:-0}" -gt 0 ] || [ "${_sans_cle:-0}" -gt 0 ]; then
+            echo -e "  ${RED}✗ HLR Op${i} : ${_refus:-0} commande(s) refusee(s), ${_sans_cle:-0} abonne(s) SANS CLE${NC}"
+            echo -e "    ${YELLOW}Un abonne sans cle ne peut pas s'authentifier : le mobile sera rejete.${NC}"
+            echo -e "    ${CYAN}docker exec ${container_name} sqlite3 /var/lib/osmocom/hlr.db \\${NC}"
+            echo -e "    ${CYAN}  \"select s.imsi from subscriber s left join auc_2g a on a.subscriber_id=s.id where a.subscriber_id is null;\"${NC}"
+        else
+            echo -e "  ${GREEN}✓ HLR Op${i} alimente (${total_subs} abonnes, tous avec cle)${NC}"
+        fi
 
         # Attente dernier groupe - sautee en no-process
         if [ "${BRIDGE_NO_PROCESS:-0}" = "1" ]; then

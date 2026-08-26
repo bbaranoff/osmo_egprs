@@ -49,6 +49,14 @@ _HLRF_KI=""
 # bash /dev/tcp plutot que telnet/nc : aucune dependance a installer, et c'est
 # deja l'idiome du legacy (L1579). `enable` d'abord : `subscriber ... create`
 # est une commande privilegiee.
+# Le VTY a repondu N'EST PAS le travail a ete fait.
+# Cette fonction ne rendait 1 que si la CONNEXION echouait. osmo-hlr, lui,
+# refuse une commande en repondant par une ligne qui commence par '%' - et le
+# module annoncait tout de meme un succes. C'est ainsi qu'un abonne a fini par
+# exister sans cle : `create` passe, `update aud2g ... ki` echoue, personne ne
+# le lit. Et un abonne sans cle est PIRE qu'un abonne absent : osmo-msc le
+# trouve, demande ses vecteurs d'authentification, n'obtient rien, et rejette
+# le mobile avec un motif qui accuse la carte SIM.
 _hlrf_vty() {
     local out=""
     exec 9<>"/dev/tcp/${CALYPSO_HLR_VTY_IP}/${OSMO_VTY_HLR}" 2>/dev/null || return 1
@@ -57,16 +65,42 @@ _hlrf_vty() {
     exec 9>&- 2>/dev/null
     exec 9<&- 2>/dev/null
     printf '%s\n' "$out"
+    # Une ligne commencant par '%' est un refus d'osmo-hlr. On la remonte par le
+    # code retour ; l'appelant garde la sortie pour la montrer.
+    case "$out" in
+        '%'*|*$'\n''%'*) return 1 ;;
+    esac
+    return 0
 }
 
 # L'abonne est-il DANS la base ? osmo-hlr repond "% No subscriber ..." quand
 # il ne l'est pas ; on exige en plus de retrouver l'IMSI dans la fiche, pour ne
 # pas prendre un message d'erreur inattendu pour un succes.
+# MSISDN = operateur * 10000 + rang, les deux lus dans l'IMSI (voir plus bas).
+_hlrf_msisdn() {                       # $1 = IMSI a 15 chiffres
+    local imsi="$1" op ms
+    case "$imsi" in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+        *) return 1 ;;
+    esac
+    op="${imsi:5:4}"; ms="${imsi:9:6}"
+    op="${op#"${op%%[!0]*}"}"; : "${op:=1}"      # zeros de tete
+    ms="${ms#"${ms%%[!0]*}"}"; : "${ms:=1}"
+    echo $(( op * 10000 + ms ))
+}
+
 _hlrf_present() {
     [ -n "$_HLRF_IMSI" ] || return 1
     local out; out="$(_hlrf_vty "subscriber imsi $_HLRF_IMSI show")" || return 1
     case "$out" in *"No subscriber"*|*"% "*) return 1;; esac
-    printf '%s' "$out" | grep -q "$_HLRF_IMSI"
+    printf '%s' "$out" | grep -q "$_HLRF_IMSI" || return 1
+    # ET la cle. Sans cette seconde condition, un abonne cree mais dont
+    # l'ecriture de la cle a echoue se declarait "deja provisionne" : le module
+    # se sautait lui-meme a chaque demarrage suivant, et l'abonne restait sans
+    # cle indefiniment. La fiche d'un abonne servi porte "2G auth: COMP128v1"
+    # suivi de "KI=..." ; celle d'un abonne sans cle n'a simplement pas ces
+    # lignes - c'est le seul discriminant que le VTY donne.
+    printf '%s' "$out" | grep -q 'KI='
 }
 
 mod_hlr_feed_check() {
@@ -110,16 +144,54 @@ mod_hlr_feed_start() {
     # Le legacy attendait ici le VTY 90 × 2 s en tache de fond (L1578) : le HLR
     # pouvait ne pas etre pret. Ce sleep n'a plus lieu d'etre - la barriere du
     # module `core` garantit deja que 4258 ecoute, sinon ce module est saute.
-    local msisdn="${_HLRF_IMSI: -5}" out
-    out="$(_hlrf_vty \
-        "subscriber imsi $_HLRF_IMSI create" \
-        "subscriber imsi $_HLRF_IMSI update msisdn $msisdn" \
-        "subscriber imsi $_HLRF_IMSI update aud2g comp128v1 ki $_HLRF_KI")" || {
-        mod_hint "verifiez que osmo-hlr ecoute : ./run.sh --status"
-        mod_fail "VTY HLR ${CALYPSO_HLR_VTY_IP}:${OSMO_VTY_HLR} injoignable"
+    # ── Le numero d'appel : UN SEUL plan pour tout le banc ──────────────────
+    # Trois endroits provisionnent ce HLR. start.sh, run_modules/21-abonnes-hlr.sh
+    # et scripts/sms-routing-setup.sh calculent tous
+    #       MSISDN = operateur * 10000 + rang du mobile
+    # soit 10001, 10002 pour l'operateur 1, 20001, 20002 pour le 2. C'est ce
+    # plan que le dialplan reconnait (motif <operateur>XXXX dans
+    # configs/extensions.conf) et que le routage SMS attend.
+    # Ce module-ci en avait un quatrieme, tire des derniers chiffres de l'IMSI.
+    # Il donnait un numero que personne n'appelle - et sur l'operateur 2, selon
+    # la variante, le numero de l'operateur 1. Un abonne joignable a un numero
+    # que rien ne compose n'est pas joignable.
+    # L'IMSI porte deja tout ce qu'il faut : MCC(3) MNC(2) operateur(4) rang(6).
+    local msisdn out fiche
+    msisdn="$(_hlrf_msisdn "$_HLRF_IMSI")" || {
+        mod_fail "IMSI $_HLRF_IMSI : format inattendu, impossible d'en tirer un MSISDN"
+        return $MOD_RC_FAIL
+    }
+    fiche="$(_hlrf_vty "subscriber imsi $_HLRF_IMSI show" 2>/dev/null)" || true
+    local cmds=( "subscriber imsi $_HLRF_IMSI create" )
+    case "$fiche" in
+        *"MSISDN: none"*|*"No subscriber"*|"")
+            cmds+=( "subscriber imsi $_HLRF_IMSI update msisdn $msisdn" ) ;;
+    esac
+    cmds+=( "subscriber imsi $_HLRF_IMSI update aud2g comp128v1 ki $_HLRF_KI" )
+
+    out="$(_hlrf_vty "${cmds[@]}")" || {
+        # On distingue les deux echecs : un VTY muet et un VTY qui refuse ne se
+        # reparent pas de la meme facon, et les confondre envoie chercher une
+        # panne de reseau la ou il y a une commande mal formee.
+        if _hlrf_vty "show version" >/dev/null 2>&1; then
+            mod_say "$out"
+            mod_hint "osmo-hlr a refuse une commande - la ligne en '%' ci-dessus le dit"
+            mod_fail "provisionnement refuse pour $_HLRF_IMSI"
+        else
+            mod_hint "verifiez que osmo-hlr ecoute : ./run.sh --status"
+            mod_fail "VTY HLR ${CALYPSO_HLR_VTY_IP}:${OSMO_VTY_HLR} injoignable"
+        fi
         return $MOD_RC_FAIL
     }
     mod_say "$out"
+
+    # ON RELIT. Ecrire sans verifier est ce qui a laisse un abonne sans cle
+    # pendant tout un banc : la seule preuve qu'il est servi, c'est sa fiche.
+    if ! _hlrf_present; then
+        mod_hint "subscriber imsi $_HLRF_IMSI show - la fiche doit porter 'KI='"
+        mod_fail "$_HLRF_IMSI est dans le HLR mais SANS CLE : aucune authentification possible"
+        return $MOD_RC_FAIL
+    fi
     mod_ok
 }
 

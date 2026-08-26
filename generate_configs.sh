@@ -323,6 +323,21 @@ apply_config_templates() {
     rtp_start=$(linphone_rtp_start "$op_id"); rtp_end=$(linphone_rtp_end "$op_id")
     sip_host_port=$(linphone_sip_port "$op_id")
 
+    # extensions.conf porte un #include "annuaire.conf" (les fiches d'abonnes,
+    # ecrites par start.sh pour que le nom de l'appelant arrive au combine).
+    # Asterisk avertit a chaque chargement quand un include manque, et un banc
+    # monte sans start.sh - une VM, start-direct.sh seul - n'en a pas. On pose
+    # donc toujours un fichier, quitte a ce qu'il soit vide : le repli _X. de
+    # extensions.conf fait le reste, et l'avertissement disparait.
+    if [ ! -f "$dest/asterisk/annuaire.conf" ]; then
+        {
+            printf '; annuaire.conf - fiches d abonnes, ecrites par start.sh.\n'
+            printf '; Vide ici : ce banc a ete monte sans annuaire. Les appels\n'
+            printf '; passent, ils affichent le numero au lieu du nom.\n'
+            printf '[sub-annuaire]\n'
+        } > "$dest/asterisk/annuaire.conf"
+    fi
+
     for f in "$dest/osmocom"/*.cfg "$dest/asterisk"/*.conf "$dest/bb"/*.cfg; do
         [ -f "$f" ] || continue
         sed -i \
