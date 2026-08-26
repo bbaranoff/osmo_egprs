@@ -1237,6 +1237,8 @@ start_bridge_mode() {
             -e GATEWAY_IP="$gateway" \
             -e INTER_STP_IP="${WAN_STP_TARGET:-$INTER_STP_IP}" \
             -e OSMO_HUB_IP="${WAN_STP_TARGET:-$INTER_STP_IP}" \
+            -e WAN_NODE_ID="${_node_i}" \
+            -e OSMO_WAN_NODE="${_node_i}" \
             -e HOST_IP="${HOST_IP}" \
             -e SIP_HOST_PORT="${lsip_port}" \
             -e PHY_MODE="${PHY_MODE}" \
