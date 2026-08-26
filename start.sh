@@ -830,8 +830,10 @@ wan_menu_table() {
     done
     # Les autres : eux seuls ont besoin d'une reponse.
     for k in $(seq $(( cont + 1 )) "$total"); do
+        # Defaut : la VM du banc, seul noeud distant du montage courant.
+        _defip=""; [ "$k" = 3 ] && _defip="192.168.1.2"
         ip=$(wt_input "Operateur distant ${k}/${total}" \
-             "Adresse du noeud ${k} (une VM, une autre machine) :" "") || return 0
+             "Adresse du noeud ${k} (une VM, une autre machine) :" "$_defip") || return 0
         [ -n "$ip" ] || { wt_msg "Adresse vide : noeud ${k} ignore."; continue; }
         ind=$(wt_input "Operateur distant ${k}/${total}" \
               "Indicatif (prefixe d'appel) du noeud ${k} :" "$(( k * 11 ))") || return 0

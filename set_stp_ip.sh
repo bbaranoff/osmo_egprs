@@ -46,6 +46,9 @@
 #   --iface NOM            interface ou poser l'adresse (defaut : detectee)
 #   --port N               port M3UA (defaut 2908)
 #   --no-ip                ne touche pas a la configuration reseau
+#   --defaut               la configuration du banc, sans une question : role
+#                          deduit, IP de pont deduite, hub 192.168.1.49, noeud
+#                          lu dans /etc/osmo-role ou la table WAN.
 #   --restart              relance la pile apres reecriture
 #   --dry-run              montre ce qui serait ecrit
 # ══════════════════════════════════════════════════════════════════════════════
@@ -75,6 +78,16 @@ IFACE=""
 PORT=2908
 SET_IP=1
 RESTART=0
+# ── La configuration du banc, sans une question ─────────────────────────────
+# --defaut repond a tout ce que ce script demande d'habitude, a partir de ce
+# que la machine sait deja d'elle-meme :
+#   role     interstp si son adresse EST celle du hub, operateur sinon ;
+#   son IP   celle du pont, deduite ;
+#   le hub   192.168.1.49 ;
+#   le noeud /etc/osmo-role, puis la table WAN, puis 1.
+# Chaque valeur reste surchargeable : --defaut --node 3 gagne sur la deduction.
+USE_DEFAULTS=0
+DEFAULT_HUB_IP="192.168.1.49"
 DRY=0
 SHOW=0
 
@@ -102,6 +115,7 @@ while [ $# -gt 0 ]; do
         --port=*)   PORT="${1#*=}" ;;
         --conf-dir)   CONF_DIR="${2:-}"; INTEROP_CFG="${CONF_DIR}/osmo-stp-interop.cfg"; shift ;;
         --conf-dir=*) CONF_DIR="${1#*=}"; INTEROP_CFG="${CONF_DIR}/osmo-stp-interop.cfg" ;;
+        --defaut|--default) USE_DEFAULTS=1 ;;
         --no-ip)    SET_IP=0 ;;
         --restart)  RESTART=1 ;;
         --dry-run)  DRY=1 ;;
@@ -228,6 +242,26 @@ if [ "$SHOW" = "1" ]; then
     echo ""
     [ -r "$WAN_CONF_FILE" ] && { echo -e "  ${BOLD}${WAN_CONF_FILE}${NC}"; sed 's/^/    /' "$WAN_CONF_FILE"; }
     exit 0
+fi
+
+if [ "$USE_DEFAULTS" = "1" ]; then
+    [ -n "$HUB_IP" ]  || HUB_IP="$DEFAULT_HUB_IP"
+    [ -n "$SELF_IP" ] || SELF_IP="$(bridge_ip || true)"
+    if [ -z "$ROLE" ]; then
+        if [ "$SELF_IP" = "$HUB_IP" ]; then ROLE="interstp"; else ROLE="operator"; fi
+    fi
+    if [ -z "$NODE" ] && [ "$ROLE" = "operator" ]; then
+        NODE="$(node_of_file)"
+        if [ -z "$NODE" ] && [ -r "$WAN_CONF_FILE" ]; then
+            NODE="$(awk -F\" '/WAN_NODES=/{print $2}' "$WAN_CONF_FILE" 2>/dev/null \
+                    | tr ' ' '\n' | awk -F: -v ip="$SELF_IP" '$2==ip{print $1; exit}')"
+        fi
+        [ -n "$NODE" ] || NODE=1
+    fi
+    if [ -z "$IPS" ] && [ "$ROLE" = "interstp" ] && [ -r "$WAN_CONF_FILE" ]; then
+        IPS="$(awk -F\" '/WAN_NODES=/{print $2}' "$WAN_CONF_FILE" 2>/dev/null \
+               | tr ' ' '\n' | awk -F: '{print $2}' | tr '\n' ' ')"
+    fi
 fi
 
 banner

@@ -54,11 +54,14 @@ ISO_HUB_IP="192.168.1.49"
 ISO_SUBNET="192.168.56"
 # ── Table WAN par defaut : le banc ──────────────────────────────────────────
 # Format : <noeud>:<IP>:<indicatif>
-#   hub 192.168.1.49    noeud 1 .2    noeud 2 .175    noeud 3 .126
+#   noeud 1  172.20.0.11  osmo-operator-1  indicatif 11   (conteneur)
+#   noeud 2  172.20.0.12  osmo-operator-2  indicatif 22   (conteneur)
+#   noeud 3  192.168.1.2  la VM            indicatif 33
+#   hub      192.168.1.49                                  (hors table)
 # Elle sert quand --wan-nodes n'est pas donne. Sans defaut, une construction
 # sans terminal - la CI - s'arretait a l'etape 7b sur une question que personne
 # ne lisait : "pas de terminal : renseignez WAN_NODES / WAN_NODE_ID / WAN_OPS".
-ISO_WAN_NODES_DEFAULT="1:192.168.1.2:11 2:192.168.1.175:22 3:192.168.1.126:33"
+ISO_WAN_NODES_DEFAULT="1:172.20.0.11:11 2:172.20.0.12:22 3:192.168.1.2:33"
 OUTPUT_SET=0
 for arg in "$@"; do case "$arg" in
     --output=*)     OUTPUT="${arg#*=}"; OUTPUT_SET=1 ;;

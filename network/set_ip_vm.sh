@@ -34,6 +34,10 @@
 #   --iface NOM        interface (defaut : celle de la route par defaut)
 #   --keep ADRESSE     adresse a NE PAS retirer (repetable)
 #   --force            retire meme les adresses sur lesquelles un demon ecoute
+#   --no-stp           ne touche pas a osmo-stp.cfg (source de l'ASP)
+#   --defaut           applique la configuration du banc sans rien demander :
+#                      hote docker 192.168.1.101, backbone 172.20.0.0/24, et
+#                      --persist. Toute autre option passee la surcharge.
 #   --persist          rejoue au boot (unite systemd)
 #   --dry-run          montre, n'applique pas
 # =============================================================================
@@ -46,6 +50,15 @@ DOCKER_NET="172.20.0.0/24"
 VIA=""
 IFACE=""
 FORCE=0
+NO_STP=0
+USE_DEFAULTS=0
+# ── La configuration du banc, en un mot ─────────────────────────────────────
+# --defaut applique ce qui est vrai sur toutes nos VM sans rien demander :
+# l'hote qui porte docker, le backbone des conteneurs, et la persistance au
+# boot (le live n'en a aucune, la route serait perdue au redemarrage).
+# Chaque valeur reste surchargeable : --defaut --via X gagne sur le defaut.
+DEFAULT_VIA="192.168.1.101"     # l hote docker du banc
+DEFAULT_DOCKER_NET="172.20.0.0/24"
 DRY=0
 PERSIST=0
 ACTION="apply"
@@ -63,6 +76,8 @@ while [ $# -gt 0 ]; do
         --keep)         KEEP+=("${2:-}"); shift ;;
         --keep=*)       KEEP+=("${1#*=}") ;;
         --force)        FORCE=1 ;;
+        --no-stp)       NO_STP=1 ;;
+        --defaut|--default) USE_DEFAULTS=1 ;;
         --persist)      PERSIST=1 ;;
         --dry-run)      DRY=1 ;;
         --status)       ACTION="status" ;;
@@ -74,6 +89,13 @@ while [ $# -gt 0 ]; do
 done
 
 run() { if [ "$DRY" = 1 ]; then echo "    [dry-run] $*"; else "$@"; fi; }
+
+if [ "$USE_DEFAULTS" = "1" ]; then
+    [ -n "$VIA" ] || VIA="$DEFAULT_VIA"
+    [ "$DOCKER_NET" = "172.20.0.0/24" ] && DOCKER_NET="$DEFAULT_DOCKER_NET"
+    PERSIST=1
+    echo -e "${CYAN}  --defaut : hote docker ${VIA}, backbone ${DOCKER_NET}, rejoue au boot${NC}"
+fi
 
 # ── L'interface : celle qui porte la route par defaut ───────────────────────
 [ -n "$IFACE" ] || IFACE="$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}')"
@@ -231,6 +253,38 @@ else
     echo -e "  ${RED}✗${NC} route refusee - une adresse du plan docker subsiste ?"
     echo -e "     ${CYAN}ip -4 addr show dev ${IFACE} | grep ${DOCKER_PREFIX}${NC}"
     exit 1
+fi
+
+# ── 2bis. L'ASP doit partir de l'adresse qui ROUTE ──────────────────────────
+# Poser la route ne suffit pas si osmo-stp se lie a une autre adresse. Une VM du
+# banc en porte plusieurs - le pont, et le plan prive de l'ISO (192.168.<n>.1 et
+# .10) - et l'auto-detection choisissait volontiers une adresse privee. Le hub
+# ne peut alors pas repondre : l'association n'aboutit jamais et le journal ne
+# dit que "connect failed (-110)", un timeout, sans nommer la source fautive.
+#
+# On aligne donc la source de l'ASP sur ce que le noyau utilisera reellement
+# pour joindre le hub - la meme regle que network/set-node-id.sh.
+STP_CFG="${STP_CFG:-/etc/osmocom/osmo-stp.cfg}"
+if [ "${NO_STP:-0}" != "1" ] && [ -w "$STP_CFG" ]; then
+    _hub="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$STP_CFG")"
+    if [ -n "$_hub" ]; then
+        _src="$(ip route get "$_hub" 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+        _cur="$(awk '/asp asp-to-inter/{f=1} f&&/local-ip/{print $2; exit}' "$STP_CFG")"
+        if [ -n "$_src" ] && [ "$_src" != "$_cur" ]; then
+            if [ "$DRY" = 1 ]; then
+                echo -e "  [dry-run] ASP local-ip ${_cur:-?} -> ${_src}"
+            else
+                sed -i "/asp asp-to-inter/,/^ *as / s/^\( *local-ip \).*/\1${_src}/" "$STP_CFG"
+                echo -e "  ${GREEN}✓${NC} ASP : source ${CYAN}${_src}${NC} (etait ${_cur:-aucune}) vers le hub ${_hub}"
+                if systemctl is-active osmo-stp >/dev/null 2>&1; then
+                    systemctl restart osmo-stp \
+                        && echo -e "  ${GREEN}✓${NC} osmo-stp relance pour prendre la nouvelle source"
+                fi
+            fi
+        else
+            echo -e "  ${GREEN}✓${NC} ASP : source deja correcte (${_cur:-aucune})"
+        fi
+    fi
 fi
 
 [ "$DRY" = 1 ] || printf 'OSMO_DOCKER_HOST=%s\n' "$VIA" > "$STATE" 2>/dev/null || true
