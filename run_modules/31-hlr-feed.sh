@@ -65,10 +65,16 @@ _hlrf_vty() {
     exec 9>&- 2>/dev/null
     exec 9<&- 2>/dev/null
     printf '%s\n' "$out"
-    # Une ligne commencant par '%' est un refus d'osmo-hlr. On la remonte par le
-    # code retour ; l'appelant garde la sortie pour la montrer.
+    # ATTENTION AU '%'. osmo-hlr en prefixe TOUTES ses reponses, succes compris :
+    #     % Created subscriber 001010001000001
+    #     % Updated subscriber IMSI='...' to MSISDN='10001'
+    #     % Error: cannot update MSISDN for subscriber IMSI='...'
+    # Le prendre pour un marqueur d'erreur ferait echouer tout provisionnement
+    # qui marche. On ne retient donc que les formes qui disent vraiment un refus.
+    # "Subscriber already exists" n'en est pas une : c'est la reponse normale
+    # quand le module rejoue son travail au demarrage suivant.
     case "$out" in
-        '%'*|*$'\n''%'*) return 1 ;;
+        *"% Error"*|*"No subscriber"*|*"Unknown command"*) return 1 ;;
     esac
     return 0
 }

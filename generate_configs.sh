@@ -285,6 +285,22 @@ apply_config_templates() {
 
     # ── Les valeurs. globals.conf gagne ; sinon, la formule historique. ──────
     local arfcn="${ARFCN:-$(( 512 + op_id * 2 ))}"
+    # ── La SECONDE BTS (le side-car) doit avoir son propre canal ────────────
+    # Elle etait figee sur l'ARFCN 516 et l'unit-id 6002 - les valeurs qui vont
+    # a l'operateur 1, et a lui seul. Pour l'operateur 2, dont la BTS
+    # principale tombe justement sur 516, les DEUX cellules emettaient sur la
+    # meme frequence : dans un milieu virtuel ou fake_trx apparie par
+    # frequence, leurs bursts se melangent. Constate sur le banc -
+    #     TRX 0 of BTS 0 is on ARFCN 516
+    #     TRX 0 of BTS 1 is on ARFCN 516
+    # - pendant que le mobile envoyait ses RACH sans jamais recevoir
+    # d'Immediate Assignment. L'operateur 1 n'y echappait que par coincidence.
+    # Le decalage de 100 met les side-cars hors d'atteinte de tout le plan
+    # principal (614, 616, 618... contre 514, 516, 518), et reste dans la
+    # bande DCS1800 (512-885).
+    local arfcn_bts1="${ARFCN_BTS1:-$(( 612 + op_id * 2 ))}"
+    # +2 sur le pas de 10 de la BTS principale : 6010/6012, 6020/6022...
+    local ipa_unit_id_bts1="${IPA_UNIT_ID_BTS1:-$(( 6000 + op_id * 10 + 2 ))}"
     local bsic="${BSIC:-$(( (op_id * 7) % 64 ))}"
     local lac="${LAC:-0x000${op_id}}"
     local cell_id="${CELL_ID:-$(( 6000 + op_id ))}"
@@ -323,6 +339,32 @@ apply_config_templates() {
     rtp_start=$(linphone_rtp_start "$op_id"); rtp_end=$(linphone_rtp_end "$op_id")
     sip_host_port=$(linphone_sip_port "$op_id")
 
+    # ── Le plan radio, ECRIT, a cote des configurations ─────────────────────
+    # ARFCN, unit-id, PLMN etaient recalcules ailleurs a partir des memes
+    # formules - dans start-direct.sh pour les mobiles, dans un module de
+    # qemu-src pour le side-car. Trois copies d'une meme regle, et la serie de
+    # pannes qui va avec : un unit-id 6002 fige, un ARFCN 516 fige, des IMSI
+    # sur le PLMN de l'operateur 1. Chaque fois, les valeurs concordaient pour
+    # l'operateur 1 et divergeaient pour les suivants.
+    # Le generateur est le seul a decider. Il ECRIT donc ce qu'il a decide, et
+    # les autres le LISENT au lieu de le refaire.
+    {
+        printf '# radio-plan.env - ecrit par generate_configs.sh. Ne pas editer.\n'
+        printf '# Le plan radio et le PLMN de CET operateur, tels qu ils viennent\n'
+        printf '# d etre poses dans les configurations voisines. start-direct.sh le\n'
+        printf '# lit pour accorder les mobiles et pour piloter le side-car.\n'
+        printf 'OPERATOR_ID=%s\n'      "$op_id"
+        printf 'PLAN_MCC=%s\n'         "$mcc"
+        printf 'PLAN_MNC=%s\n'         "$mnc"
+        printf 'PLAN_ARFCN=%s\n'       "$arfcn"
+        printf 'PLAN_ARFCN_BTS1=%s\n'  "$arfcn_bts1"
+        printf 'PLAN_UNIT_ID=%s\n'     "$ipa_unit_id"
+        printf 'PLAN_UNIT_ID_BTS1=%s\n' "$ipa_unit_id_bts1"
+        printf 'PLAN_LAC=%s\n'         "$lac"
+        printf 'PLAN_BSIC=%s\n'        "$bsic"
+        printf 'PLAN_CELL_ID=%s\n'     "$cell_id"
+    } > "$dest/osmocom/radio-plan.env"
+
     # extensions.conf porte un #include "annuaire.conf" (les fiches d'abonnes,
     # ecrites par start.sh pour que le nom de l'appelant arrive au combine).
     # Asterisk avertit a chaque chargement quand un include manque, et un banc
@@ -355,6 +397,8 @@ apply_config_templates() {
             -e "s|__RCTX_BSC__|${rctx_bsc}|g" -e "s|__RCTX_INTER__|${rctx_inter}|g" \
             -e "s|__MCC__|${mcc}|g" -e "s|__MNC__|${mnc}|g" -e "s|__OP_NAME__|${op_name}|g" \
             -e "s|__ARFCN__|${arfcn}|g" -e "s|__IPA_UNIT_ID__|${ipa_unit_id}|g" \
+            -e "s|__ARFCN_BTS1__|${arfcn_bts1}|g" \
+            -e "s|__IPA_UNIT_ID_BTS1__|${ipa_unit_id_bts1}|g" \
             -e "s|__CELL_ID__|${cell_id}|g" -e "s|__BSIC__|${bsic}|g" -e "s|__LAC__|${lac}|g" \
             -e "s|__BVCI__|${bvci}|g" -e "s|__NSEI__|${nsei}|g" -e "s|__NSVCI__|${nsvci}|g" \
             -e "s|__IMSI__|${imsi}|g" -e "s|__IMEI__|${imei}|g" -e "s|__KI__|${ki}|g" \

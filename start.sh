@@ -1723,7 +1723,22 @@ start_bridge_mode() {
             fi
             rm -f /tmp/hlr_feed.vty
         ' 2>/dev/null)" || true
-        _refus="$(printf '%s\n' "$_feed_out" | grep -cE '^%' || true)"
+        # ATTENTION AU '%'. Ce n'est pas un marqueur d'erreur : osmo-hlr prefixe
+        # AINSI TOUTES ses reponses, succes compris -
+        #     % Created subscriber 001010001000001
+        #     % Updated subscriber IMSI='...' to MSISDN='10001'
+        #     % Error: cannot update MSISDN for subscriber IMSI='...'
+        # Compter les lignes en '^%' revenait donc a compter les commandes, et
+        # ce controle annoncait "9 commande(s) refusee(s)" sur un provisionnement
+        # entierement reussi. Un controle qui crie au loup se fait ignorer, puis
+        # il ne sert plus a rien le jour ou il a raison.
+        # On ne retient que les vrais refus. "Subscriber already exists" n'en est
+        # pas un : c'est la reponse NORMALE d'une relance, le banc etant
+        # reprovisionne a chaque demarrage.
+        _refus="$(printf '%s\n' "$_feed_out" \
+            | grep -E '^%' \
+            | grep -viE 'already exists' \
+            | grep -cE 'Error|No subscriber|Unknown command|failed' || true)"
 
         # ON RELIT plutot que de croire la sortie : la seule preuve qu'un abonne
         # est servi, c'est sa fiche, et la fiche d'un abonne sans cle n'a pas de

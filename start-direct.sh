@@ -498,6 +498,42 @@ MS_MNC="$(awk '$1=="mobile" && $2=="network" && $3=="code" {print $4; exit}' /et
 [ -n "$MS_MCC" ] || MS_MCC="$(printf '%03d' "$MS_OP_ID")"
 [ -n "$MS_MNC" ] || MS_MNC="01"
 ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
+
+# ── Le plan radio : on le LIT, on ne le recalcule pas ───────────────────────
+# generate_configs.sh l'ecrit dans /etc/osmocom/radio-plan.env en meme temps
+# que les configurations. Le relire ici garantit que le mobile s'accorde sur
+# ce que la BTS diffuse VRAIMENT - et non sur une formule recopiee qui finira
+# par diverger, comme l'ont fait l'unit-id, l'ARFCN et l'IMSI avant elle.
+# Les replis restent, pour un banc monte sans ce fichier.
+if [ -r /etc/osmocom/radio-plan.env ]; then
+    # shellcheck disable=SC1091
+    . /etc/osmocom/radio-plan.env
+    printf '  %splan radio%s  lu dans /etc/osmocom/radio-plan.env\n' "${C_DIM:-}" "${C_Z:-}"
+fi
+
+# ── Les deux canaux radio, et a qui chaque MS s'accroche ────────────────────
+# MS#1 et MS#2 avaient leur ARFCN ecrit EN DUR, 514 et 516 : les valeurs de
+# l'operateur 1, et de lui seul. Sur l'operateur 2 la BTS principale passe a
+# 516 et le side-car y restait aussi : deux cellules sur la meme frequence,
+# leurs bursts melanges dans un milieu ou fake_trx apparie par frequence.
+# Le mobile envoyait ses RACH, aucune Immediate Assignment ne revenait, et
+# MS#1 restait accroche a 514 ou plus rien n'emettait.
+#
+# MS#1 suit la BTS principale, dont l'ARFCN est lu dans la configuration
+# REELLEMENT deployee - c'est le BSC qui en decide et qui l'impose a la BTS
+# par OML, donc c'est la qu'est la verite.
+MS_ARFCN1="${PLAN_ARFCN:-}"
+[ -n "$MS_ARFCN1" ] || MS_ARFCN1="$(awk '/^ bts 0$/{b=1} b && /^ *arfcn /{print $2; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
+[ -n "$MS_ARFCN1" ] || MS_ARFCN1=$(( 512 + MS_OP_ID * 2 ))
+
+# MS#2 suit le side-car. Celui-la, c'est NOUS qui le decidons : le module
+# 13-sidecar-cfg.sh de qemu-src lit SC_ARFCN et SC_UNIT_ID dans
+# l'environnement (run_modules/_lib/radio.sh : « : "${SC_ARFCN:=516}" »).
+# Les poser ici evite de modifier qemu-src, et garde une seule source par
+# valeur - les memes formules que generate_configs.sh.
+export SC_ARFCN="${SC_ARFCN:-${PLAN_ARFCN_BTS1:-$(( 612 + MS_OP_ID * 2 ))}}"
+export SC_UNIT_ID="${SC_UNIT_ID:-${PLAN_UNIT_ID_BTS1:-$(( 6000 + MS_OP_ID * 10 + 2 ))}}"
+MS_ARFCN2="$SC_ARFCN"
 ms_ki()   { printf '00 11 22 33 44 55 66 77 88 99 aa bb cc dd %02x %02x' "$1" "$MS_OP_ID"; }
 
 # IMEI tire au hasard, cle de Luhn calculee - un par MS, jamais deux identiques
@@ -520,6 +556,8 @@ rand_imei() {
 
 printf '  %sPLMN MS%s    MCC %s  MNC %s  operateur %s  ->  IMSI %s / %s\n' \
     "${C_DIM:-}" "${C_Z:-}" "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$(ms_imsi 1)" "$(ms_imsi 2)"
+printf '  %sradio%s      MS#1 sur ARFCN %s (BTS principale)   MS#2 sur ARFCN %s (side-car, unit-id %s)\n' \
+    "${C_DIM:-}" "${C_Z:-}" "$MS_ARFCN1" "$MS_ARFCN2" "$SC_UNIT_ID"
 
 say_begin "Generation mobile MS#1"
 MS1_CFG="${MOBILE_CFG_MS1_PATH:-$BB_DIR/mobile.cfg}"
@@ -527,7 +565,7 @@ generate_mobile_cfg "$MS1_CFG" \
     4247 \
     /tmp/osmocom_l2 \
     /tmp/osmocom_sap_1 \
-    514 \
+    "$MS_ARFCN1" \
     "$(ms_imsi 1)" \
     "$(ms_ki 1)"
 say_end " OK " "$C_OK" "Generation mobile MS#1" "$MS1_CFG"
@@ -537,7 +575,7 @@ generate_mobile_cfg "$MS2_CFG" \
     4248 \
     /tmp/ms2_l2 \
     /tmp/ms2_sap \
-    516 \
+    "$MS_ARFCN2" \
     "$(ms_imsi 2)" \
     "$(ms_ki 2)" \
     gsm_out gsm_in
@@ -755,8 +793,8 @@ else
     printf '  %snoeud%s      %s\n' "$C_DIM" "$C_Z" "aucun - identite SS7 inchangee"
 fi
 printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
-printf '  %sMS#1%s       %s  IMSI %s  ARFCN 514  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG" "$(ms_imsi 1)"
-printf '  %sMS#2%s       %s  IMSI %s  ARFCN 516  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG" "$(ms_imsi 2)"
+printf '  %sMS#1%s       %s  IMSI %s  ARFCN %s  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG" "$(ms_imsi 1)" "$MS_ARFCN1"
+printf '  %sMS#2%s       %s  IMSI %s  ARFCN %s  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG" "$(ms_imsi 2)" "$MS_ARFCN2"
 printf '  %sjournaux%s   %s\n' "$C_DIM" "$C_Z" "$LOG_DIR"
 printf '  %schiffrement%s %s\n' "$C_DIM" "$C_Z" "$ENCRYPTION"
 printf '\n'
@@ -773,6 +811,38 @@ RUN_ARGS+=(--profile "$CALYPSO_PROFILE")
 # CALYPSO_NO_RESTART=1 pour demarrer sans reinitialiser (l'ancien comportement
 # n'etait pas atteignable du tout).
 [ "${CALYPSO_NO_RESTART:-0}" = "1" ] || RUN_ARGS+=(--restart)
+# ── Les sessions tmux d'un run precedent ────────────────────────────────────
+# Le teardown de run.sh arrete les processus mais laisse la session tmux
+# debout. Au demarrage suivant, son module de panes RECREE ses fenetres dans la
+# session survivante : il y a alors DEUX fenetres nommees « all ».
+#
+# Et deux fenetres de meme nom ne sont pas seulement inesthetiques : tmux ne
+# sait plus resoudre la cible. Verifie sur le banc, tmux 3.2a :
+#     $ tmux split-window -t calypso:all
+#     can't find window: all
+# Les trois splits echouent, le module les compte comme "pane refuse par tmux
+# (place insuffisante)" - un diagnostic FAUX qui envoie chercher un probleme de
+# taille de terminal - et la barriere conclut « la fenetre "all" n'a pas garde
+# ses panes ». La cause etait deux fenetres plus haut.
+#
+# On efface donc les sessions du run precedent avec lui. Trois conventions
+# cohabitent selon le lanceur, on les couvre toutes ; aucune n'a besoin
+# d'exister.
+purge_sessions_tmux() {
+    local n=0 s
+    for s in calypso gapk osmo; do
+        if tmux has-session -t "$s" 2>/dev/null; then
+            tmux kill-session -t "$s" 2>/dev/null && n=$((n + 1))
+        fi
+    done
+    if tmux -S /tmp/osmocom_tmux has-session -t osmocom 2>/dev/null; then
+        tmux -S /tmp/osmocom_tmux kill-session -t osmocom 2>/dev/null && n=$((n + 1))
+    fi
+    [ "$n" -gt 0 ] && printf '  %ssessions tmux%s   %s session(s) du run precedent effacee(s)\n' \
+        "${C_DIM:-}" "${C_Z:-}" "$n"
+    return 0
+}
+
 case "$ACTION" in
     list)
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${RUN_ARGS[@]}"
@@ -781,6 +851,7 @@ case "$ACTION" in
         say_begin "Arret de la pile via run.sh"
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
         say_end " OK " "$C_OK" "Arret de la pile via run.sh"
+        purge_sessions_tmux
         exit 0
         ;;
     status)
