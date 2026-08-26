@@ -60,6 +60,14 @@ WAN_HUB_IP="${WAN_HUB_IP:-}"
 # (backbone route vers le LAN) : sinon les autres noeuds ne peuvent pas les
 # appeler, et un noeud injoignable vaut moins qu'un operateur bien range.
 WAN_NODE_PER_OP="${WAN_NODE_PER_OP:-0}"
+# --operator IP:PREFIXE : declarer un operateur du WAN, ou qu'il soit.
+# La table WAN se saisissait jusqu'ici par --wan-nodes "id:ip:ind", une forme
+# exacte mais qui suppose qu'on connaisse deja les numeros de noeud. Declarer
+# "une machine a cette adresse, joignable par ce prefixe" est plus proche de ce
+# qu'on a sous les yeux - une VM, un conteneur - et les numeros suivent l'ordre
+# de declaration.
+OPERATOR_DECLS=()
+OPERATOR_COUNT_HINT=""
 IMAGE_STP="${IMAGE_STP:-osmocom-stp}"
 INTER_STP_CONTAINER="osmo-inter-stp"
 INTER_STP_IP="172.20.0.10"
@@ -744,6 +752,8 @@ wan_mesh_configure() {
         WAN_NODE_ID="$VBOX_HOST_NODE"
     fi
 
+    wan_menu_table
+
     if [ -n "${WAN_NODES:-}" ]; then
         wan_nodes_parse "$WAN_NODES" || exit 1
         if [ "${WAN_NODE_ID:-0}" = "0" ]; then
@@ -778,7 +788,61 @@ wan_mesh_configure() {
     fi
     [ "${WAN_NODE_PER_OP:-0}" = "1" ] \
         && echo -e "  conteneurs: ${CYAN}un noeud chacun${NC}, a partir du noeud ${CYAN}${WAN_NODE_ID}${NC}"
+    # Qui tourne ICI, et qui est seulement DECLARE. La distinction n'a rien de
+    # cosmetique : un noeud declare doit deja tourner ailleurs, sinon ses
+    # abonnes figurent dans les tables SMS et le dialplan sans que personne ne
+    # reponde - un appel qui sonne dans le vide se diagnostique mal.
+    for _nid in ${WAN_NODE_LIST[@]+"${WAN_NODE_LIST[@]}"}; do
+        if [ "$_nid" = "${WAN_NODE_ID:-0}" ] || \
+           { [ "${WAN_NODE_PER_OP:-0}" = "1" ] && [ "$_nid" -gt "${WAN_NODE_ID:-0}" ]; }; then
+            printf '    noeud %-2s %-16s %s\n' "$_nid" "${WAN_IP[$_nid]}" "conteneur lance ici"
+        else
+            printf '    noeud %-2s %-16s %s\n' "$_nid" "${WAN_IP[$_nid]}" "declare (doit tourner ailleurs)"
+        fi
+    done
     echo ""
+}
+
+# ── La table WAN, batie dans l'ordre ou on la pense ─────────────────────────
+# D'abord COMBIEN d'operateurs en tout, puis combien tournent ICI en conteneur,
+# puis les autres un par un. Les conteneurs prennent les premiers rangs -
+# osmo-operator-1 est le noeud 1, -2 le noeud 2 - de sorte que le nom du
+# conteneur donne son numero de noeud, sans table a consulter. Les operateurs
+# distants (une VM deja demarree) prennent les rangs suivants : on ne demande
+# que ce qu'on ne peut pas deduire, leur adresse et leur indicatif.
+wan_menu_table() {
+    command -v whiptail >/dev/null 2>&1 || return 0
+    [ -t 0 ] || return 0
+    [ -n "${WAN_NODES:-}" ] && return 0            # deja donne en CLI
+    [ "${#OPERATOR_DECLS[@]}" -gt 0 ] && return 0  # deja declare par --operator
+
+    local total cont k ip ind spec=""
+    total=$(wt_input "WAN" "Nombre d'operateurs du WAN, tous sites confondus (1-9) :" "3") || return 0
+    [[ "$total" =~ ^[1-9]$ ]] || { wt_msg "Nombre invalide : $total"; return 0; }
+
+    cont=$(wt_input "WAN" "Combien tournent ICI, en conteneur ? (0-${total})" "$(( total > 1 ? total - 1 : total ))") || return 0
+    [[ "$cont" =~ ^[0-9]$ ]] && [ "$cont" -le "$total" ] \
+        || { wt_msg "Entre 0 et ${total}."; return 0; }
+
+    # Les conteneurs : adresse du backbone, indicatif du rang. Rien a demander.
+    for k in $(seq 1 "$cont"); do
+        spec="${spec}${spec:+ }${k}:$(op_backbone_ip "$k"):$(( k * 11 ))"
+    done
+    # Les autres : eux seuls ont besoin d'une reponse.
+    for k in $(seq $(( cont + 1 )) "$total"); do
+        ip=$(wt_input "Operateur distant ${k}/${total}" \
+             "Adresse du noeud ${k} (une VM, une autre machine) :" "") || return 0
+        [ -n "$ip" ] || { wt_msg "Adresse vide : noeud ${k} ignore."; continue; }
+        ind=$(wt_input "Operateur distant ${k}/${total}" \
+              "Indicatif (prefixe d'appel) du noeud ${k} :" "$(( k * 11 ))") || return 0
+        spec="${spec}${spec:+ }${k}:${ip}:${ind:-$(( k * 11 ))}"
+    done
+
+    WAN_NODES="$spec"
+    OPERATOR_COUNT_HINT="$cont"
+    WAN_NODE_ID="${WAN_NODE_ID:-1}"
+    [ "$cont" -ge 1 ] && WAN_NODE_PER_OP=1 && WAN_NODE_PER_OP_GIVEN=1
+    echo -e "  ${CYAN}Table WAN :${NC} $WAN_NODES"
 }
 
 # ── Les questions WAN que la table ne porte pas ──────────────────────────────
@@ -830,16 +894,14 @@ wan_mesh_apply() {
         echo -e "${RED}[WAN] network/setup-wan-mesh.sh introuvable${NC}"; return 1
     fi
     if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
-        # Chaque conteneur est un noeud : le maillage se calcule DE SON POINT DE
-        # VUE (ses pairs, son indicatif). Un seul passage avec l'id de la
-        # machine donnerait a tous le meme indicatif, et les appels entre
-        # conteneurs repartiraient vers eux-memes.
-        local _n
-        for _n in $(seq 1 "$n_operators"); do
-            bash "$script_path" --docker \
-                --nodes "$(wan_nodes_spec)" --id "$(( WAN_NODE_ID + _n - 1 ))" --ops 1 \
-                || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue (noeud $(( WAN_NODE_ID + _n - 1 )))${NC}"
-        done
+        # UN SEUL passage, avec --op-is-node : le script associe alors
+        # l'operateur i au noeud i et recalcule SES pairs. Un passage par noeud,
+        # comme on le faisait, ecrivait dans TOUS les conteneurs a chaque fois :
+        # le dernier gagnait, l'un d'eux se routait vers lui-meme et l'autre
+        # n'avait aucun maillage.
+        bash "$script_path" --docker --op-is-node \
+            --nodes "$(wan_nodes_spec)" --id 1 --ops "$n_operators" \
+            || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue${NC}"
     else
         bash "$script_path" --docker \
             --nodes "$(wan_nodes_spec)" --id "$WAN_NODE_ID" --ops "$n_operators" \
@@ -910,7 +972,15 @@ start_bridge_mode() {
         echo -e "  ${CYAN}[PoC QEMU] 1 operateur · no-process + qemu-src/run.sh · A5/1${NC}"
     else
         # ── Mode interactif ──────────────────────────────────────────────────
-        n_operators=$(wt_input "Operateurs" "Nombre d'operateurs (1-36) :" "2") || exit 1
+        # Deja repondu dans le menu WAN (« combien tournent ICI ») : on ne
+        # repose pas la question, deux reponses divergentes donneraient une
+        # table et un nombre de conteneurs qui ne se correspondent plus.
+        if [ -n "${OPERATOR_COUNT_HINT:-}" ]; then
+            n_operators="$OPERATOR_COUNT_HINT"
+            echo -e "  ${CYAN}Conteneurs a lancer : ${n_operators} (choisis dans le menu WAN)${NC}"
+        else
+            n_operators=$(wt_input "Operateurs" "Nombre d'operateurs (1-36) :" "2") || exit 1
+        fi
         n_operators=${n_operators:-2}
         if ! [[ "$n_operators" =~ ^[0-9]+$ ]] || [ "$n_operators" -lt 1 ] || [ "$n_operators" -gt 36 ]; then
             wt_msg "Nombre invalide (1-36)."; exit 1
@@ -1631,6 +1701,14 @@ Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
   --node-per-op           chaque conteneur est un NOEUD (base = --wan-id) et non
                           un operateur de la machine : conteneur 1 -> noeud N,
                           conteneur 2 -> noeud N+1... Point codes 1.<n>1.<role>.
+  --operator IP:PREFIXE   declare un operateur du WAN par son adresse et son
+                          prefixe d'appel. Repetable ; l'ordre donne les numeros
+                          de noeud. Il DECLARE seulement : aucun conteneur n'est
+                          lance pour lui - c'est ainsi qu'une VM deja demarree
+                          entre dans la table SMS et le dialplan. Les conteneurs
+                          restent gouvernes par le nombre d'operateurs demande.
+                            --operator 192.168.1.2:11   (la VM, deja lancee)
+                            --operator 172.20.0.11:22   (un conteneur d'ici)
                           UN SEUL noeud du WAN doit le porter.
   --build-stp             construit l'image legere osmocom-stp (Dockerfile.stp)
                           pour le hub. Sans elle, le hub tourne sur l'image
@@ -1660,6 +1738,10 @@ while [ $# -gt 0 ]; do
         --hub-node)       WAN_HUB_NODE="${2:-1}"; WAN_HUB_NODE_GIVEN=1; shift ;;
         --hub-ip)         WAN_HUB_IP="${2:-}"; shift ;;
         --node-per-op)    WAN_NODE_PER_OP=1; WAN_NODE_PER_OP_GIVEN=1 ;;
+        --operators)      OPERATOR_COUNT_HINT="${2:-}"; shift ;;
+        --operators=*)    OPERATOR_COUNT_HINT="${1#*=}" ;;
+        --operator)       OPERATOR_DECLS+=("${2:-}"); WAN_MESH=1; shift ;;
+        --operator=*)     OPERATOR_DECLS+=("${1#*=}"); WAN_MESH=1 ;;
         --hub-ip=*)       WAN_HUB_IP="${1#*=}" ;;
         --hub-node=*)     WAN_HUB_NODE="${1#*=}" ;;
         --virtualbox)     WAN_MESH=1; VBOX_INTERCO=1 ;;
@@ -1671,6 +1753,39 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# ── --operator : de la declaration a la table WAN ───────────────────────────
+# "IP:PREFIXE" est ce qu'on a sous les yeux ; "id:ip:ind" est ce que le reste du
+# code attend. La conversion se fait ici, une fois, plutot que de demander a
+# l'utilisateur de tenir lui-meme la numerotation des noeuds.
+if [ "${#OPERATOR_DECLS[@]}" -gt 0 ]; then
+    if [ -n "${WAN_NODES:-}" ]; then
+        echo -e "\033[0;31m--operator et --wan-nodes sont exclusifs : choisissez l'un des deux.\033[0m" >&2
+        exit 2
+    fi
+    # LES CONTENEURS D'ABORD, dans l'ordre : osmo-operator-1 est le noeud 1,
+    # -2 le noeud 2... Leur adresse est celle du backbone, leur indicatif le
+    # defaut du rang. Les operateurs declares en CLI prennent les rangs
+    # suivants. Numerotation lisible : le nom du conteneur donne son noeud.
+    _n=0; _spec=""
+    _ncont="${OPERATOR_COUNT_HINT:-0}"
+    while [ "$_n" -lt "$_ncont" ]; do
+        _n=$(( _n + 1 ))
+        _spec="${_spec}${_spec:+ }${_n}:172.20.0.$(( 10 + _n )):$(( _n * 11 ))"
+    done
+    for _d in "${OPERATOR_DECLS[@]}"; do
+        _ip="${_d%%:*}"; _ind="${_d##*:}"
+        if [ -z "$_ip" ] || [ "$_ip" = "$_d" ] || [ -z "$_ind" ]; then
+            echo -e "\033[0;31m--operator : attendu IP:PREFIXE (ex: 192.168.1.2:11), recu '$_d'\033[0m" >&2
+            exit 2
+        fi
+        _n=$(( _n + 1 ))
+        _spec="${_spec}${_spec:+ }${_n}:${_ip}:${_ind}"
+    done
+    WAN_NODES="$_spec"
+    echo -e "\033[0;36m  Operateurs declares :\033[0m $WAN_NODES"
+fi
+
 set -- ${_pos_args[@]+"${_pos_args[@]}"}
 
 banner

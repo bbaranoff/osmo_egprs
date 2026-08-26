@@ -35,7 +35,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=network/wan-nodes.sh
 . "$SCRIPT_DIR/wan-nodes.sh"
 
-MODE=""            # docker | native
+MODE=""
+# --op-is-node : l'operateur local i EST le noeud i, et non un operateur du
+# noeud --id. C'est le cas quand chaque conteneur porte sa propre adresse et
+# son propre indicatif : sans cette notion, un seul jeu de pairs etait calcule
+# pour toute la machine, et tous les conteneurs recevaient la meme vue - l'un
+# d'eux se retrouvait meme a se router vers lui-meme.
+OP_IS_NODE=0            # docker | native
 NO_RESTART=0
 CONFIG_ONLY=0
 DRY=0
@@ -75,6 +81,7 @@ while [ $# -gt 0 ]; do
         --nodes=*) WAN_NODES="${1#*=}" ;;
         --id)      WAN_NODE_ID="${2:-}"; shift ;;
         --id=*)    WAN_NODE_ID="${1#*=}" ;;
+        --op-is-node) OP_IS_NODE=1 ;;
         --ops)     WAN_OPS="${2:-}"; shift ;;
         --ops=*)   WAN_OPS="${1#*=}" ;;
         --config)  CONF="${2:-}"; shift ;;
@@ -150,6 +157,20 @@ echo ""
 
 REMOTES=()
 for id in "${WAN_NODE_LIST[@]}"; do [ "$id" = "$WAN_NODE_ID" ] || REMOTES+=("$id"); done
+
+# Le contexte d'UN operateur : son noeud, son indicatif, son adresse et ses
+# pairs. Sans --op-is-node il ne change pas d'un operateur a l'autre (ils
+# partagent le noeud de la machine) ; avec, chacun a le sien.
+mesh_set_context() {
+    local op="$1" node id
+    if [ "${OP_IS_NODE:-0}" = "1" ]; then node="$op"; else node="$WAN_NODE_ID"; fi
+    MESH_NODE="$node"
+    [ -n "${WAN_IND[$node]:-}" ] && LOCAL_IND="${WAN_IND[$node]}"
+    [ -n "${WAN_IP[$node]:-}"  ] && LOCAL_IP="${WAN_IP[$node]}"
+    REMOTES=()
+    for id in "${WAN_NODE_LIST[@]}"; do [ "$id" = "$node" ] || REMOTES+=("$id"); done
+}
+mesh_set_context "${OP_IDS[0]}"
 [ "${#REMOTES[@]}" -ge 1 ] || { echo -e "${RED}Aucun pair distant.${NC}" >&2; exit 1; }
 
 run() { if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $*"; else "$@"; fi; }
@@ -189,6 +210,7 @@ strip_generated() { sed -e '/OSMO WAN MESH BEGIN/,/OSMO WAN MESH END/d' -e '/; �
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[1/6] Verification des cibles Asterisk...${NC}"
 for i in "${OP_IDS[@]}"; do
+    mesh_set_context "$i"
     if [ "$MODE" = "docker" ]; then
         docker ps --format '{{.Names}}' | qgrep "^$(op_container "$i")$" \
             || { echo -e "  ${RED}✗ $(op_container "$i") absent - lancez start.sh d'abord${NC}"; exit 1; }
@@ -220,6 +242,7 @@ fi
 for r in "${REMOTES[@]}"; do
     rip="${WAN_IP[$r]}"
     for i in "${OP_IDS[@]}"; do
+        mesh_set_context "$i"
         sip=$(wan_sip_port "$i"); rs=$(wan_rtp_start "$i"); re=$(wan_rtp_end "$i")
         sms=$(wan_sms_port "$i")
         if [ "$MODE" = "docker" ]; then
@@ -264,6 +287,7 @@ echo ""
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[3/6] rtp.conf...${NC}"
 for i in "${OP_IDS[@]}"; do
+    mesh_set_context "$i"
     rs=$(wan_rtp_start "$i"); re=$(wan_rtp_end "$i")
     printf '[general]\nrtpstart=%s\nrtpend=%s\nstrictrtp=no\nicesupport=no\n' "$rs" "$re" \
         | ast_push "$i" /etc/asterisk/rtp.conf
@@ -277,6 +301,7 @@ echo ""
 echo -e "${GREEN}[4/6] PJSIP - trunks WAN...${NC}"
 
 for i in "${OP_IDS[@]}"; do
+    mesh_set_context "$i"
     pj="$(mktemp)"; ast_pull "$i" /etc/asterisk/pjsip.conf | strip_generated > "$pj"
 
     # external_media_address : l'IP que le SDP annonce a l'autre bout. Elle DOIT
@@ -354,6 +379,7 @@ echo ""
 echo -e "${GREEN}[5/6] Dialplan - routage par indicatif...${NC}"
 
 for i in "${OP_IDS[@]}"; do
+    mesh_set_context "$i"
     ext="$(mktemp)"; ast_pull "$i" /etc/asterisk/extensions.conf | strip_generated > "$ext"
 
     # Softphones : tout endpoint avec "callerid=... <NNN>" devient joignable
@@ -497,6 +523,7 @@ echo ""
 # avant l'envoi : le HLR distant ne connait que le numero nu.
 echo -e "${GREEN}[6/6] Routage SMS WAN...${NC}"
 for i in "${OP_IDS[@]}"; do
+    mesh_set_context "$i"
     conf="$(mktemp)"
     ast_pull "$i" /etc/osmocom/sms-routing.conf \
         | sed '/OSMO WAN MESH BEGIN/,/OSMO WAN MESH END/d' \
@@ -541,6 +568,7 @@ elif [ "$DRY" -eq 1 ]; then
     echo "  [dry-run] redemarrage Asterisk"
 else
     for i in "${OP_IDS[@]}"; do
+        mesh_set_context "$i"
         if [ "$MODE" = "docker" ]; then
             docker exec "$(op_container "$i")" bash -c "
                 asterisk -rx 'core stop now' 2>/dev/null || pkill asterisk 2>/dev/null || true
@@ -573,6 +601,7 @@ done
 echo ""
 echo -e "  ${BOLD}Ports WAN (identiques sur chaque noeud) :${NC}"
 for i in "${OP_IDS[@]}"; do
+    mesh_set_context "$i"
     echo -e "    Op${i}: SIP ${CYAN}$(wan_sip_port "$i")${NC}/udp  RTP ${CYAN}$(wan_rtp_start "$i")-$(wan_rtp_end "$i")${NC}/udp  SMS ${CYAN}$(wan_sms_port "$i")${NC}/tcp"
 done
 echo ""
