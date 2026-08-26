@@ -1111,7 +1111,22 @@ start_bridge_mode() {
 
         echo -e "${CYAN}── Operateur ${i} : ${OP_NAME[$i]} (MCC=${OP_MCC[$i]} MNC=${OP_MNC[$i]}) ──${NC}"
         echo -e "  Backbone   : ${CYAN}${inter_local_ip}${NC}  Prive : ${CYAN}${container_ip}${NC}"
-        echo -e "  STP PC     : 1.${i}.2  RCTX : ${rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
+        local _node_i="$WAN_NODE_ID" _op_i="$i"
+        if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
+            _node_i=$(( WAN_NODE_ID + i - 1 ))
+            _op_i=1
+        fi
+        local _pc_mid="$i" _rctx_inter=""
+        if [ "${WAN_MESH:-0}" = "1" ]; then
+            _pc_mid="${_node_i}${_op_i}"
+            _rctx_inter=$(( _node_i * 1000 + _op_i * 100 + 50 ))
+        fi
+
+        # L'identite AFFICHEE est celle qui sera ECRITE. Cette ligne montrait
+        # "1.<op>.2" en dur et le routing context du plan local : elle annoncait
+        # donc 1.1.2/150 alors que la config recevait 1.21.2/2150. On cherche
+        # longtemps une panne quand le journal dit le contraire du fichier.
+        echo -e "  STP PC     : 1.${_pc_mid}.2  RCTX : ${_rctx_inter:-$rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
 
         if docker network inspect "$net_name" &>/dev/null; then
             echo -e "  Reseau     : ${CYAN}${net_name}${NC} (deja present)"
@@ -1143,16 +1158,6 @@ start_bridge_mode() {
         #
         # Avec --node-per-op, le conteneur i devient le noeud (base + i - 1),
         # porte l'operateur 1 de ce noeud, et son point code suit : 1.<n>1.<role>.
-        local _node_i="$WAN_NODE_ID" _op_i="$i"
-        if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
-            _node_i=$(( WAN_NODE_ID + i - 1 ))
-            _op_i=1
-        fi
-        local _pc_mid="$i" _rctx_inter=""
-        if [ "${WAN_MESH:-0}" = "1" ]; then
-            _pc_mid="${_node_i}${_op_i}"
-            _rctx_inter=$(( _node_i * 1000 + _op_i * 100 + 50 ))
-        fi
         RCTX_INTER_OVERRIDE="$_rctx_inter" \
         apply_config_templates "$tmpdir" \
             "$container_ip" "$gateway" \
