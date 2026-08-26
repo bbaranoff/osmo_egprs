@@ -680,6 +680,19 @@ ask_node_identity() {
 
     local cached_node cached_src cached_hub
     IFS='|' read -r cached_node cached_src <<< "$(detect_node_id)"
+
+    # L'ENVIRONNEMENT NE SE DEMANDE PAS. C'est ainsi que start.sh transmet le
+    # noeud a un conteneur : la reponse est deja connue, et la question n'a pas
+    # de sens - pire, dans un conteneur ou personne ne lit le terminal, elle
+    # repart vide. L'identite n'etait alors PAS appliquee, la pile regenerait
+    # ses configs par defaut (point-code 1.1.2, ASP vers le hub docker, en
+    # shutdown) et ecrasait celle que start.sh venait d'ecrire. Le fichier
+    # portait les bonnes valeurs juste avant, les mauvaises juste apres.
+    if [ "$cached_src" = "environnement" ] && [ -z "$NODE_ID" ]; then
+        NODE_ID="$cached_node"
+        [ -n "$HUB_IP" ] || HUB_IP="${OSMO_HUB_IP:-}"
+        return 0
+    fi
     cached_hub="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' /etc/osmo-role 2>/dev/null)"
     [ -n "$cached_hub" ] || cached_hub="192.168.1.49"
 

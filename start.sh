@@ -845,6 +845,41 @@ wan_mesh_apply() {
             --nodes "$(wan_nodes_spec)" --id "$WAN_NODE_ID" --ops "$n_operators" \
             || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue${NC}"
     fi
+
+    reassert_docker_lan_return
+}
+
+# ── Rendre au trafic sortant son adresse d'origine ───────────────────────────
+# Docker masque tout ce qui quitte un bridge : vues du LAN, les associations des
+# conteneurs semblent toutes venir de l'hote. Or l'inter-STP identifie ses ASP
+# par leur ADRESSE SOURCE - trois operateurs derriere une seule IP sont
+# indiscernables, et il les rattache au mauvais AS ou les refuse.
+# network/setup-docker-lan-route.sh pose donc un RETURN en tete de POSTROUTING.
+#
+# POURQUOI LE REJOUER ICI
+# Docker REINSERE ses MASQUERADE en tete a chaque reseau cree - et start.sh en
+# cree un par operateur. Le RETURN se retrouve alors DERRIERE eux et ne sert
+# plus a rien : "iptables -L" le montre toujours, et pourtant le hub revoit
+# l'adresse de l'hote. On le remet donc en premiere position une fois TOUS les
+# reseaux crees.
+reassert_docker_lan_return() {
+    command -v iptables >/dev/null 2>&1 || return 0
+    [ "$(id -u)" -eq 0 ] || return 0
+
+    local lan_ip lan_net
+    lan_ip="$(ip route show default 2>/dev/null | awk '/^default/{print $9; exit}')"
+    [ -n "$lan_ip" ] || lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [ -n "$lan_ip" ] || return 0
+    lan_net="${lan_ip%.*}.0/24"
+
+    # Si LAN et backbone se recouvrent, la regle porterait sur du trafic interne
+    # au bridge : on s'abstient plutot que de deviner.
+    [ "${lan_net%%/*}" = "${INTER_NET_SUBNET%%/*}" ] && return 0
+
+    iptables -t nat -D POSTROUTING -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null
+    if iptables -t nat -I POSTROUTING 1 -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null; then
+        echo -e "  ${CYAN}[WAN] adresse source preservee vers ${lan_net} (RETURN en tete de POSTROUTING)${NC}"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1200,7 +1235,14 @@ start_bridge_mode() {
             -e N_MS="${OP_MS[$i]}" \
             -e CONTAINER_IP="$container_ip" \
             -e GATEWAY_IP="$gateway" \
-            -e INTER_STP_IP="$INTER_STP_IP" \
+            # Le hub REEL, pas le hub docker par defaut. Le conteneur
+            # regenere ses configs au demarrage : s'il recoit 172.20.0.10 - le
+            # conteneur inter-STP qu'on ne lance PAS quand --hub-ip designe une
+            # machine a part - il ecrit un ASP vers une adresse morte, par
+            # dessus celle que start.sh venait d'ecrire. L'interco ne monte
+            # jamais, et la config semble pourtant avoir ete posee.
+            -e INTER_STP_IP="${WAN_STP_TARGET:-$INTER_STP_IP}" \
+            -e OSMO_HUB_IP="${WAN_STP_TARGET:-$INTER_STP_IP}" \
             -e HOST_IP="${HOST_IP}" \
             -e SIP_HOST_PORT="${lsip_port}" \
             -e PHY_MODE="${PHY_MODE}" \
