@@ -235,6 +235,56 @@ def kc_read():
 # ASSIGNMENT descendant, qui est le seul octroi d'un canal NEUF. Tant que ce
 # n'est pas verifie, on n'ajoute pas de variable mobile de plus.
 # PONT_KC_RETENTION=1 reactive la retenue pour experimenter.
+# [2026-08-27, soir] LE MARQUEUR MANQUANT ETAIT L'IMMEDIATE ASSIGNMENT.
+# La note ci-dessus le disait deja : « Piste non essayee : l'IMMEDIATE
+# ASSIGNMENT descendant, qui est le seul octroi d'un canal NEUF. » Elle est
+# essayee maintenant, parce que la mesure ne laisse plus le choix.
+#
+# MESURE, run de 19:3x, SMS qui ne passent pas :
+#   446 DEDIE-TRACE, dont 338 « A5=non decode=NON » et 12 « A5=non decode=OUI »
+#   -> A5=non sur la TOTALITE des blocs du canal dedie, et 97 % d'echecs
+# et pourtant, cote osmocon, la cle etait bien captee NEUF fois :
+#   [osmocon] CRYPTO_REQ FILTRE: algo=1 key_len=8 key=6c39560b5bd77000
+#   [osmocon] Kc ecrit (seq=6..9 algo=1 cksn=0xff)
+# Entre les deux, l'effaceur de osmocon (DM_EST_REQ **et** DM_REL_REQ) remettait
+# le fichier a zero, et sans retenue le pont lisait algo=0 : il laissait en clair
+# un canal que le reseau chiffrait. Tout ce qui vit sur le dedie meurt la --
+# le SMS (SAPI 3) en premier, puisqu'il ouvre justement un lien SUPPLEMENTAIRE
+# sur un canal DEJA chiffre, donc un DM_EST_REQ de plus, donc un effacement de
+# plus, en plein milieu de la session.
+#
+# LES DEUX MARQUEURS ESSAYES AVANT, ET POURQUOI CELUI-CI EST DIFFERENT :
+#   - le `seq` de calypso_dcch_cfg : ne bouge pas du LU a l'appel -> cle retenue
+#     indefiniment, A5 applique a un canal qui demarre en clair.
+#   - la SABM montante : une SABM ne veut PAS dire « on repart en clair ». Un
+#     re-etablissement LAPDm sur canal chiffre en est une, et le SAPI 3 du SMS
+#     aussi. Mesure du meme run : 11 « Kc LACHE (SABM montante) » -- onze
+#     lachers en pleine session.
+#   - l'IMMEDIATE ASSIGNMENT descendant, lui, est le SEUL message par lequel le
+#     reseau octroie un canal dedie NEUF, et un canal neuf demarre TOUJOURS en
+#     clair (le chiffrement n'arrive qu'au CIPHERING MODE COMMAND suivant). Il
+#     ne se confond ni avec un lien de plus sur le canal courant (SAPI 3), ni
+#     avec l'ASSIGNMENT COMMAND vers le TCH -- lequel CONSERVE le chiffrement,
+#     et c'est precisement ce qu'il fallait cesser de casser.
+# On y ajoute le CHANNEL RELEASE : le canal est rendu, la cle avec.
+#
+# PONT_KC_RETENTION=0 revient au comportement d'avant (aucune retenue).
+# [2026-08-27, soir, 2e passe] LA RETENUE N EST PLUS LE BON OUTIL : LA SOURCE
+# A CHANGE. Tout ce qui precede raisonne sur un fichier alimente par un TIERS
+# qui espionne le L1CTL au passage (osmocon) et qui l EFFACE sur DM_EST_REQ.
+# Retenir la cle etait un pansement sur cet effaceur, et il fallait deviner
+# quand la lacher -- trois marqueurs essayes, trois faux departs.
+#
+# Desormais QEMU publie /dev/shm/calypso_kc depuis le NDB du DSP
+# (calypso_dsp_shunt.c, shunt_publish_kc) : d_a5mode et a_kc[4], que le
+# firmware charge lui-meme par dsp_load_ciph_param(). C est l etat de
+# chiffrement REEL de la couche 1, reaffirme toutes les ~100 ms, et remis a
+# zero par le firmware lui-meme quand il repart en clair.
+#
+# Un zero venu de LA veut donc dire << la L1 est en clair >>, et le retenir
+# serait chiffrer un canal qui ne l est pas. Retenue OFF, et c est le bon
+# reglage pour la premiere fois : il n y a plus d effacement parasite a
+# compenser. PONT_KC_RETENTION=1 la reactive pour comparer.
 KC_RETENTION = os.environ.get("PONT_KC_RETENTION", "0") == "1"
 _kc_tenu = None          # (algo, kc) retenu, ou None
 _kc_retenues = 0
@@ -581,6 +631,7 @@ _tch_seq  = 0
 _tch_mobile_ok = False     # le mobile a-t-il prouve qu'il est sur le TCH ?
 _tch_arme_t    = None      # instant d'armement, pour la sonde de non-confirmation
 _tch_arme_dit  = False     # la non-confirmation a-t-elle deja ete signalee ?
+_tch_dl_ok_t   = None      # dernier bloc DESCENDANT du TCH effectivement decode
 _tch_dl_w = 0              # w_seq de l'anneau descendant
 _tch_fd   = None
 _tch_acc  = []             # fenetre glissante des 8 derniers bursts (114 bits)
@@ -652,6 +703,74 @@ def est_assignment_complete(l2):
             return True
     return False
 
+# ── ARMER SANS JAMAIS DESARMER, C'EST PIRE QUE NE PAS ARMER ──────────────────
+# [2026-08-27] La preuve de bascule (ci-dessus) a ouvert le montant TCH, et
+# RIEN ne le refermait. Mesure du run de 19:2x, un appel puis plus rien :
+#   TCH dl=460 ul=98   (fige des la liberation)
+#   TCHUL bursts=3489 -> 14486 ... +1000 par intervalle de 5 s, INDEFINIMENT
+# Le pont continuait d'arroser le TS du TCH bien apres la fin de l'appel --
+# exactement le deluge decrit plus haut (« no space for uplink measurement,
+# num_ul_meas=104 » cote BTS). Et surtout, tant que `_tch_mobile_ok` tient,
+# ul_sdcch_from_sideband DETOURNE tout le montant SDCCH vers la FACCH de ce TS :
+# apres le premier appel, plus une SABM, plus un CM SERVICE REQUEST, plus un
+# SMS n'atteignait le BSC. Symptomes rapportes : « les calls passent une fois
+# sur 3 », « les SMS passent pas », et dans mobile.log les appels suivants qui
+# meurent tous en MMCC_REL_IND depuis MM_CONNECTION_PEND -- la couche MM
+# n'arrivait meme plus a s'etablir.
+#
+# Le TN n'est pas fige : osmo-bsc est en `channel allocator mode assignment
+# ascending` (et `chan-req descending` pour le SDCCH), donc le TCH peut tomber
+# sur n'importe quel TS libre. Tout ce qui suit lit le TN arme, ne le suppose
+# jamais.
+TCH_DL_SILENCE_S = 3.0     # sans un seul bloc DL decode pendant ce temps, on ferme
+
+def est_channel_release(l2):
+    """RR CHANNEL RELEASE descendant : PD=0x06 MT=0x0D (GSM 04.08 9.1.7).
+    C'est le message par lequel le reseau reprend le canal a la fin de l'appel.
+    Balayage RESTREINT aux deux seules positions ou la L3 peut commencer : 0
+    (L3 nue) et 3 (en-tete LAPD B : addr, ctrl, length). Le balayage large de
+    est_assignment_complete se paie ici en faux positifs -- un desarmement a
+    tort couperait un appel EN COURS."""
+    for off in (0, 3):
+        if len(l2) > off + 1 and l2[off] == 0x06 and l2[off + 1] == 0x0d:
+            return True
+    return False
+
+def tch_preuve_bascule(source, tn):
+    """Le mobile a PROUVE qu'il est sur le TCH : on ouvre le montant, et on
+    arme du meme coup le chien de garde qui le refermera."""
+    global _tch_mobile_ok, _tch_dl_ok_t
+    if _tch_mobile_ok:
+        return
+    _tch_mobile_ok = True
+    _tch_dl_ok_t   = time.monotonic()
+    ST.log("le mobile est sur le TCH TN=%s (preuve : %s) -- ouverture du "
+           "montant TCH" % (tn, source))
+
+def _tch_dl_vivant():
+    """Un bloc descendant du TCH vient d'etre decode : le canal vit."""
+    global _tch_dl_ok_t
+    _tch_dl_ok_t = time.monotonic()
+
+def tch_desarme(motif):
+    """Referme le TCH : plus un burst montant, et le montant SDCCH redevient
+    du SDCCH. On ne touche PAS au fichier calypso_tch_cfg : tch_cfg_read ne
+    relit son TN que si le `seq` a change, donc remettre _tch_tn a None suffit
+    a tenir jusqu'au prochain ASSIGNMENT COMMAND, qui incrementera ce seq."""
+    global _tch_tn, _tch_mobile_ok, _tch_arme_t, _tch_arme_dit
+    global _tch_last_fn, _tch_dl_ok_t
+    if _tch_tn is None and not _tch_mobile_ok:
+        return
+    tn = _tch_tn
+    _tch_tn = None; _tch_mobile_ok = False
+    _tch_arme_t = None; _tch_arme_dit = False
+    _tch_last_fn = None; _tch_dl_ok_t = None
+    del _tch_acc[:]
+    with _tch_q_lock:
+        _tch_q_facch.clear()
+        _tch_q_voice.clear()
+    ST.log("TCH TN=%s DESARME (%s) -- montant rendu au SDCCH" % (tn, motif))
+
 def ul_facch_from_sideband():
     """FACCH montante : l'ASSIGNMENT COMPLETE du mobile part par la. Sans elle,
     le BSC reste en rll_ready=no et l'assignation echoue (EQUIPMENT FAILURE).
@@ -684,6 +803,37 @@ def ul_facch_from_sideband():
                     # l'emettra, en volant la voix comme le fait une vraie FACCH.
                     tap(now_fn(), GSMTAP_FACCH, l2[:GSM_MACBLOCK_LEN],
                         tch_cfg_read() or 0, True)
+                    # ── LA PREUVE DE LA BASCULE ARRIVE *ICI*, PAS SUR LE SDCCH ──
+                    # [2026-08-27] Le garde `_tch_mobile_ok` n'etait pose que dans
+                    # ul_sdcch_from_sideband, sur l'hypothese « le firmware ne poste
+                    # que DUL, donc l'ASSIGNMENT COMPLETE ressort par
+                    # calypso_sdcch_ul ». Elle est FAUSSE des que le shunt capture la
+                    # FACCH du TCH : /dev/shm/calypso_tch_facch_ul existe et se
+                    # remplit pendant l'appel. Le montant arrivait donc par CE thread,
+                    # qui empilait sans jamais poser la preuve -- et tch_ul_scheduler,
+                    # qui l'attend, se taisait. VERROU MORT : la preuve dormait dans
+                    # la file qu'elle devait debloquer.
+                    #
+                    # MESURE DU RUN DE 19:16 (appel MS#1 -> MS#2, echec) :
+                    #   [pont] TCH arme TN=2 depuis 5 s SANS ASSIGNMENT COMPLETE
+                    #   FACCH dl=0 ul=7 | TCHUL bursts=0 file_v=0 file_f=7 drop=0
+                    # 7 blocs en file = la SABM + ses 6 retransmissions (T200 x6),
+                    # ZERO burst emis. Cote mobile : ASSIGNMENT COMPLETE (cause #0)
+                    # puis 6 x « Timeout T200 state=LAPD_STATE_SABM_SENT » et
+                    # ASSIGNMENT FAILURE (cause #1) ; cote BSC :
+                    # WAIT_RLL_RTP_ESTABLISH Timeout (rll_ready=no) -> « Assignment
+                    # failed, cause RADIO INTERFACE MESSAGE FAILURE » ; cote MSC :
+                    # « Assignment Failure, releasing call ». Le mobile avait bien
+                    # bascule -- c'est le pont qui refusait de le suivre.
+                    #
+                    # Un bloc present dans calypso_tch_facch_ul est CAPTE SUR LE TCH
+                    # par le shunt : sa seule existence prouve que le mobile y est.
+                    # On n'exige donc pas d'y reconnaitre le MT 0x29 -- on le TRACE
+                    # quand c'est lui, pour que la piste reste lisible.
+                    tch_preuve_bascule(
+                        "bande laterale FACCH%s"
+                        % (", ASSIGNMENT COMPLETE"
+                           if est_assignment_complete(l2) else ""), tn)
                     with _tch_q_lock:
                         _tch_q_facch.append(bytes(l2[:GSM_MACBLOCK_LEN]))
                     ST.n_facch_ul += 1
@@ -790,12 +940,20 @@ def tch_dl_burst(fn, burst148):
     # correcte — d'ou une signalisation saine et une voix fausse.
     rc = _cod.gsm0503_tch_fr_decode(fr, buf, 1, 0, ctypes.byref(ne), ctypes.byref(nb))
     if rc == FR_BYTES:
+        _tch_dl_vivant()                       # le canal vit : chien de garde repousse
         tch_dl_publish(bytes(fr), fn)          # 33 o = trame voix FR
     elif rc == GSM_MACBLOCK_LEN:
         # ⚠️ CORRIGE (audit) : la lib rend 23 quand les bits de vol disent FACCH.
         # On jetait donc UA / ALERTING / CONNECT en les comptant « CRC fail ».
+        _tch_dl_vivant()
         feed_dl_l2(fn, GSMTAP_FACCH, bytes(fr)[:GSM_MACBLOCK_LEN], PORT_GSMTAP)
         ST.n_facch_dl += 1
+        # La fin d'appel arrive par la : le reseau reprend le canal avec un RR
+        # CHANNEL RELEASE sur la FACCH. C'est le signal le plus PRECOCE dont on
+        # dispose -- le chien de garde de tch_ul_scheduler n'est que le filet.
+        if est_channel_release(bytes(fr)[:GSM_MACBLOCK_LEN]):
+            tch_desarme("CHANNEL RELEASE descendant sur la FACCH")
+            kc_lacher("CHANNEL RELEASE (FACCH)")
     else:
         ST.n_tch_crc += 1
 
@@ -913,6 +1071,19 @@ def tch_ul_scheduler():
                 ST.log("TCH arme TN=%d depuis 5 s SANS ASSIGNMENT COMPLETE : le "
                        "mobile n'a pas bascule (il n'a probablement pas recu "
                        "l'ASSIGNMENT COMMAND). Montant maintenu sur le SDCCH." % tn)
+            time.sleep(0.05); last_fn = None; continue
+        # ── LE FILET : un TCH vivant PARLE en descendant ─────────────────────
+        # Pendant un appel la BTS emet en continu sur ce TS -- on y decode un
+        # bloc (voix ou FACCH) plusieurs dizaines de fois par seconde. Des que
+        # le canal est rendu, ca s'arrete net. Si le CHANNEL RELEASE s'est
+        # perdu (il traverse une FACCH dont 45 % des blocs echouent au CRC sur
+        # ce banc), c'est ce silence-la qui referme le TCH -- sans lui, un seul
+        # RELEASE manque et le pont arrose le slot jusqu'au prochain
+        # redemarrage, en emportant tout le montant SDCCH avec lui.
+        if (_tch_dl_ok_t is not None
+                and time.monotonic() - _tch_dl_ok_t > TCH_DL_SILENCE_S):
+            tch_desarme("aucun bloc descendant decode depuis %.0f s"
+                        % TCH_DL_SILENCE_S)
             time.sleep(0.05); last_fn = None; continue
         fn_air = (now_fn() + UL_FN_ADVANCE) % GSM_HYPERFRAME
         if fn_air == last_fn:
@@ -1169,6 +1340,12 @@ def _acc_dl(tn, phys, fn, burst148):
             # set_dcch(kind, ss) que le firmware publie depuis son chan_nr.
             feed_dl_l2(d["fn0"], GSMTAP_SDCCH4, l2, PORT_GSMTAP)
             check_assignment(l2, d["fn0"])     # arme le TCH si c'est un ASSIGNMENT
+            # Le CHANNEL RELEASE d'un appel avorte AVANT la bascule arrive ici,
+            # sur le SDCCH : sans ce desarmement, le TCH arme par l'ASSIGNMENT
+            # COMMAND resterait arme jusqu'a la prochaine assignation.
+            if est_channel_release(l2):
+                tch_desarme("CHANNEL RELEASE descendant sur le SDCCH")
+                kc_lacher("CHANNEL RELEASE (SDCCH)")
             return
         if base51 in plan.sacch_dl:
             feed_dl_l2(d["fn0"], GSMTAP_SACCH, l2, PORT_GSMTAP)   # SACCH dediee
@@ -1179,6 +1356,13 @@ def _acc_dl(tn, phys, fn, burst148):
         elif len(l2) >= 3 and l2[1] == 0x06: mt = l2[2]
         if mt is None:
             return
+        # ── LE SEUL OCTROI D'UN CANAL NEUF ──────────────────────────────────
+        # IMMEDIATE ASSIGNMENT (0x3f) et sa forme etendue (0x39) donnent un
+        # canal dedie NEUF, qui demarre toujours en clair. C'est LA le moment
+        # ou une cle retenue cesse d'etre valable -- pas a chaque SABM.
+        # 0x3a (REJECT) n'octroie rien : on ne lache pas.
+        if mt in (0x3f, 0x39):
+            kc_lacher("IMMEDIATE ASSIGNMENT descendant")
         if mt in SI_TYPES:
             chan = GSMTAP_BCCH                # SI1/2/3/4/2bis/2ter -> feed_si
         elif mt in CCCH_TYPES:
@@ -1900,10 +2084,14 @@ def ul_sdcch_from_sideband():
                     last_seq = seq
                     l1s_fn = struct.unpack_from("<I", b, 4)[0]
                     l2 = b[16:39]
-                    # Un lien qui (re)demarre le fait par une SABM, en clair :
-                    # c'est le signal que toute cle retenue cesse d'etre valable.
-                    if _est_sabm(l2):
-                        kc_lacher("SABM montante")
+                    # [2026-08-27, soir] PLUS DE LACHER SUR LA SABM. Mesure du
+                    # run : 11 « Kc LACHE (SABM montante) » en fonctionnement
+                    # normal, chacun en pleine session chiffree -- un
+                    # re-etablissement LAPDm et le SAPI 3 du SMS sont des SABM,
+                    # et ils vivent sur un canal DEJA chiffre. Le lacher est
+                    # remonte la ou un canal est vraiment NEUF : l'IMMEDIATE
+                    # ASSIGNMENT descendant (et le CHANNEL RELEASE). _est_sabm
+                    # reste, il sert encore a lire les traces.
                     # MONTANT : on tape la L2 TELLE QUE LE MOBILE L'A POSEE,
                     # avant encodage et avant chiffrement. C'est la seule vue
                     # lisible du montant : aucun outil ne sait demoduler un
@@ -1937,10 +2125,8 @@ def ul_sdcch_from_sideband():
                     # nouveau canal : il part en FACCH, et il fait basculer.
                     if _tn_tch is not None and not _tch_mobile_ok:
                         if est_assignment_complete(l2):
-                            _tch_mobile_ok = True
-                            ST.log("ASSIGNMENT COMPLETE montant : le mobile est "
-                                   "sur le TCH TN=%d -- bascule du montant en "
-                                   "FACCH" % _tn_tch)
+                            tch_preuve_bascule("ASSIGNMENT COMPLETE montant sur "
+                                               "la bande laterale SDCCH", _tn_tch)
                         else:
                             # Pas encore passe : ce montant appartient toujours au
                             # SDCCH. Le detourner ici, c'est le perdre.
