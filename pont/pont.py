@@ -18,6 +18,24 @@
 #   ce que le Calypso ÉMET (sidebands)    -> renvoyé à la BTS comme son RX (on encode->TRXD).
 
 import socket, struct, threading, time, os, ctypes, sys, collections, signal
+import gc
+
+# ── LE RAMASSE-MIETTES CYCLIQUE EST COUPE ────────────────────────────────────
+# Ce pont fait du temps reel : un burst dure 4,615 ms et arrive ~1700 fois par
+# seconde. Le gc generationnel de CPython s'declenche sur un COMPTEUR
+# d'allocations, donc au milieu du traitement d'un burst, et sa pause n'est pas
+# bornee. Or tout ce que ce programme alloue en boucle est acyclique (bytes,
+# tuples, tableaux ctypes) : le comptage de references seul suffit a le liberer.
+# Le gc cyclique ne ramasse donc RIEN ici -- il ne fait que payer le parcours.
+# gc.freeze() met en prime les objets du demarrage hors des generations, pour
+# que le collecteur manuel (si on le rallume) n'ait pas a les revisiter.
+# PONT_GC=1 le rallume.
+if os.environ.get("PONT_GC", "0") != "1":
+    gc.disable()
+    try:
+        gc.freeze()          # Python 3.7+
+    except AttributeError:
+        pass
 
 # =========================== CONFIG (tête de fichier) ===========================
 TRX_BIND      = os.environ.get("PONT_TRX_BIND",   "127.0.0.1")
@@ -68,6 +86,18 @@ FRAME_DUR      = 60.0 / 13000.0         # 4.615 ms (POINT 4 : durée d'une trame
 _cod = ctypes.CDLL("libosmocoding.so", use_errno=True)
 ubit = ctypes.c_int8       # ubit_t : 0/1
 sbit = ctypes.c_int8       # sbit_t : soft-bit signé (+/-127)
+
+# ── ubit -> sbit EN UNE PASSE C, PLUS EN PYTHON ──────────────────────────────
+# La conversion « 0 -> +127, tout le reste -> -127 » (convention osmo_ubit2sbit)
+# se faisait par une boucle Python bit a bit, a deux endroits du chemin chaud :
+#   xcch_decode_4   : 4 x 116 = 464 iterations par bloc descendant
+#   tch_dl_burst    : 8 x 116 = 928 iterations par bloc de parole
+# Sur un run mesure (dl_dec=2479 + crc_fail=4319 = ~6800 blocs xcch), cela fait
+# ~3,2 millions d'iterations Python pour le seul xcch -- dans un pont deja a
+# 83 % d'un coeur, mono-thread sous le GIL. bytes.translate fait la meme chose
+# en une passe C, et from_buffer_copy remplit le tableau ctypes d'un seul memcpy.
+# 129 = 0x81, soit -127 lu comme int8.
+_TBL_SOFT = bytes([127] + [129] * 255)
 _cod.gsm0503_xcch_encode.argtypes      = [ctypes.POINTER(ubit), ctypes.POINTER(ctypes.c_uint8)]
 _cod.gsm0503_xcch_decode.argtypes      = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(sbit),
                                           ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
@@ -313,13 +343,10 @@ def normal_from_burst116(cB):
 
 def xcch_decode_4(bursts4_116):
     """DL : 4x116 soft-bits -> L2[23]. bursts4_116 = liste de 4 séquences de 116."""
-    buf = (sbit * (4*116))()
-    for k in range(4):
-        for i in range(116):
-            v = bursts4_116[k][i]
-            # Convention osmocom (osmo_ubit2sbit) : ubit 1 -> sbit -127,
-            # ubit 0 -> sbit +127. L'inverse fait echouer TOUS les CRC.
-            buf[k*116+i] = -127 if v else 127
+    # Convention osmocom (osmo_ubit2sbit) : ubit 1 -> sbit -127, ubit 0 -> +127.
+    # L'inverse fait echouer TOUS les CRC. Cf. _TBL_SOFT.
+    buf = (sbit * (4*116)).from_buffer_copy(
+            b"".join(bytes(b).translate(_TBL_SOFT) for b in bursts4_116))
     l2 = (ctypes.c_uint8 * 23)()
     ne = ctypes.c_int(); nb = ctypes.c_int()
     rc = _cod.gsm0503_xcch_decode(l2, buf, ctypes.byref(ne), ctypes.byref(nb))
@@ -394,6 +421,23 @@ def mksock(bind_port):
     # "GSM clock skew: old fn=X, new fn=Y" en boucle. Sans lui, un second pont
     # echoue BRUYAMMENT (EADDRINUSE), ce qui est le comportement voulu.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # [2026-08-27] BORNE SO_RCVBUF RETIREE -- ELLE DETRUISAIT LA VOIX.
+    # J'avais borne le tampon a 10 Ko en pensant que la file (mesuree a 163840
+    # o) contenait des bursts perimes traites pour rien. C'etait faux : le pont
+    # est borne par le CPU (83 % d'un coeur, mono-thread sous le GIL), pas par
+    # la socket. Borner le tampon ne l'accelere donc pas -- ca lui retire la
+    # marge qui lui permet de rattraper pendant les creux. Mesure immediate :
+    #     Recv-Q=11520 (deborde)   drops=15310 bursts jetes par le noyau
+    #     CPU du pont : 83,6 %, inchange
+    # et la voix disparait. Le tampon par defaut du noyau est le bon choix tant
+    # que le cout par burst n'a pas baisse : la file est un SYMPTOME du CPU, pas
+    # sa cause. PONT_RCVBUF=<octets> permet d'experimenter, sans defaut.
+    _rb = os.environ.get("PONT_RCVBUF", "")
+    if _rb:
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, int(_rb))
+        except (OSError, ValueError):
+            pass
     try:
         s.bind((TRX_BIND, bind_port))
     except OSError as e:
@@ -688,11 +732,8 @@ def tch_dl_burst(fn, burst148):
     # PAS 8x114 (les 2 bits de vol sont DANS les 116, poses par tch_burst_map).
     # L'ancienne allocation 8*114 faisait lire 928 octets dans 912 (hors bornes)
     # avec un pas decale : le codec ne pouvait produire que du bruit.
-    buf = (sbit * (8 * 116))()
-    for k in range(8):
-        b = _tch_acc[k]
-        for i in range(116):
-            buf[k * 116 + i] = -127 if b[i] else 127
+    buf = (sbit * (8 * 116)).from_buffer_copy(
+            b"".join(bytes(b).translate(_TBL_SOFT) for b in _tch_acc))
     fr = (ctypes.c_uint8 * FR_BYTES)()
     ne = ctypes.c_int(); nb = ctypes.c_int()
     # net_order = 1 (3e argument). osmo-bts et trxcon decodent TOUS DEUX avec 1
@@ -1132,7 +1173,12 @@ CFILE_OSR  = int(os.environ.get("PONT_CFILE_OSR", "4"))
 #   pour rejouer/demontrer, PAS une preuve de ce qui est passe sur l'air.
 #   masque : en mode pont il n'existe aucune chaine IQ reelle a capturer.
 #   retirer : le jour ou une vraie source RF alimente le chemin.
-AIRREC      = os.environ.get("PONT_AIRREC", "1") not in ("0", "", "no")
+# [2026-08-27] DEFAUT PASSE A 0. L'enregistrement d'air coute 148 iterations
+# Python PAR BURST (~250 000/s) rien que pour fabriquer sa vue en bits, et il se
+# coupait de toute facon tout seul faute d'espace disque (« airrec descendant :
+# moins de 1024 Mo libres — COUPE ») -- on payait donc le calcul sans rien
+# enregistrer. PONT_AIRREC=1 le rallume quand on en a besoin.
+AIRREC      = os.environ.get("PONT_AIRREC", "0") not in ("0", "", "no")
 # [2026-08-16] SUR DISQUE, PLUS EN RAM. /dev/shm ne fait que 8 Go et porte
 # AUSSI les journaux du run : a 17,3 Mo/s (descendant + montant) il etait
 # plein en ~6 minutes, ce qui imposait un decoupage en segments. L'overlay
@@ -1575,8 +1621,7 @@ def th_airrec():
     ils viennent en 8 datagrammes distincts et rien ne garantit leur ordre."""
     global _ar_g
     if not AIRREC:
-        ST.log("airrec DESACTIVE (PONT_AIRREC=0) — aucun cfile ne sera ecrit")
-        return
+        return          # main() ne demarre meme plus ce thread ; annonce faite la-bas
     if _np is None:
         try:
             import numpy as _n2
@@ -1971,13 +2016,19 @@ def th_data_rx():
                     ST.n_bsp_err += 1
                     if ST.n_bsp_err <= 3:
                         ST.log("BSP relais ECHEC #%d (%s)" % (ST.n_bsp_err, e))
-            _b = bytes(0x01 if b else 0xFF for b in burst)
-            capture_burst(fn, tn, _b, False)
+            # 148 iterations Python PAR BURST, soit ~250 000 par seconde --
+            # pour deux consommateurs qui sortent aussitot quand ils sont
+            # coupes (capture_burst : `if _bf is None: return` ; airrec_feed :
+            # `if AIRREC and ...`). On ne fabrique donc `_b` que si quelqu'un
+            # le lit vraiment.
+            if _bf is not None or AIRREC:
+                _b = bytes(0x01 if b else 0xFF for b in burst)
+                capture_burst(fn, tn, _b, False)
             # AIRREC : depot seul, aucun calcul ici (cf. airrec_feed). C'est le
             # SEUL point du programme ou le descendant est visible sous forme de
             # bits — capture_iq, lui, n'est appele que depuis send_trxd_ul et ne
             # voyait donc que le montant.
-            airrec_feed(fn, tn, _b)
+                airrec_feed(fn, tn, _b)
             dl_dispatch(tn, fn, burst)
 
 # [2026-08-27] UNE INDICATION PAR MULTITRAME, PAS UNE PAR TRAME.
@@ -2060,6 +2111,21 @@ def _garde(fn):
             except Exception:
                 ST.log("THREAD %s EXCEPTION:\n%s" % (fn.__name__, traceback.format_exc()))
                 time.sleep(1)
+                continue
+            # --- _garde : retour normal = thread TERMINE, PAS a relancer -------
+            # [2026-08-27] Le `while True` relancait aussi les retours NORMAUX,
+            # sans le moindre sleep. Une fonction de thread qui choisit de rendre
+            # la main -- th_airrec le fait quand PONT_AIRREC=0 -- repartait donc
+            # aussitot, a pleine vitesse.
+            # CE QUE CA A COUTE : 18 146 889 lignes et 1,27 Go dans
+            # /dev/shm/pont.log, soit 1,2 Go de RAM (tmpfs), plus un coeur entier
+            # brule a tourner a vide, sur une VM de 8 Go. Le defaut PONT_AIRREC=1
+            # masquait le piege : la branche de retour n'etait jamais prise.
+            # Les autres threads sont tous des `while True` : ils ne retournent
+            # jamais normalement, donc parquer ici ne change rien pour eux.
+            ST.log("THREAD %s termine normalement — parque (pas de relance)"
+                   % fn.__name__)
+            return
     run.__name__ = fn.__name__
     return run
 
@@ -2119,9 +2185,17 @@ def main():
         ST.log("relais BSP desactive (PONT_BSP_FEED=0) — le BSP reste a sec")
     # apprend l'adresse CLCK/CTRL du BTS via un premier RSP/echo : simplifié, on
     # réutilise l'adresse DATA pour CLCK (même IP) dès qu'un burst arrive.
-    for fn in (th_ctrl, th_data_rx, th_clck, th_stats,
-               ul_sdcch_from_sideband, ul_rach_from_sideband, tch_ul_loop,
-               ul_facch_from_sideband, tch_ul_scheduler, th_airrec):
+    _threads = [th_ctrl, th_data_rx, th_clck, th_stats,
+                ul_sdcch_from_sideband, ul_rach_from_sideband, tch_ul_loop,
+                ul_facch_from_sideband, tch_ul_scheduler]
+    # On ne demarre pas un thread qui n'a rien a faire : plus lisible dans
+    # `ps -L` qu'un thread parque, et une sonde de moins a expliquer.
+    if AIRREC:
+        _threads.append(th_airrec)
+    else:
+        ST.log("airrec DESACTIVE (PONT_AIRREC=0) — thread non demarre, "
+               "aucun cfile ne sera ecrit")
+    for fn in _threads:
         threading.Thread(target=_garde(fn), daemon=True, name=fn.__name__).start()
     while True:
         time.sleep(3600)

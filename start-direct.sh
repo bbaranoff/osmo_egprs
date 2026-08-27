@@ -1000,7 +1000,7 @@ case "$ACTION" in
         # PORTEE : tue TOUS les python3 de la machine. CALYPSO_STOP_KILL_PYTHON=0
         # le desactive.
         if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
-            if killall python3 2>/dev/null; then
+            if killall -9 python3 2>/dev/null; then
                 say_end " OK " "$C_OK" "python3 restants termines (killall)"
             fi
         fi
