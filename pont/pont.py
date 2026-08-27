@@ -552,6 +552,35 @@ GSMTAP_FACCH = 0x09        # GSMTAP_CHANNEL_FACCH_F
 
 _tch_tn   = None           # timeslot TCH arme (None = pas d'appel)
 _tch_seq  = 0
+# ── ARMER N'EST PAS AVOIR BASCULE ────────────────────────────────────────────
+# tch_cfg est publie des qu'on voit l'ASSIGNMENT COMMAND DESCENDANT. C'est la
+# DEMANDE du reseau, pas la preuve que le mobile l'a suivie. Les deux etaient
+# confondus, et le pont se comportait comme si le mobile avait bascule.
+#
+# MESURE DU 2026-08-27, appel qui echoue : mobile.log contient ZERO
+# « ASSIGNMENT COMMAND » (le mobile ne l'a jamais recu, il est reste sur le
+# SDCCH TS1 a retransmettre son SETUP), pendant que le pont, lui, l'avait
+# decode et arme TN=2. Consequences mesurees :
+#   TCHUL bursts = 4463  pour  TCH ul = 1 bloc reel
+#     -> un flux montant continu sur un TS2 ou le mobile n'emet pas, d'ou le
+#        deluge cote BTS : « no space for uplink measurement, num_ul_meas=104 »
+#        (le tampon de 104 mesures deborde en permanence) ;
+#   puis DUL->FACCH #1..#10 : le VRAI montant SDCCH detourne vers TS2, donc
+#        meme les retransmissions du SETUP cessent d'atteindre le BSC
+#        -> REJ, RR, T200 TIMER_RECOV, RELEASE ;
+#   et cote BSC : rll_ready=no -> WAIT_RLL_RTP_ESTABLISH Timeout
+#        -> « Assignment failed, cause RADIO INTERFACE MESSAGE FAILURE ».
+#
+# On separe donc les deux etats. Tant que le mobile n'a pas PROUVE qu'il est
+# passe sur le TCH, le montant reste dans la fenetre SDCCH et AUCUN burst TCH
+# n'est emis. La preuve, c'est son ASSIGNMENT COMPLETE (RR PD=0x06 MT=0x29) :
+# le mobile ne peut l'envoyer que depuis le nouveau canal.
+#
+# Si la preuve ne vient pas, l'appel echoue toujours -- mais il echoue SANS que
+# le pont brouille la piste, et la sonde ci-dessous le dit au lieu de le taire.
+_tch_mobile_ok = False     # le mobile a-t-il prouve qu'il est sur le TCH ?
+_tch_arme_t    = None      # instant d'armement, pour la sonde de non-confirmation
+_tch_arme_dit  = False     # la non-confirmation a-t-elle deja ete signalee ?
 _tch_dl_w = 0              # w_seq de l'anneau descendant
 _tch_fd   = None
 _tch_acc  = []             # fenetre glissante des 8 derniers bursts (114 bits)
@@ -585,8 +614,15 @@ def tch_write_cfg(tn, tsc, arfcn):
     fd = os.open(TCH_CFG, os.O_CREAT | os.O_WRONLY, 0o644)
     try:    os.pwrite(fd, bytes(buf), 0)
     finally: os.close(fd)
-    ST.log("ASSIGNMENT COMMAND -> TCH arme : TN=%d TSC=%d ARFCN=%d (seq=%u)"
-           % (tn, tsc, arfcn, _tch_wseq))
+    # Nouvelle assignation = nouvelle attente de preuve. Sans cette remise a
+    # zero, un appel heriterait de la confirmation du precedent.
+    global _tch_mobile_ok, _tch_arme_t, _tch_arme_dit
+    _tch_mobile_ok = False
+    _tch_arme_t    = time.monotonic()
+    _tch_arme_dit  = False
+    ST.log("ASSIGNMENT COMMAND -> TCH arme : TN=%d TSC=%d ARFCN=%d (seq=%u) "
+           "-- EN ATTENTE de l'ASSIGNMENT COMPLETE du mobile (aucun burst "
+           "montant TCH d'ici la)" % (tn, tsc, arfcn, _tch_wseq))
 
 def check_assignment(l2, fn):
     """Detecte un ASSIGNMENT COMMAND (RR PD=0x06, MT=0x2e) sur le SDCCH DL et
@@ -605,6 +641,16 @@ def check_assignment(l2, fn):
             return
         tch_write_cfg(b0 & 0x07, (b1 >> 5) & 0x07, ((b1 & 0x03) << 8) | b2)
         return
+
+def est_assignment_complete(l2):
+    """ASSIGNMENT COMPLETE montant : RR (PD=0x06) MT=0x29, GSM 04.08 9.1.3.
+    Meme balayage d'offset que check_assignment : selon que la L2 porte un
+    en-tete LAPDm B (addr/ctrl/len) ou une SABM avec information, la L3 ne
+    commence pas au meme octet -- on ne fige donc pas la position."""
+    for off in range(0, min(8, len(l2) - 1)):
+        if l2[off] == 0x06 and l2[off + 1] == 0x29:
+            return True
+    return False
 
 def ul_facch_from_sideband():
     """FACCH montante : l'ASSIGNMENT COMPLETE du mobile part par la. Sans elle,
@@ -855,6 +901,18 @@ def tch_ul_scheduler():
     while True:
         tn = tch_cfg_read()
         if tn is None or not TCH_ENABLED:
+            time.sleep(0.05); last_fn = None; continue
+        # Emettre avant la preuve, c'est arroser un slot ou le mobile n'est pas :
+        # 4463 bursts pour 1 bloc reel, et le tampon de mesures du BTS qui
+        # deborde a chaque trame. On se tait.
+        if not _tch_mobile_ok:
+            global _tch_arme_dit
+            if (not _tch_arme_dit and _tch_arme_t is not None
+                    and time.monotonic() - _tch_arme_t > 5.0):
+                _tch_arme_dit = True
+                ST.log("TCH arme TN=%d depuis 5 s SANS ASSIGNMENT COMPLETE : le "
+                       "mobile n'a pas bascule (il n'a probablement pas recu "
+                       "l'ASSIGNMENT COMMAND). Montant maintenu sur le SDCCH." % tn)
             time.sleep(0.05); last_fn = None; continue
         fn_air = (now_fn() + UL_FN_ADVANCE) % GSM_HYPERFRAME
         if fn_air == last_fn:
@@ -1827,6 +1885,7 @@ _ul_sd_n = [0]     # compteur d'emissions SDCCH montantes (pour la trace ci-dess
 
 def ul_sdcch_from_sideband():
     """Lit la L2 SDCCH déposée par l'ARM, l'encode et l'émet (4 bursts étalés)."""
+    global _tch_mobile_ok      # cette fonction POSE la preuve (voir plus bas)
     fd = None; last_seq = -1
     while True:
         try:
@@ -1874,6 +1933,18 @@ def ul_sdcch_from_sideband():
                     # sequences de 8 bursts sans verrou -- le defaut corrige le
                     # 16/08 dans ul_facch_from_sideband, qu'on ne refait pas.
                     _tn_tch = tch_cfg_read() if TCH_ENABLED else None
+                    # L'ASSIGNMENT COMPLETE est LUI-MEME le premier message du
+                    # nouveau canal : il part en FACCH, et il fait basculer.
+                    if _tn_tch is not None and not _tch_mobile_ok:
+                        if est_assignment_complete(l2):
+                            _tch_mobile_ok = True
+                            ST.log("ASSIGNMENT COMPLETE montant : le mobile est "
+                                   "sur le TCH TN=%d -- bascule du montant en "
+                                   "FACCH" % _tn_tch)
+                        else:
+                            # Pas encore passe : ce montant appartient toujours au
+                            # SDCCH. Le detourner ici, c'est le perdre.
+                            _tn_tch = None
                     if _tn_tch is not None:
                         tap(now_fn(), GSMTAP_FACCH, l2[:GSM_MACBLOCK_LEN],
                             _tn_tch, True)
