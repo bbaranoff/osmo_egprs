@@ -47,6 +47,15 @@ ISO_WAN_OPS=1
 ISO_ROLE=""
 ISO_ROLE_GIVEN=0
 ISO_NODE=""
+# ── VARIANTE LITE ───────────────────────────────────────────────────────────
+#   --lite  →  osmo-operator-lite.iso
+# Le meme noeud, construit depuis l'image d'execution elaguee (Dockerfile.lite)
+# au lieu de l'image de construction : les ateliers de compilation de /opt/GSM -
+# gnuradio, gr-gsm, libosmo*, osmo-*, les objets de qemu - ne partent pas dans
+# le squashfs. Ce qui TOURNE est identique, aux fichiers pres qui n'ont servi
+# qu'a compiler. Les trois depots, eux, restent entiers : c'est la regle de
+# cette image, pas une exception (voir Dockerfile.lite).
+ISO_LITE=0
 # Defaut : le hub du banc, en acces par pont. Le host-only VirtualBox
 # (192.168.56.1) reste possible, mais via --hub-ip : il n'existe sur aucun
 # segment quand les VM sont pontees.
@@ -75,6 +84,7 @@ for arg in "$@"; do case "$arg" in
     --hub-ip=*)     ISO_HUB_IP="${arg#*=}" ;;
     --subnet=*)     ISO_SUBNET="${arg#*=}" ;;
     --kb=*)         OSMO_ISO_KB="${arg#*=}" ;;
+    --lite)         ISO_LITE=1 ;;
 esac; done
 
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
@@ -128,19 +138,32 @@ echo -e "  ${GREEN}✓${NC} clavier de l'image : ${CYAN}${OSMO_ISO_KB}${NC}"
 # au demarrage (`start-direct.sh --node N`), qui reecrit les point codes. C'est
 # la raison pour laquelle on ne fabrique pas osmo-operator-1..9.
 #
-# Le hub d'abord : il ne depend ni de build.sh ni de l'image osmocom-run, donc
-# un echec de son cote se voit en quelques minutes au lieu d'une heure.
-if [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0" ] && [ -z "$ISO_NODE" ]; then
-    echo -e "${CYAN}${BOLD}══ Aucun role demande : construction des DEUX images ══${NC}"
-    echo -e "  1. ${CYAN}interstp.iso${NC}       le hub SS7 (PC 0.0.0)"
-    echo -e "  2. ${CYAN}osmo-operator.iso${NC}  un noeud - son numero se choisit au demarrage :"
+if [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0" ] && [ -z "$ISO_NODE" ] \
+   && [ "$ISO_LITE" = "0" ]; then
+    echo -e "${CYAN}${BOLD}══ Aucun role demande : construction des TROIS images ══${NC}"
+    echo -e "  1. ${CYAN}interstp.iso${NC}            le hub SS7 (PC 0.0.0)"
+    echo -e "  2. ${CYAN}osmo-operator.iso${NC}       un noeud - son numero se choisit au demarrage :"
     echo -e "     ${CYAN}./start-direct.sh --node N${NC}   (N de 1 a 9)"
+    echo -e "  3. ${CYAN}osmo-operator-lite.iso${NC}  le meme noeud, sans les ateliers de compilation"
     echo ""
+    # L'ordre n'est pas cosmetique. Le hub d'abord : il ne depend ni de build.sh
+    # ni de l'image osmocom-run, un echec de son cote se voit en minutes. La lite
+    # en DERNIER : elle se greffe sur l'image osmocom-run que la passe operateur
+    # vient de construire, donc elle ne coute que l'elagage et l'assemblage.
     "$0" --role=interstp "$@" || { echo -e "${RED}Echec de interstp.iso${NC}" >&2; exit 1; }
     "$0" --role=operator --output=osmo-operator.iso "$@" \
         || { echo -e "${RED}Echec de osmo-operator.iso${NC}" >&2; exit 1; }
-    echo -e "${GREEN}${BOLD}═══ Les deux images sont pretes ═══${NC}"
-    ls -lh "$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" 2>/dev/null | sed 's/^/  /'
+    # --no-cache RETIRE pour la passe lite, et lui seul. Il vaut pour la
+    # construction des images docker ; la lite ne construit rien, elle elague
+    # osmocom-run que la passe precedente vient de produire. Le lui repasser
+    # relancerait build.sh et build_run_image depuis zero : deux heures de
+    # compilation pour aboutir a la meme image, puis a la meme coupe.
+    LITE_ARGS=(); for _a in "$@"; do [ "$_a" = "--no-cache" ] || LITE_ARGS+=("$_a"); done
+    "$0" --role=operator --lite --output=osmo-operator-lite.iso "${LITE_ARGS[@]+"${LITE_ARGS[@]}"}" \
+        || { echo -e "${RED}Echec de osmo-operator-lite.iso${NC}" >&2; exit 1; }
+    echo -e "${GREEN}${BOLD}═══ Les trois images sont pretes ═══${NC}"
+    ls -lh "$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" \
+           "$(pwd)/osmo-operator-lite.iso" 2>/dev/null | sed 's/^/  /'
     exit 0
 fi
 
@@ -148,15 +171,24 @@ case "${ISO_ROLE:-operator}" in
     interstp)
         ISO_ROLE="interstp"
         [ "$OUTPUT_SET" = "1" ] || OUTPUT="interstp.iso"
+        # Le hub n'a pas d'atelier a elaguer : son image (Dockerfile.stp) ne
+        # porte que osmo-stp et quatre bibliotheques. --lite n'y veut rien dire,
+        # et l'accepter en silence produirait une "lite" identique a l'autre.
+        [ "$ISO_LITE" = "1" ] && { echo "--lite ne s'applique pas au hub (--role=interstp)" >&2; exit 2; }
         # Le hub dessert N noeuds : sans table WAN on ne sait pas combien.
         ISO_WAN=1 ;;
     operator|"")
         ISO_ROLE="operator"
         if [ -n "$ISO_NODE" ]; then
             [[ "$ISO_NODE" =~ ^[1-9]$ ]] || { echo "--node : 1 a 9" >&2; exit 2; }
-            [ "$OUTPUT_SET" = "1" ] || OUTPUT="osmo-operator-${ISO_NODE}.iso"
+            if [ "$OUTPUT_SET" = "0" ]; then
+                if [ "$ISO_LITE" = "1" ]; then OUTPUT="osmo-operator-${ISO_NODE}-lite.iso"
+                else                           OUTPUT="osmo-operator-${ISO_NODE}.iso"; fi
+            fi
             ISO_WAN_ID="${ISO_WAN_ID:-$ISO_NODE}"
             ISO_WAN=1
+        elif [ "$ISO_LITE" = "1" ]; then
+            [ "$OUTPUT_SET" = "1" ] || OUTPUT="osmo-operator-lite.iso"
         fi ;;
     *) echo "--role inconnu : $ISO_ROLE (operator|interstp)" >&2; exit 2 ;;
 esac
@@ -282,6 +314,25 @@ else
     echo -e "${GREEN}[2/9] Construction de l'image osmocom-run via start.sh...${NC}"
     build_run_image
     echo -e "  ${GREEN}✓${NC} osmocom-run construite"
+
+    # ── La variante lite : on elague l'image d'EXECUTION, pas celle de build ──
+    # Dockerfile.lite est ecrit pour partir de n'importe quelle base (ARG BASE).
+    # On le branche sur osmocom-run - celle qui porte les configs et que l'ISO
+    # copie - et non sur osmocom-nitb comme le fait "build.sh --lite" : elaguer
+    # l'etage du dessous obligerait a refaire build_run_image par-dessus, soit
+    # deux heures pour le meme resultat.
+    # Pas de docker build a partir de zero ici : l'image est deja la, il ne
+    # reste que la coupe et l'aplatissement - quelques minutes.
+    if [ "$ISO_LITE" = "1" ]; then
+        echo -e "${GREEN}[2-lite/9] Elagage vers ${CYAN}osmocom-run:lite${NC}${GREEN} (Dockerfile.lite)...${NC}"
+        docker build $NO_CACHE -f "$DIR/Dockerfile.lite" --build-arg BASE=osmocom-run \
+            -t osmocom-run:lite "$DIR" \
+            || { echo -e "${RED}Echec de l'elagage (Dockerfile.lite)${NC}"; exit 1; }
+        _full=$(docker image inspect osmocom-run      --format '{{.Size}}' 2>/dev/null || echo 0)
+        _lite=$(docker image inspect osmocom-run:lite --format '{{.Size}}' 2>/dev/null || echo 0)
+        echo -e "  ${GREEN}✓${NC} osmocom-run:lite $(awk -v a="$_full" -v b="$_lite" \
+            'BEGIN{printf "%.1f Go -> %.1f Go", a/1073741824, b/1073741824}')"
+    fi
 fi
 
 echo -e "${GREEN}[2b/9] Preparation de l'image source de l'ISO...${NC}"
@@ -412,6 +463,12 @@ echo -e "  ${GREEN}✓${NC} sms-routing.conf : ${CYAN}${ISO_N_MS}${NC} route(s) 
 if [ "$ISO_ROLE" = "interstp" ]; then
     ISO_RUN_IMAGE="osmocom-stp-iso"
     ISO_SRC_IMAGE="osmocom-stp"
+elif [ "$ISO_LITE" = "1" ]; then
+    # Meme chaine, meme configs : seule la SOURCE change. Tout ce qui suit -
+    # docker cp des binaires, des libs, de /opt/GSM - travaille donc sur l'image
+    # elaguee sans avoir a le savoir.
+    ISO_RUN_IMAGE="osmocom-run-lite-iso"
+    ISO_SRC_IMAGE="osmocom-run:lite"
 else
     ISO_RUN_IMAGE="osmocom-run-iso-net-host"
     ISO_SRC_IMAGE="osmocom-run"
@@ -1465,6 +1522,11 @@ echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de q
     printf '# /etc/osmo-role - genere par build-iso.sh\n'
     printf 'OSMO_ROLE=%s\n' "$ISO_ROLE"
     [ -n "$ISO_NODE" ] && printf 'OSMO_WAN_NODE=%s\n' "$ISO_NODE"
+    # Pour la meme raison que le role : deux ISO issues de la meme chaine sont
+    # indiscernables une fois demarrees. Celle-ci n'a pas les arbres de
+    # compilation de /opt/GSM - autant que la machine puisse le dire elle-meme
+    # quand quelque chose y sera cherche en vain.
+    printf 'OSMO_LITE=%s\n' "$ISO_LITE"
     printf 'OSMO_HUB_IP=%s\n' "$ISO_HUB_IP"
 } > "$ROOTFS/etc/osmo-role"
 

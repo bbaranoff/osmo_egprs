@@ -23,15 +23,29 @@
 # Ici, tout ce qui n'est pas une source reste EXACTEMENT ce qu'il etait.
 #
 # Ce qui est GARDE dans /opt/GSM : ce que la pile lance vraiment.
-#   qemu-src/build/qemu-system-arm            l'emulateur Calypso
-#   qemu-src/pc-bios, qemu-src/tools          BIOS et outils appeles au runtime
-#   qemu-src/target/firmware/.../compal_e88   layer1 charge dans le telephone
+#   qemu-src/                    l'arbre ENTIER, moins ses objets de compilation.
+#                                [2026-08-27] Avant, on n'en gardait que quatre
+#                                morceaux (le binaire, pc-bios, tools, le
+#                                firmware compal_e88). Il manquait ce qui LANCE :
+#                                run.sh, run_modules/, environnement/, cfgs/,
+#                                scripts/. start-direct.sh delegue a
+#                                $OQC_ROOT/run.sh - absent, l'image lite savait
+#                                emuler un Calypso mais pas le demarrer.
+#                                build/ ne garde que qemu-system-arm : 1,5 Go de
+#                                .o et de .a en moins, et .git reste coherent
+#                                avec son arbre (build/ est dans son .gitignore).
 #   osmocom-bb/src/host/osmocon/osmocon       le chargeur
 #   osmocom-bb/src/target/trx_toolkit         fake_trx.py et compagnie
 #   calypso_dsp.*.bin                         les ROM du DSP
 #   firmware/, qemu-install/, osmo_egprs/     images, qemu installe, ce depot
 #
+# LES DEPOTS GARDENT LEUR .git - qemu-src comme osmo_egprs. Ce n'est pas un
+# oubli : c'est lui qui permet "osmo-update" (git fetch en place) sur la machine
+# qui tourne, au lieu d'un effacement suivi d'un reclone. Les 96 Mo qu'il pese
+# ne sont rien a cote des 4 Go d'ateliers que cette image retire.
+#
 # Construction :  ./build.sh --lite      (ou docker build -f Dockerfile.lite .)
+# L'ISO correspondante :  ./build-iso.sh --role=operator --lite
 # =============================================================================
 
 ARG BASE=osmocom-nitb
@@ -44,15 +58,12 @@ FROM ${BASE} AS prune
 # recopie, pas les etapes intermediaires.
 RUN set -eux; \
     cd /opt/GSM; \
-    mkdir -p /keep/qemu-src /keep/osmocom-bb/src/host/osmocon \
+    mkdir -p /keep/qemu-src/build /keep/osmocom-bb/src/host/osmocon \
              /keep/osmocom-bb/src/target; \
-    # Les artefacts a conserver, mis de cote avant la coupe.
-    cp -a qemu-src/build/qemu-system-arm  /keep/qemu-src/ 2>/dev/null || true; \
-    cp -a qemu-src/pc-bios                /keep/qemu-src/ 2>/dev/null || true; \
-    cp -a qemu-src/tools                  /keep/qemu-src/ 2>/dev/null || true; \
-    mkdir -p /keep/qemu-src/target/firmware/board; \
-    cp -a qemu-src/target/firmware/board/compal_e88 \
-          /keep/qemu-src/target/firmware/board/ 2>/dev/null || true; \
+    # qemu-src : l'arbre entier, sauf build/. Le binaire est mis de cote AVANT
+    # la copie, et --exclude=./build empeche le tar de le recouvrir ensuite.
+    cp -a qemu-src/build/qemu-system-arm  /keep/qemu-src/build/ 2>/dev/null || true; \
+    tar -C qemu-src --exclude=./build -cf - . | tar -C /keep/qemu-src -xf -; \
     cp -a osmocom-bb/src/host/osmocon/osmocon \
           /keep/osmocom-bb/src/host/osmocon/ 2>/dev/null || true; \
     cp -a osmocom-bb/src/target/trx_toolkit \
@@ -70,7 +81,12 @@ RUN set -eux; \
            /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
            /tmp/* /var/tmp/*; \
     find /usr/local/lib -name '*.a' -delete 2>/dev/null || true; \
-    find / -xdev -name '*.o' -delete 2>/dev/null || true; \
+    # Le balayage des .o EVITE /opt/GSM. [2026-08-27] Il y passait, et
+    # qemu-src/tools/calypso-ipc-device/*.o sont SUIVIS PAR GIT (six fichiers) :
+    # les effacer laissait un arbre que git voit comme modifie, et "osmo-update"
+    # refuse alors de l'avancer - a raison, il ne sait pas ce qu'on y a fait.
+    # Ce qui restait a couper est de toute facon parti avec l'atelier.
+    find / -xdev -path /opt/GSM -prune -o -name '*.o' -exec rm -f {} + 2>/dev/null || true; \
     du -sh /opt/GSM /usr/local/bin /usr/local/lib
 
 # ── Etape 2 : aplatissement ─────────────────────────────────────────────────
