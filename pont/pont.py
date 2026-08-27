@@ -164,32 +164,68 @@ def kc_read():
 # `seq` de calypso_dcch_cfg, incremente a chaque nouveau canal par le firmware --
 # la meme source que _dcch_cfg(). Un vrai changement de canal libere la cle ; un
 # effacement parasite en cours de canal ne la perd plus.
-# [2026-08-27] RETENUE DESACTIVEE PAR DEFAUT -- LE DISCRIMINANT ETAIT FAUX.
+# ── LE Kc SURVIT A UN EFFACEMENT PARASITE, ET SE LACHE SUR LA SABM ───────────
 #
-# L'idee : ne pas perdre le Kc quand osmocon l'efface sur un DM_EST_REQ parasite.
-# Le discriminant choisi etait le `seq` de calypso_dcch_cfg. Il ne convient PAS :
-# l1ctl_sock.c ne l'incremente que `if (kind >= 0 && chan_nr != last_chan_nr)`,
-# or chan_nr reste 0x41 (SDCCH/8 SS0) du LU jusqu'a l'appel. Le seq restait donc
-# a 1 et la cle etait retenue INDEFINIMENT -- mesure : 13500 retenues.
+# LE PROBLEME. osmocon (osmocom-bb, hors de ce depot) remet /dev/shm/calypso_kc a
+# zero sur DM_EST_REQ **et** DM_REL_REQ. L'intention -- « nouveau canal dedie ou
+# release -> repart en clair » -- est juste pour le RELEASE, fausse pour
+# l'ESTABLISH : le mobile emet aussi un DM_EST_REQ pour ouvrir un lien
+# SUPPLEMENTAIRE sur un canal DEJA chiffre (SAPI 3 du SMS, re-etablissement
+# LAPDm). La cle disparait alors que le reseau continue de chiffrer. Mesure du
+# 27/08 : une seule CRYPTO_REQ de tout le run, et pourtant le fichier a zero,
+# avec « SOUS-VOIE ACTIVE : clair 50/277  chiffre 0/96 » -- zero bloc chiffre
+# decode sur 96, et le LU qui mourait pile apres l'AUTHENTICATION RESPONSE.
 #
-# Consequence, immediate et pire que le mal : le canal de l'appel demarre EN
-# CLAIR, le pont lui appliquait quand meme l'A5 avec la cle perimee, l'UA
-# repondant a la SABM arrivait brouillee -> Timeout T200 x6 -> MDL-ERROR cause 1
-# -> appel mort avant meme le CM SERVICE. C'est exactement ce que le commentaire
-# d'osmocon annoncait : « sinon un Kc perime chiffrerait la SABM du canal
-# suivant ».
+# LA PREMIERE TENTATIVE ETAIT FAUSSE, et il faut le dire : elle retenait la cle
+# tant que le `seq` de calypso_dcch_cfg ne bougeait pas. Or l1ctl_sock.c ne
+# l'incremente que `if (kind >= 0 && chan_nr != last_chan_nr)`, et chan_nr reste
+# 0x41 du LU jusqu'a l'appel. La cle etait donc retenue INDEFINIMENT (13500
+# retenues mesurees), le canal de l'appel -- qui demarre EN CLAIR -- se voyait
+# appliquer l'A5, l'UA revenait brouillee : T200 x6, MDL-ERROR cause 1, appel
+# mort avant le CM SERVICE. Exactement ce que le reset d'osmocon evitait.
 #
-# Ce que la retenue a quand meme montre : elle fait passer la sous-voie active de
-# « chiffre 0/96 » a « chiffre 12/253 ». L'effacement parasite est donc reel et
-# coute des blocs. Mais il faut un discriminant qui distingue « meme canal, cle
-# effacee a tort » de « nouveau canal, qui demarre en clair » -- et chan_nr n'en
-# est pas un. Piste : detecter la SABM d'etablissement sur le dedie et lacher la
-# cle a ce moment-la.
+# LE BON MARQUEUR EST LA SABM. Un lien LAPDm qui (re)demarre le fait TOUJOURS par
+# une SABM, et TOUJOURS en clair -- c'est la definition de l'etablissement. Le
+# pont voit cette trame en clair, avant encodage et avant chiffrement, dans
+# ul_sdcch_from_sideband (l2 = b[16:39], la L2 telle que le mobile l'a posee).
+# On lache donc la cle la, et on la reprend au CRYPTO_REQ suivant. Un effacement
+# parasite en cours de session ne la perd plus ; un vrai (re)demarrage la libere.
 #
-# PONT_KC_RETENTION=1 la reactive pour experimenter. Defaut : 0.
+# PONT_KC_RETENTION=0 revient au comportement d'avant (aucune retenue).
+# [2026-08-27] DEFAUT REMIS A 0. Deux discriminants essayes, deux faux :
+#   - le `seq` de calypso_dcch_cfg : il ne bouge pas (chan_nr identique du LU a
+#     l'appel), la cle etait retenue indefiniment -> l'A5 s'appliquait au canal
+#     de l'appel qui demarre en clair -> appel mort.
+#   - la SABM montante : une SABM ne signifie PAS toujours « on repart en
+#     clair ». Un re-etablissement LAPDm sur un canal deja chiffre (SAPI 3 du
+#     SMS) est lui-meme chiffre. On lachait donc la cle en pleine session.
+# Le defaut d'origine (osmocon efface le Kc sur DM_EST_REQ) est reel et
+# mesurable, mais il faut un marqueur qui distingue « nouveau canal » de
+# « nouveau lien sur le meme canal ». Piste non essayee : l'IMMEDIATE
+# ASSIGNMENT descendant, qui est le seul octroi d'un canal NEUF. Tant que ce
+# n'est pas verifie, on n'ajoute pas de variable mobile de plus.
+# PONT_KC_RETENTION=1 reactive la retenue pour experimenter.
 KC_RETENTION = os.environ.get("PONT_KC_RETENTION", "0") == "1"
-_kc_tenu = None          # (algo, kc, dcch_seq) retenu, ou None
+_kc_tenu = None          # (algo, kc) retenu, ou None
 _kc_retenues = 0
+_kc_laches = 0
+
+def _est_sabm(l2):
+    """Vrai si cette L2 LAPDm est une SABM (etablissement).
+    Trame U : bits 0-1 du controle a 11. SABM = 0x2F, avec ou sans le bit P
+    (0x10) -- d'ou le masque 0xEF. GSM 04.06 3.4/3.6."""
+    if not l2 or len(l2) < 2:
+        return False
+    ctrl = l2[1]
+    return (ctrl & 0x03) == 0x03 and (ctrl & 0xEF) == 0x2F
+
+def kc_lacher(motif):
+    """Un lien redemarre en clair : la cle retenue cesse d'etre valable."""
+    global _kc_tenu, _kc_laches
+    if _kc_tenu is not None:
+        _kc_tenu = None
+        _kc_laches += 1
+        ST.log("Kc LACHE (%s) -- le lien repart en clair (#%d)" % (motif, _kc_laches))
 _kc_seq_fd = None
 
 def _dcch_seq():
@@ -215,22 +251,16 @@ _a5_last = {"applied": False, "algo": 0, "kc4": ""}
 def a5_apply(burst148, fn, uplink):
     """XOR du keystream A5 sur les 114 bits utiles. Renvoie le burst modifie."""
     algo, kc = kc_read()
-    global _kc_tenu
-    if not KC_RETENTION:
-        pass                                  # retenue desactivee : cf. ci-dessus
-    elif algo:
-        _kc_tenu = (algo, kc, _dcch_seq())    # cle fraiche : on la retient
-    elif _kc_tenu is not None:
-        if _kc_tenu[2] == _dcch_seq():
-            algo, kc = _kc_tenu[0], _kc_tenu[1]   # effacement parasite : on tient
-            global _kc_retenues
-            _kc_retenues += 1
-            if _kc_retenues == 1 or (_kc_retenues % 500) == 0:
-                ST.log("Kc EFFACE EN COURS DE CANAL (dcch seq=%u inchange) -- "
-                       "on garde la cle (#%d). Cf. osmocon DM_EST_REQ."
-                       % (_kc_tenu[2], _kc_retenues))
-        else:
-            _kc_tenu = None                   # vrai changement de canal : on lache
+    global _kc_tenu, _kc_retenues
+    if algo:
+        _kc_tenu = (algo, kc)                 # cle fraiche : on la retient
+    elif KC_RETENTION and _kc_tenu is not None:
+        algo, kc = _kc_tenu                   # effacement parasite : on tient
+        _kc_retenues += 1
+        if _kc_retenues == 1 or (_kc_retenues % 2000) == 0:
+            ST.log("Kc EFFACE EN COURS DE SESSION -- on garde la cle (#%d) ; "
+                   "elle sera lachee a la prochaine SABM. Cf. osmocon DM_EST_REQ."
+                   % _kc_retenues)
     if not algo:
         _a5_last["applied"] = False
         return burst148                       # pas de Kc -> on ne touche a rien
@@ -1766,30 +1796,70 @@ def ul_sdcch_from_sideband():
                     last_seq = seq
                     l1s_fn = struct.unpack_from("<I", b, 4)[0]
                     l2 = b[16:39]
+                    # Un lien qui (re)demarre le fait par une SABM, en clair :
+                    # c'est le signal que toute cle retenue cesse d'etre valable.
+                    if _est_sabm(l2):
+                        kc_lacher("SABM montante")
                     # MONTANT : on tape la L2 TELLE QUE LE MOBILE L'A POSEE,
                     # avant encodage et avant chiffrement. C'est la seule vue
                     # lisible du montant : aucun outil ne sait demoduler un
                     # enregistrement montant (pas de FCCH/SCH pour se caler).
-                    plan, ss, tn = _dcch_plan()
-                    tap(now_fn(), GSMTAP_SDCCH4, l2, tn, True)
-                    bursts = xcch_encode_4(l2)
-                    # ⚠️ MEME BUG QUE LE RACH : `l1s_fn` est l'horloge du FIRMWARE,
-                    # pas celle du pont (que la BTS suit via IND CLOCK). Emettre
-                    # dedans donnait 35 bursts "hors fenetre". On vise le prochain
-                    # bloc SDCCH montant de NOTRE horloge.
+                    # ── APRES L'ASSIGNATION, LE MONTANT EST DE LA FACCH ────
+                    # Le firmware ne poste QUE la tache DUL (12) en montant --
+                    # jamais TCHT (13) ni TCHA (14). Mesure du 27/08 sur les
+                    # sondes LATCH : task_u=0 (11865 fois) et task_u=12 (1639),
+                    # rien d'autre. shunt_capture_tch_ul() ne matche donc jamais,
+                    # /dev/shm/calypso_tch_facch_ul n'est JAMAIS cree, et
+                    # ul_facch_from_sideband boucle sur un open qui echoue :
+                    # FACCH ul = 0.
                     #
-                    # ⚠️ LE SLOT ETAIT LA CONSTANTE 0. Toute SABM partait donc sur
-                    # le TS0, quel que soit le chan_nr de l'IMMEDIATE ASSIGNMENT.
-                    # Des que le BSC allouait le SDCCH/8 du TS1, la BTS ecoutait
-                    # sur le TS1 et n'entendait rien : T200 x6 -> RR_REL_IND ->
-                    # « Location update failed », avec un lchan cote BSC bloque
-                    # en WAIT_RLL_RTP_ESTABLISH (rll_ready=no). Le slot vient
-                    # maintenant du firmware, comme la sous-voie et la fenetre.
-                    if _ul_sd_n[0] < 10 or (_ul_sd_n[0] % 50) == 0:
-                        ST.log("SDCCH-UL -> %s SS=%d TS=%d fenetre fn%%51=%d (#%d)"
-                               % (plan.name, ss, tn, plan.ul_base(ss), _ul_sd_n[0]))
-                    _ul_sd_n[0] += 1
-                    emit_with_timing(tn, next_sdcch_ul_fn(), bursts, cipher=True)
+                    # Consequence : meme apres avoir bascule sur le TCH, le
+                    # mobile depose sa L2 montante ici, dans calypso_sdcch_ul --
+                    # ASSIGNMENT COMPLETE compris. On la re-emettait alors dans
+                    # la fenetre SDCCH du TS1, alors que la BTS ecoute la FACCH
+                    # du TCH sur son propre slot. Le BSC restait en
+                    # WAIT_RR_ASS_COMPLETE et sortait en « EQUIPMENT FAILURE:
+                    # Timeout » -- exactement la panne que decrit la docstring
+                    # de ul_facch_from_sideband.
+                    #
+                    # Des que tch_cfg est arme, ce montant appartient donc au
+                    # TCH. On le FILE (on n'emet pas) : l'ordonnanceur unique
+                    # tch_ul_scheduler l'enverra en volant la voix, comme le
+                    # fait une vraie FACCH. Emettre ici entrelacerait deux
+                    # sequences de 8 bursts sans verrou -- le defaut corrige le
+                    # 16/08 dans ul_facch_from_sideband, qu'on ne refait pas.
+                    _tn_tch = tch_cfg_read() if TCH_ENABLED else None
+                    if _tn_tch is not None:
+                        tap(now_fn(), GSMTAP_FACCH, l2[:GSM_MACBLOCK_LEN],
+                            _tn_tch, True)
+                        with _tch_q_lock:
+                            _tch_q_facch.append(bytes(l2[:GSM_MACBLOCK_LEN]))
+                        ST.n_facch_ul += 1
+                        if ST.n_facch_ul <= 10 or (ST.n_facch_ul % 50) == 0:
+                            ST.log("DUL->FACCH #%d : TCH arme TN=%d -- le montant "
+                                   "part en FACCH et non dans la fenetre SDCCH"
+                                   % (ST.n_facch_ul, _tn_tch))
+                    else:
+                        plan, ss, tn = _dcch_plan()
+                        tap(now_fn(), GSMTAP_SDCCH4, l2, tn, True)
+                        bursts = xcch_encode_4(l2)
+                        # ⚠️ MEME BUG QUE LE RACH : `l1s_fn` est l'horloge du FIRMWARE,
+                        # pas celle du pont (que la BTS suit via IND CLOCK). Emettre
+                        # dedans donnait 35 bursts "hors fenetre". On vise le prochain
+                        # bloc SDCCH montant de NOTRE horloge.
+                        #
+                        # ⚠️ LE SLOT ETAIT LA CONSTANTE 0. Toute SABM partait donc sur
+                        # le TS0, quel que soit le chan_nr de l'IMMEDIATE ASSIGNMENT.
+                        # Des que le BSC allouait le SDCCH/8 du TS1, la BTS ecoutait
+                        # sur le TS1 et n'entendait rien : T200 x6 -> RR_REL_IND ->
+                        # « Location update failed », avec un lchan cote BSC bloque
+                        # en WAIT_RLL_RTP_ESTABLISH (rll_ready=no). Le slot vient
+                        # maintenant du firmware, comme la sous-voie et la fenetre.
+                        if _ul_sd_n[0] < 10 or (_ul_sd_n[0] % 50) == 0:
+                            ST.log("SDCCH-UL -> %s SS=%d TS=%d fenetre fn%%51=%d (#%d)"
+                                   % (plan.name, ss, tn, plan.ul_base(ss), _ul_sd_n[0]))
+                        _ul_sd_n[0] += 1
+                        emit_with_timing(tn, next_sdcch_ul_fn(), bursts, cipher=True)
         except OSError:
             fd = None
         time.sleep(FRAME_DUR / 8)

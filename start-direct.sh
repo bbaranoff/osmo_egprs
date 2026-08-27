@@ -795,14 +795,28 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         # On attend maintenant un EVENEMENT et non une duree : osmo-bts-trx,
         # qui est l'interlocuteur TRX-UDP du pont et ne demarre qu'APRES le
         # teardown. Sa presence prouve donc que les ports sont a nous.
+        # [2026-08-27] LA BARRIERE ATTEND D'ABORD QU'IL DISPARAISSE.
+        # Elle n'attendait que sa PRESENCE, en se fiant a « osmo-bts-trx ne
+        # demarre qu'APRES le teardown ». Vrai seulement si l'on a fait --stop
+        # avant. Sans --stop, l'osmo-bts-trx du run PRECEDENT est encore la :
+        # pgrep reussit immediatement (_n=0), le pont binde 5700-5702 en plein
+        # teardown, run.sh le tue derriere (f:pont/pont.py est dans
+        # _td_patterns) et rien ne le relance -- « le pont n'a pas de bursts ».
+        # On attend donc les DEUX fronts : la disparition (le teardown a bien
+        # eu lieu), puis l'apparition (la pile est remontee). Avec --stop le
+        # premier front est deja franchi et rien ne change.
         ( _n=0
+          while [ "$_n" -lt 180 ] && pgrep -x osmo-bts-trx >/dev/null 2>&1; do
+              _n=$((_n + 1)); sleep 1
+          done
+          _dispar=$_n
           while [ "$_n" -lt 180 ] && ! pgrep -x osmo-bts-trx >/dev/null 2>&1; do
               _n=$((_n + 1)); sleep 1
           done
           if [ "$_n" -ge 180 ]; then
-              echo "[pont] osmo-bts-trx jamais vu apres 180 s - demarrage quand meme"
+              echo "[pont] osmo-bts-trx jamais (re)vu apres 180 s - demarrage quand meme"
           else
-              echo "[pont] osmo-bts-trx detecte apres ${_n} s - la pile est debout, on binde"
+              echo "[pont] osmo-bts-trx parti a ${_dispar}s puis revu a ${_n}s - la pile est debout, on binde"
           fi
           sleep 1
           pkill -f "$_PONT" 2>/dev/null; sleep 1
@@ -1399,6 +1413,33 @@ PCAPWRAP
     fi
 }
 [ "$DRY" -eq 1 ] || install_pcap_wrapper
+
+# --- 7ter. ARRET SYSTEMATIQUE AVANT DEMARRAGE ---------------------------------
+# Tout demarrage arrete d'abord la pile. Ce n'est pas de la prudence : sans cela
+# le lanceur differe du pont part sur un etat ambigu.
+#
+# CE QUE CA CORRIGE. La barriere du pont attend osmo-bts-trx pour savoir que les
+# ports 5700-5702 sont a lui. Si un run precedent tourne encore, son osmo-bts-trx
+# est deja la : la barriere est franchie a l'instant meme, le pont binde EN PLEIN
+# teardown de run.sh, qui le tue derriere (f:pont/pont.py est dans _td_patterns)
+# -- et rien ne le relance. Symptome : « le pont n'a pas de bursts », sans un
+# message pour le dire. La barriere attend desormais les deux fronts (disparition
+# puis apparition), mais partir d'une pile arretee rend la question sans objet.
+#
+# Et cela libere les ports : un fake_trx ou un trxcon orphelin suffit a faire
+# echouer le demarrage suivant sur « port UDP 5720 deja pris » -- constate le
+# 27/08. Le killall couvre les processus Python que le registre ne connait pas.
+#
+# CALYPSO_NO_AUTOSTOP=1 desactive ce comportement.
+if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
+    say_begin "Arret de la pile avant demarrage"
+    bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true
+    declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
+    if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
+        killall python3 2>/dev/null || true
+    fi
+    say_end " OK " "$C_OK" "Arret de la pile avant demarrage"
+fi
 
 # --- 8. lancement : exec run.sh -----------------------------------------------
 say_begin "Transmission a run.sh"
