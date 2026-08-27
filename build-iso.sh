@@ -478,25 +478,51 @@ done
 docker rm "$CID" &>/dev/null
 echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectes"
 
-# ── osmo_egprs : SOURCE a jour depuis GitHub (branche main) ──
-# La copie docker cp ci-dessus peut etre perimee ; on recupere la branche main
-# du repo (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh...) dans l'ISO.
-# ── osmo_egprs : ARBRE a jour depuis GitHub (branche main), sans depot git ──
+# ── osmo_egprs : ARBRE a jour depuis GitHub, AVEC son .git ─────────────────
+# La copie docker cp ci-dessus peut etre perimee ; on avance la branche main du
+# depot (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh...) dans l'ISO.
 EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-main}"
-EGPRS_TARBALL="https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/${EGPRS_BRANCH}"
-echo -e "${GREEN}[5a/9] Recuperation osmo_egprs (branche ${EGPRS_BRANCH}, tarball)...${NC}"
-stage="$(mktemp -d)"
-if wget -qO- "$EGPRS_TARBALL" | tar -xz -C "$stage" --strip-components=1 \
-   && [ -s "$stage/start.sh" ]; then
-    find "$stage" -name '.git*' -maxdepth 2 -exec rm -rf {} + 2>/dev/null || true
-    rm -rf "$ROOTFS/opt/GSM/osmo_egprs"
-    mkdir -p "$ROOTFS/opt/GSM"
-    cp -a "$stage" "$ROOTFS/opt/GSM/osmo_egprs"
-    echo -e "  ${GREEN}✓${NC} osmo_egprs installe (${EGPRS_BRANCH}, arbre nu, sans .git)"
+EGPRS_REPO="${OSMO_EGPRS_REPO:-https://github.com/bbaranoff/osmo_egprs}"
+echo -e "${GREEN}[5a/9] Mise a jour osmo_egprs en place (branche ${EGPRS_BRANCH}, .git conserve)...${NC}"
+# [2026-08-27] Le tarball est abandonne. Il donnait un arbre NU : on effacait
+# /opt/GSM/osmo_egprs, on deballait le tar.gz, on supprimait les .git*. Trois
+# consequences, toutes vues sur l'ISO :
+#   - sans .git, update.sh n'a pas le choix au demarrage : il ne peut pas faire
+#     "git fetch", il EFFACE et RECLONE (wipe=1) - a chaque boot, et sans reseau
+#     il ne reste rien ;
+#   - tout ce qui avait ete pose dans l'arbre a la construction disparaissait au
+#     premier demarrage ;
+#   - impossible, sur la machine, de savoir sur quel commit on tourne.
+# On met donc l'arbre a jour EN PLACE, par git, en gardant .git. Le depot vient
+# de l'image ($CID:/opt/GSM, il a son .git) ; on ne le remplace pas, on avance
+# le HEAD - et seulement si c'est une avance directe (--ff-only) : un arbre de
+# l'image avec des commits locaux n'est pas ecrase en silence, il est signale.
+EGPRS_TREE="$ROOTFS/opt/GSM/osmo_egprs"
+if [ -d "$EGPRS_TREE/.git" ]; then
+    if git -C "$EGPRS_TREE" fetch --depth 1 origin "$EGPRS_BRANCH" >/dev/null 2>&1 \
+       && git -C "$EGPRS_TREE" merge --ff-only FETCH_HEAD >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} osmo_egprs a jour en place (${EGPRS_BRANCH}, .git conserve) - $(git -C "$EGPRS_TREE" log -1 --format='%h %s')"
+    else
+        echo -e "  ${YELLOW}⚠${NC} osmo_egprs : mise a jour impossible (reseau ? commits locaux ?) - arbre de l'image conserve" >&2
+    fi
+elif [ -d "$EGPRS_TREE" ]; then
+    # Arbre sans depot : on ne l'efface pas, on lui rend son .git, sur place.
+    if git -C "$EGPRS_TREE" init -q 2>/dev/null \
+       && git -C "$EGPRS_TREE" remote add origin "$EGPRS_REPO" 2>/dev/null \
+       && git -C "$EGPRS_TREE" fetch --depth 1 origin "$EGPRS_BRANCH" >/dev/null 2>&1 \
+       && git -C "$EGPRS_TREE" checkout -q -B "$EGPRS_BRANCH" FETCH_HEAD 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} osmo_egprs : depot reconstitue sur l'arbre existant (${EGPRS_BRANCH})"
+    else
+        echo -e "  ${YELLOW}⚠${NC} osmo_egprs : depot non reconstitue - arbre de l'image conserve tel quel" >&2
+    fi
 else
-    echo -e "  ${YELLOW}⚠ recuperation osmo_egprs echouee (reseau ?) - copie de l'image conservee${NC}"
+    mkdir -p "$ROOTFS/opt/GSM"
+    if git clone --depth 1 -b "$EGPRS_BRANCH" "$EGPRS_REPO" "$EGPRS_TREE" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} osmo_egprs clone (${EGPRS_BRANCH}, .git conserve)"
+    else
+        echo -e "  ${RED}✗${NC} osmo_egprs absent de l'image ET clone impossible" >&2
+    fi
 fi
-rm -rf "$stage"
 
 # ── Feed HLR : aligner N_MS sur le nombre de MS embarques ────────────────────
 # run_modules/21-abonnes-hlr.sh retombe sur ": "${N_MS:=1}"" : sans ce fichier
@@ -504,13 +530,15 @@ rm -rf "$stage"
 # MS suivants se voyaient refuser le rattachement ("IMSI unknown in HLR") -
 # panne lue a tort comme un defaut radio.
 #
-# PAS dans /opt/GSM/osmo_egprs/environment : ce fichier n'est pas dans git, et
-# osmo-update.service reclone ce depot au demarrage en EFFACANT l'arbre (wipe=1
-# dans update.sh). Le coeur.env qu'on y ecrivait disparaissait donc au premier
-# boot, pour ne jamais revenir - N_MS retombait a 1, MS#2 restait inconnu du HLR,
-# et start-direct.sh le lancait quand meme. /opt/GSM/qemu-src/environment, lui,
-# n'a jamais existe : ce depot-la nomme son repertoire "environnement".
-# /etc/osmocom ne fait partie d'aucun arbre reclone : ce qui y est ecrit reste.
+# PAS dans /opt/GSM/osmo_egprs/environment : ce fichier n'est pas dans git. Il y
+# a survecu au demarrage tant que personne ne mettait le depot a jour, et pas une
+# minute de plus - a l'epoque osmo-update.service effacait et reclonait l'arbre
+# a chaque boot (wipe=1), aujourd'hui "osmo-update" fait un git fetch, dont le
+# reset --hard emporte de la meme facon ce qui n'est pas suivi. N_MS retombait
+# a 1, MS#2 restait inconnu du HLR, et start-direct.sh le lancait quand meme.
+# /opt/GSM/qemu-src/environment, lui, n'a jamais existe : ce depot-la nomme son
+# repertoire "environnement".
+# /etc/osmocom n'appartient a aucun depot : ce qui y est ecrit reste.
 mkdir -p "$ROOTFS/etc/osmocom"
 cat > "$ROOTFS/etc/osmocom/coeur.env" <<COEUR
 # coeur.env - genere par build-iso.sh. Aligne le nombre d'abonnes provisionnes
@@ -539,33 +567,38 @@ echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_
 # heure de construction, et la taille de l'ISO etait le seul indice.
 # Echouer ici coute une relance ; ne pas echouer coute une ISO inutilisable
 # (sans qemu-system-arm, MS#1 ne demarre pas) et deux fois plus lourde.
-# ── qemu-src RESTE dans l'ISO : on ELAGUE, on n'EFFACE PAS ──────────────────
+# ── qemu-src : l'arbre part ENTIER, .git et build/ compris ─────────────────
 # [2026-08-27] L'effacement pur ("rm -rf $ROOTFS/opt/GSM/qemu-src") reglait le
 # poids, mais retirait de l'image le depot dont run.sh, run_modules/ et
 # environnement/ SONT le mode qemu : l'ISO ne savait plus emuler le Calypso par
 # elle-meme et dependait, a CHAQUE demarrage, d'un reclone GitHub par
-# osmo-update.service. Pas de reseau au boot = pas de MS, et un arbre reclone
-# arrive sans build/, donc sans QEMU_BIN (voir osmo-qemu-link, etape [6/9]).
+# osmo-update.service. Pas de reseau au boot = pas de MS. Et l'arbre reclone
+# arrivait sans build/, donc sans QEMU_BIN : la pile s'arretait au premier
+# module alors que le binaire etait la, dans le PATH.
 #
-# Le poids ne venait pas des sources : dans l'image, sur 1,7 Go, build/ pese
-# 1,5 Go (objets de compilation) et .git 96 Mo (historique QEMU complet). Le
-# reste - ce qui fait tourner la chaine - tient en ~110 Mo, une fraction de
-# l'ISO une fois squashfs. On retire donc les deux gros, et RIEN d'autre.
+# On ne retire donc plus RIEN de cet arbre :
+#   - .git (96 Mo) : c'est lui qui fait la difference entre une mise a jour
+#     incrementale (git fetch) et un reclone complet. Sans .git, update.sh
+#     n'avait pas le choix : il effacait et reclonait a chaque demarrage.
+#   - build/ (1,5 Go d'objets) : il porte le qemu-system-arm COMPILE, celui que
+#     environnement/paths.env cherche sous $QEMU_TREE/build/qemu-system-arm.
+#     L'arbre embarque est donc utilisable tel quel, sans reseau et sans lien.
+#
+# Ce que ca coute : ~1,6 Go de plus dans le squashfs (moins une fois compresse).
+# A surveiller si l'ISO doit tenir en RAM (toram).
 QSRC="$ROOTFS/opt/GSM/qemu-src"
-if [ ! -d "$QSRC" ]; then
-    # L'image ne l'avait pas : on prend l'arbre de l'hote, meme elagage.
+if [ -d "$QSRC" ]; then
+    echo -e "  ${GREEN}✓${NC} qemu-src conserve ENTIER ($(du -sh "$QSRC" | cut -f1), .git + build/ compris)"
+else
+    # L'image ne l'avait pas : on prend l'arbre de l'hote, entier lui aussi.
     QSRC_HOST="${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}"
     if [ -d "$QSRC_HOST" ]; then
         mkdir -p "$ROOTFS/opt/GSM"
-        tar -C "$QSRC_HOST" --exclude=./.git --exclude=./build -cf - . \
-            | (mkdir -p "$QSRC" && tar -C "$QSRC" -xf -)
-        echo -e "  ${GREEN}✓${NC} qemu-src repris de l'hote ${CYAN}${QSRC_HOST}${NC} (sans .git ni build/)"
+        cp -a "$QSRC_HOST" "$QSRC"
+        echo -e "  ${GREEN}✓${NC} qemu-src repris de l'hote ${CYAN}${QSRC_HOST}${NC} ($(du -sh "$QSRC" | cut -f1))"
     else
         echo -e "  ${YELLOW}!${NC} qemu-src introuvable (ni image, ni hote) - l'ISO n'aura pas le mode qemu" >&2
     fi
-else
-    rm -rf "$QSRC/.git" "$QSRC/build"
-    echo -e "  ${GREEN}✓${NC} qemu-src conserve, elague ($(du -sh "$QSRC" | cut -f1) : sans .git ni build/)"
 fi
 
 # Le binaire vient peut-etre DEJA de l'image : "docker cp $CID:/usr/local/bin/."
@@ -613,17 +646,17 @@ else
     # emuler. Pour l'operateur, le test ci-dessus a deja arrete la construction.
     echo -e "  ${CYAN}Role inter-STP : pas de QEMU (aucun MS a emuler)${NC}"
 fi
-# ── QEMU_BIN dans l'arbre : le lien que paths.env cherche ──────────────────
+# ── QEMU_BIN dans l'arbre : le lien, SEULEMENT si le binaire n'y est pas ───
 # environnement/paths.env du depot qemu resout QEMU_BIN a
-# $QEMU_TREE/build/qemu-system-arm. build/ vient d'etre elague (1,5 Go d'objets
-# de compilation) et le binaire, lui, est installe dans /usr/local/bin : sans ce
-# lien, run.sh s'arrete des le premier module -
+# $QEMU_TREE/build/qemu-system-arm. L'arbre embarque le porte deja (build/ part
+# entier) : dans ce cas on ne touche a RIEN - un "ln -sf" par-dessus remplacerait
+# le binaire compile par un lien, c'est-a-dire l'effacerait.
+# Le lien ne sert qu'au cas contraire (arbre venu d'ailleurs, build/ absent) :
+# sans lui, run.sh s'arrete des le premier module -
 #     [FAIL] Prerequisite checks (dépendances introuvables : QEMU_BIN)
-# - alors que le binaire est la, dans le PATH. Un lien, pas une copie : l'ISO
-# tient en RAM et le binaire pese ~30 Mo.
-# osmo-qemu-link.service (etape [6/9]) refait le meme lien a chaque demarrage,
-# pour le cas ou osmo-update.service reclone l'arbre par-dessus.
-if [ -d "$QSRC" ]; then
+# - alors que le binaire est la, dans /usr/local/bin.
+# osmo-qemu-link.service (etape [6/9]) applique la meme regle a chaque demarrage.
+if [ -d "$QSRC" ] && [ ! -e "$QSRC/build/qemu-system-arm" ]; then
     qbin=""
     for c in "$ROOTFS/usr/local/bin/qemu-system-arm" \
              "$ROOTFS${qpfx:-/usr/local}/bin/qemu-system-arm"; do
@@ -636,6 +669,8 @@ if [ -d "$QSRC" ]; then
     elif [ "$ISO_ROLE" != "interstp" ]; then
         echo -e "  ${YELLOW}!${NC} binaire QEMU introuvable dans le rootfs - QEMU_BIN restera non resolu" >&2
     fi
+elif [ -e "$QSRC/build/qemu-system-arm" ]; then
+    echo -e "  ${GREEN}✓${NC} QEMU_BIN : ${CYAN}/opt/GSM/qemu-src/build/qemu-system-arm${NC} (binaire compile de l'arbre)"
 fi
 
 # ── Keymaps QEMU : 917 ko qui decident si la machine demarre ────────────────
@@ -757,11 +792,19 @@ if [ -n "$LOCAL_WEB" ] && [ -f "$LOCAL_WEB/server.js" ]; then
     [ -d "$LOCAL_WEB/web" ]          && cp -r "$LOCAL_WEB/web/."     "$WEB/web/"
     [ -f "$LOCAL_WEB/start-web.sh" ] && cp "$LOCAL_WEB/start-web.sh" "$WEB/" && chmod +x "$WEB/start-web.sh"
     [ -f "$LOCAL_WEB/Dockerfile" ]   && cp "$LOCAL_WEB/Dockerfile"   "$WEB/Dockerfile"
+    # Le depot suit les fichiers : c'est lui qui evite le reclone au demarrage.
+    [ -d "$LOCAL_WEB/.git" ]         && cp -a "$LOCAL_WEB/.git"     "$WEB/"
     echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis source LOCALE ($LOCAL_WEB)"
 else
     WEB_TMP="$WORK/osmo-egprs-web"
-    rm -rf "$WEB_TMP"
     git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2 || true
+    # [2026-08-27] Le clone entier part dans l'image, .git COMPRIS. Avant, on ne
+    # prelevait que quelques fichiers : l'ISO recevait un dossier sans depot, et
+    # update.sh, faute de .git, ne pouvait qu'EFFACER et RECLONER a chaque
+    # demarrage (wipe=1) - sans reseau, plus de dashboard du tout.
+    # cp -a : les fichiers deja poses par un override local ne sont pas effaces,
+    # ils sont recouverts par ceux du depot.
+    [ -d "$WEB_TMP/.git" ] && cp -a "$WEB_TMP/." "$WEB/"
     # Layout REEL du repo : server.js / package.json / web/ / start-web.sh a la
     # RACINE (fallback sous server/ pour un ancien layout).
     if   [ -f "$WEB_TMP/server.js" ];        then cp "$WEB_TMP/server.js"        "$WEB/server.js"
@@ -771,7 +814,6 @@ else
     [ -d "$WEB_TMP/web" ]          && cp -r "$WEB_TMP/web/."     "$WEB/web/"
     [ -f "$WEB_TMP/start-web.sh" ] && cp "$WEB_TMP/start-web.sh" "$WEB/" && chmod +x "$WEB/start-web.sh"
     [ -f "$WEB_TMP/Dockerfile" ]   && cp "$WEB_TMP/Dockerfile"   "$WEB/Dockerfile"
-    rm -rf "$WEB_TMP"
     if [ -f "$WEB/server.js" ]; then
         echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis le git ${CYAN}$WEB_REPO${NC} ($WEB_BRANCH)"
     else
@@ -923,7 +965,10 @@ mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
 cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 
-chroot "$ROOTFS" bash -c '
+# ISO_ROLE passe par l environnement : le script est en quotes simples, rien n y
+# est substitue a l ecriture - c est voulu (aucune surprise d expansion), donc la
+# seule facon de lui dire quelle image on construit est de le lui passer.
+chroot "$ROOTFS" env ISO_ROLE="$ISO_ROLE" bash -c '
 set -e; export DEBIAN_FRONTEND=noninteractive
 export DPKG_OPTIONS="--force-confold --force-confdef"
 
@@ -963,59 +1008,72 @@ deb http://archive.ubuntu.com/ubuntu jammy-security   main universe multiverse
 SOURCES
 apt-get update -qq
 
-# ── Outils de diagnostic : nc, socat, tcpdump, git ─────────────────────────
-# ICI, en premier, et pas plus bas avec les autres : ce chroot tourne sous
-# set -e. Place dans un des groupes suivants, le moindre echec en amont - un
-# build-dep, un miroir qui bronche - emporterait cette ligne avec lui, et l ISO
-# sortirait sans eux sans que rien ne le dise. Juste apres apt-get update, il
-# n y a plus rien qui puisse les faire sauter.
+# ── UN SEUL apt-get install ────────────────────────────────────────────────
+# [2026-08-27] Il y en avait cinq a la suite. apt resout, telecharge puis
+# configure a CHAQUE appel : cinq resolutions de dependances, cinq lots de
+# telechargement qui ne se recouvrent pas, et dpkg qui reconfigure ce que le lot
+# suivant vient de tirer. Un seul appel resout une fois, telecharge en parallele
+# et deballe dans un seul ordre - c est le poste le plus lourd du chroot.
 #
+# L ordre compte encore : cet appel reste JUSTE APRES apt-get update, avant le
+# build-dep. Ce chroot tourne sous set -e ; un build-dep qui echoue ne doit pas
+# emporter avec lui les outils sans lesquels l ISO sort muette :
 #   nc       le VTY est la seule source de verite sur l etat SS7 : tout le
 #            depot l interroge par "nc 127.0.0.1 4239". Sans nc, les checks ne
 #            se plaignent pas - ils affichent un diagnostic VIDE, qui se lit
 #            comme "rien n est attache" alors que tout va bien.
-#   tcpdump  les captures GSMTAP/M3UA. Sans lui, une capture lancee en arriere
-#            plan echoue en silence et le pcap reste vide.
-#   git      la synchro du depot depuis la VM (update.sh).
 #   socat    le transport VTY que run_modules/_lib/core.sh prend EN PREMIER, et
 #            sans lequel 21-abonnes-hlr.sh se rabat sur telnet - qui ne rend pas
-#            la main sur EOF de stdin. Il manquait a l image : update.sh le
-#            reinstallait a CHAQUE boot, ce qui exige un reseau au demarrage et
-#            laisse le premier lancement sans provisionnement HLR.
-apt-get install -y $APT_OPTS --no-install-recommends netcat-openbsd socat tcpdump git logrotate
+#            la main sur EOF de stdin, donc pas de provisionnement HLR.
+#   tcpdump  les captures GSMTAP/M3UA. Sans lui, une capture lancee en arriere
+#            plan echoue en silence et le pcap reste vide.
+#   git      les trois depots embarques gardent leur .git : c est par lui qu on
+#            les met a jour, sur la machine, sans les recloner.
+#
+# Deux listes, parce que les deux images ne font pas le meme metier. Le hub
+# inter-STP ne fait que router du M3UA : ni radio, ni QEMU, ni audio, ni PBX.
+# Lui installer asterisk, pulseaudio et ffmpeg, c est du poids et des services
+# en plus pour rien.
+PKGS="netcat-openbsd socat tcpdump git logrotate
+      linux-image-generic initramfs-tools
+      live-boot live-boot-initramfs-tools
+      libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2
+      libgnutls30 libgnutls28-dev libmnl-dev libmnl0
+      libortp-dev libdbi1 libdbd-sqlite3 sqlite3
+      libfftw3-single3 libusb-1.0-0
+      libgsm1 libasound2
+      libsofia-sip-ua-glib3
+      liburing2 libslirp0
+      iproute2 iptables net-tools lksctp-tools
+      tmux telnet expect whiptail
+      lsb-release openssh-server
+      console-setup keyboard-configuration locales
+      psmisc
+      python3 python3-scapy
+      tshark wireshark-common"
+
+if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
+    # Radio, emulation Calypso, audio, PBX : le noeud operateur seulement.
+    PKGS="$PKGS
+      libasound2-plugins pulseaudio pulseaudio-utils alsa-utils
+      binutils-arm-none-eabi gdb-multiarch
+      asterisk
+      ffmpeg"
+fi
+
+apt-get install -y $APT_OPTS --no-install-recommends $PKGS
 
 # deb-src + build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw,
 # gmp, log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local.
 # Genere les lignes deb-src a partir des deb (tous composants), comme le Dockerfile.
-sed -nE "s|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p" \
-    /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list
-apt-get update -qq
-apt-get build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
-
-apt-get install -y $APT_OPTS --no-install-recommends \
-    linux-image-generic initramfs-tools \
-    live-boot live-boot-initramfs-tools
-
-apt-get install -y $APT_OPTS --no-install-recommends \
-    libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2 libgnutls30 libgnutls28-dev libmnl-dev \
-    libortp-dev libdbi1 libdbd-sqlite3 sqlite3 \
-    libfftw3-single3 libusb-1.0-0 \
-    libgsm1 libasound2 libasound2-plugins \
-    libsofia-sip-ua-glib3 libmnl0 \
-    liburing2 libslirp0
-
-apt-get install -y $APT_OPTS --no-install-recommends \
-    iproute2 iptables net-tools lksctp-tools \
-    tmux telnet expect whiptail \
-    lsb-release pulseaudio pulseaudio-utils alsa-utils openssh-server \
-    console-setup keyboard-configuration locales \
-    binutils-arm-none-eabi psmisc gdb-multiarch
-
-apt-get install -y $APT_OPTS --no-install-recommends \
-    python3 python3-scapy \
-    tshark wireshark-common \
-    asterisk \
-    ffmpeg
+# Le hub n a pas de gr-gsm : lui faire tirer ~80 Mo d index Sources et une
+# cloture de build GNU Radio, c est quelques minutes de construction pour rien.
+if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
+    sed -nE "s|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p" \
+        /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list
+    apt-get update -qq
+    apt-get build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
+fi
 
 echo "/usr/local/lib" > /etc/ld.so.conf.d/osmocom.conf
 ldconfig
@@ -1040,8 +1098,8 @@ update-initramfs -u -k "$KERNEL"
 
 # deb-src.list part avec le reste : les index Sources qu il fait telecharger
 # pesent ~80 Mo, et sur un live en toram ils sont repris en RAM au premier
-# "apt-get update" du boot (update.sh en fait un). Ils n ont servi qu au
-# build-dep gnuradio ci-dessus, qui est deja passe.
+# "apt-get update" du boot. Ils n ont servi qu au build-dep gnuradio ci-dessus,
+# qui est deja passe - et plus rien n installe de paquet au demarrage.
 apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 rm -f /etc/apt/sources.list.d/deb-src.list
 '
@@ -1137,71 +1195,220 @@ auto lo
 iface lo inet loopback
 EOF
 
-# ── Service startup : execute le gist tools/update.sh (bbaranoff) au demarrage ──────
-cat > "$ROOTFS/usr/local/sbin/osmo-update.sh" <<'UPD'
-#!/bin/bash
-# osmo-update.sh - recupere et execute tools/update.sh (repo bbaranoff/osmo_egprs) au boot.
-set -u
-URL="https://raw.githubusercontent.com/bbaranoff/osmo_egprs/refs/heads/main/update.sh"
-LOG=/var/log/osmo-update.log
-exec >>"$LOG" 2>&1
-echo "===== osmo-update $(date) ====="
-for i in 1 2 3 4 5; do
-    if curl -fsSL "$URL" -o /tmp/osmo-update.gist.sh; then
-        chmod +x /tmp/osmo-update.gist.sh
-        echo "--- execution tools/update.sh ---"
-        bash /tmp/osmo-update.gist.sh; rc=$?
-        echo "tools/update.sh termine (rc=$rc)"
-        # ── Normalisation fstab : retire le doublon /tmp re-injecte par tools/update.sh ──
-        # tools/update.sh (gist) re-ajoute 'tmpfs /tmp tmpfs nosuid,nodev 0 0' (SANS size=),
-        # creant un doublon avec l'entree canonique 'tmpfs /tmp ... size en pourcentage' posee au build.
-        # On supprime toute ligne 'tmpfs /tmp tmpfs ...' depourvue de size= (le doublon),
-        # en conservant l'entree 2G. Idempotent : sans effet si le doublon est absent.
-        if [ -f /etc/fstab ]; then
-            sed -i -E '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]+tmpfs[[:space:]]/d' /etc/fstab
-            systemctl daemon-reload 2>/dev/null || true
-            echo "fstab normalise (/tmp gere par systemd tmp.mount)"
-        fi
-        exit 0
-    fi
-    echo "curl echoue (tentative $i/5), retry dans 5s..."; sleep 5
-done
-echo "impossible de recuperer tools/update.sh apres 5 tentatives (pas de reseau ?)"
-exit 0
-UPD
-chmod +x "$ROOTFS/usr/local/sbin/osmo-update.sh"
+# ── Animation SMS a l'ouverture de session ─────────────────────────────────
+# [2026-08-27] Ce qui vivait ici : osmo-update.service, qui a CHAQUE demarrage
+# telechargeait update.sh depuis GitHub et l'executait - lequel effacait puis
+# reclonait osmo_egprs et osmo-egprs-web, resynchronisait qemu-src et installait
+# socat a coups d'apt. Le contenu de la machine etait donc decide au boot par le
+# reseau, et sans reseau il ne restait rien des arbres effaces.
+#
+# Tout cela se fait ICI, une fois, a la construction : les trois depots partent
+# dans l'image AVEC leur .git (etapes [5a/9] et [5b/9]), qemu-src avec son
+# build/ compile, les paquets sont installes dans le rootfs (etape 5), et le
+# service du dashboard est pose plus bas. Du update.sh il ne reste que ce qui
+# exige un terminal et quelqu'un devant : l'animation SMS.
+#
+# Elle est jouee par le PROFIL, pas par un service : un oneshot systemd tourne
+# avant qu'un terminal existe, et sa sortie part dans un log que personne ne lit.
+# /etc/profile.d est source dans l'ordre alphabetique - 01-osmo-disclaimer.sh
+# d'abord, 99-osmo-sms.sh ensuite : l'utilisateur lit ce qu'il peut lancer, puis
+# le SMS arrive. Et le fichier est ECRIT DANS L'IMAGE, donc present quand le
+# shell developpe son "for i in /etc/profile.d/*.sh" : c'est precisement ce qui
+# manquait a l'ancienne version, posee trop tard par un service, et qui
+# l'obligeait a armer un declencheur separe sur /dev/tty1.
+install -Dm755 "$DIR/update.sh" "$ROOTFS/usr/local/sbin/osmo-sms.sh"
+cat > "$ROOTFS/etc/profile.d/99-osmo-sms.sh" <<'EOF'
+# 99-osmo-sms.sh - pose par build-iso.sh. Joue l'arrivee d'un SMS, une fois par
+# demarrage. Source APRES 01-keyboard-setup.sh (ordre alphabetique).
+[ -n "${BASH_VERSION:-}" ] || return 0
+case $- in *i*) ;; *) return 0 ;; esac      # session interactive seulement
+[ -x /usr/local/sbin/osmo-sms.sh ] || return 0
+# /run est un tmpfs que le noyau recree vide a chaque demarrage : l'animation se
+# rejoue a chaque boot, mais pas a chaque tty ni a chaque "su -".
+[ -e /run/osmo-sms.done ] && return 0
+: > /run/osmo-sms.done
+/usr/local/sbin/osmo-sms.sh
+EOF
+chmod +x "$ROOTFS/etc/profile.d/99-osmo-sms.sh"
+echo -e "  ${GREEN}✓${NC} animation SMS a l'ouverture de session (99-osmo-sms.sh)"
 
+# ── /usr/local/bin/osmo-update : la mise a jour, EN PLACE, par git ─────────
+# [2026-08-27] L'ancien mecanisme n'etait pas une mise a jour, c'etait un
+# remplacement : effacer /opt/GSM/osmo_egprs et /opt/osmo-egprs-web, recloner
+# depuis GitHub, a chaque demarrage. Il fallait un reseau pour demarrer, ce qui
+# tournait n'etait jamais ce que l'ISO portait, et tout ce qui avait ete pose
+# dans un arbre disparaissait au boot suivant.
+#
+# Les trois depots partent maintenant dans l'image AVEC leur .git : il y a donc
+# un HEAD auquel se comparer, et la mise a jour redevient ce qu'elle doit etre -
+# un fetch et une avance rapide. Rien n'est efface, rien n'est reclone, et une
+# machine sans reseau garde exactement ce avec quoi elle a ete gravee.
+cat > "$ROOTFS/usr/local/bin/osmo-update" <<'OSMOUPD'
+#!/bin/bash
+# ══════════════════════════════════════════════════════════════════════════════
+# osmo-update - met a jour, en place, les depots embarques dans l'image.
+#
+#   osmo-update              les trois depots
+#   osmo-update qemu-src     un seul (osmo_egprs | osmo-egprs-web | qemu-src)
+#   osmo-update --check      dit ce qui est en retard, n'ecrit rien
+#   osmo-update --quiet      sans couleurs ni fioritures (journal, cron)
+#   osmo-update --boot       mode demarrage : --quiet, journalise, sort toujours 0
+#
+# Ce qu'il ne fait PAS, deliberement : effacer un arbre, recloner un depot,
+# installer un paquet. Une machine qui demarre n'a rien a aller chercher.
+# ══════════════════════════════════════════════════════════════════════════════
+set -u
+
+G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; C='\033[0;36m'; B='\033[1m'; N='\033[0m'
+CHECK=0; QUIET=0; BOOT=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --check)   CHECK=1 ;;
+        --quiet)   QUIET=1 ;;
+        --boot)    BOOT=1; QUIET=1 ;;
+        -h|--help) sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*)        echo "option inconnue : $1" >&2; exit 2 ;;
+        *)         break ;;
+    esac
+    shift
+done
+[ "$QUIET" = "1" ] && { G=''; Y=''; R=''; C=''; B=''; N=''; }
+
+# Au demarrage personne ne lit l'ecran : la sortie part dans le journal, et le
+# code de retour ne doit jamais retarder ni bloquer multi-user.target.
+if [ "$BOOT" = "1" ]; then
+    exec >>/var/log/osmo-update.log 2>&1
+    echo "===== osmo-update (boot) $(date '+%F %T') ====="
+fi
+
+[ "$(id -u)" -eq 0 ] || { echo "Root requis." >&2; exit 1; }
+
+# nom|chemin - les chemins que cherchent deja start-direct.sh, le dashboard et
+# environnement/paths.env. En changer un ici ne deplacerait pas ceux qui les lisent.
+REPOS="osmo_egprs|/opt/GSM/osmo_egprs
+osmo-egprs-web|/opt/osmo-egprs-web
+qemu-src|/opt/GSM/qemu-src"
+
+WANT="${1:-}"
+rc=0; web_moved=0
+
+while IFS='|' read -r name dir; do
+    [ -n "$name" ] || continue
+    [ -z "$WANT" ] || [ "$WANT" = "$name" ] || continue
+    found=1
+    printf "  ${B}%-16s${N} ${C}%s${N}\n" "$name" "$dir"
+
+    if [ ! -d "$dir" ]; then
+        printf "    ${R}✗${N} absent - l'image ne le portait pas\n"; rc=1; continue
+    fi
+    if [ ! -d "$dir/.git" ]; then
+        # On ne reclone pas par-dessus : ce serait effacer un arbre dont on ne
+        # sait pas ce qu'il contient. On le dit, et on passe.
+        printf "    ${Y}⚠${N} pas de depot (.git absent) - laisse tel quel\n"; rc=1; continue
+    fi
+
+    br="$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)" || br=""
+    [ -n "$br" ] || br=main
+
+    # Un depot livre en --depth 1 est GREFFE : son unique commit n'a pas de
+    # parent, donc rien de ce que le serveur renvoie n'a d'ancetre commun avec
+    # lui. Le refetcher en --depth 1 garde cette propriete (et le depot reste
+    # leger) ; un depot complet, lui, se fetch complet - sinon on lui ferait
+    # perdre l'ancestralite qui permet justement l'avance rapide.
+    if git -C "$dir" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
+        fetch_ok=$(git -C "$dir" fetch --depth 1 --quiet origin "$br" 2>/dev/null && echo 1)
+    else
+        fetch_ok=$(git -C "$dir" fetch --quiet origin "$br" 2>/dev/null && echo 1)
+    fi
+    if [ -z "${fetch_ok:-}" ]; then
+        printf "    ${Y}⚠${N} fetch impossible (reseau ?) - copie locale conservee\n"; rc=1; continue
+    fi
+
+    local_h="$(git -C "$dir" rev-parse HEAD 2>/dev/null)"
+    remote_h="$(git -C "$dir" rev-parse FETCH_HEAD 2>/dev/null)"
+    if [ "$local_h" = "$remote_h" ]; then
+        printf "    ${G}✓${N} deja a jour - %s\n" "$(git -C "$dir" log -1 --format='%h %s')"
+        continue
+    fi
+    if [ "$CHECK" = "1" ]; then
+        printf "    ${Y}→${N} en retard : %s -> %s\n" "${local_h:0:7}" "${remote_h:0:7}"
+        continue
+    fi
+
+    # Trois cas, et un seul refus. Le refus porte sur le TRAVAIL LOCAL, jamais
+    # sur l'historique : c'est la difference avec l'ancien "rm -rf puis clone",
+    # qui effacait sans distinguer.
+    if git -C "$dir" merge-base --is-ancestor HEAD FETCH_HEAD 2>/dev/null \
+       && git -C "$dir" merge --ff-only FETCH_HEAD >/dev/null 2>&1; then
+        # 1. Avance rapide : on est en retard sur la meme branche.
+        printf "    ${G}✓${N} %s\n" "$(git -C "$dir" log -1 --format='%h %s')"
+        [ "$name" = "osmo-egprs-web" ] && web_moved=1
+    elif [ -z "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
+        # 2. Pas d'ancetre commun (depot greffe par --depth 1) mais arbre propre :
+        #    il n'y a rien a perdre, on aligne sur le serveur.
+        if git -C "$dir" reset --hard FETCH_HEAD >/dev/null 2>&1; then
+            printf "    ${G}✓${N} aligne sur origin/%s - %s\n" "$br" "$(git -C "$dir" log -1 --format='%h %s')"
+            [ "$name" = "osmo-egprs-web" ] && web_moved=1
+        else
+            printf "    ${Y}⚠${N} alignement impossible - arbre inchange\n"; rc=1
+        fi
+    else
+        # 3. Des fichiers ont ete modifies ici : on ne touche a rien, on le dit.
+        printf "    ${Y}⚠${N} modifications locales - rien n'a ete ecrase\n"
+        printf "       a la main : ${C}git -C %s status${N}\n" "$dir"
+        rc=1
+    fi
+done <<REPOEOF
+$REPOS
+REPOEOF
+
+if [ -z "${found:-}" ]; then
+    echo "depot inconnu : $WANT  (osmo_egprs | osmo-egprs-web | qemu-src)" >&2
+    exit 2
+fi
+
+# Le dashboard tourne en service : un depot avance ne change rien tant que le
+# demon fait tourner l'ancien server.js.
+if [ "$web_moved" = "1" ]; then
+    [ -f /opt/osmo-egprs-web/package.json ] && \
+        (cd /opt/osmo-egprs-web && npm install --production >/dev/null 2>&1 || true)
+    systemctl try-restart osmo-egprs-web >/dev/null 2>&1 || true
+    printf "  ${G}✓${N} dashboard relance\n"
+fi
+
+[ "$BOOT" = "1" ] && exit 0
+exit $rc
+OSMOUPD
+chmod +x "$ROOTFS/usr/local/bin/osmo-update"
+
+# Au demarrage : apres le reseau, sans le bloquer. Type=oneshot + un ExecStart
+# qui sort toujours 0 en mode --boot : une machine hors ligne demarre pareil.
 cat > "$ROOTFS/etc/systemd/system/osmo-update.service" <<'EOF'
 [Unit]
-Description=osmo_egprs startup update (gist tools/update.sh)
+Description=osmo_egprs - mise a jour des depots embarques (git, en place)
 Wants=network-online.target
 After=network-online.target systemd-networkd-wait-online.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/sbin/osmo-update.sh
+ExecStart=/usr/local/bin/osmo-update --boot
 [Install]
 WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} osmo-update (execute le gist tools/update.sh au demarrage)"
+echo -e "  ${GREEN}✓${NC} osmo-update (/usr/local/bin, + service au demarrage : git fetch, jamais de reclone)"
 
 # ── QEMU_BIN apres le reclone : build/qemu-system-arm dans l'arbre qemu-src ──
 # [2026-08-27] Deux decisions justes, prises separement, se contredisent :
 #
-#   1. [5b/9] ci-dessus embarque l'arbre qemu-src ELAGUE : sans .git (96 Mo
-#      d'historique QEMU) et sans build/ (1,5 Go d'objets). Le binaire, lui,
-#      est dans /usr/local/bin, et un lien build/qemu-system-arm y renvoie.
-#   2. update.sh (recupere du depot au demarrage) resynchronise qemu-src depuis
-#      GitHub. Faute de .git, ce n'est pas un fetch incremental mais un clone
-#      FRAIS, qui remplace l'arbre - donc un arbre SANS build/, et le lien
-#      pose a la construction disparait avec lui.
-#
-# Or environnement/paths.env du depot qemu resout QEMU_BIN a
-# $QEMU_TREE/build/qemu-system-arm. Apres le boot, ce chemin n'existe pas et
-# start-direct.sh s'arrete des le premier module :
+# L'arbre qemu-src part maintenant entier - .git et build/ compris - donc
+# QEMU_BIN est resolu des la gravure, et ce service n'a rien a faire. Il est la
+# pour le seul cas ou l'arbre perdrait son build/ : quelqu'un qui le reclone a
+# la main, ou qui remplace /opt/GSM/qemu-src par un checkout frais. Sans build/,
+# environnement/paths.env resout QEMU_BIN a un chemin inexistant et la pile
+# s'arrete des le premier module :
 #     [FAIL] Prerequisite checks (dépendances introuvables : QEMU_BIN)
-# — la pile ne demarre pas du tout, alors que le binaire est la, dans le PATH.
+# — alors que le binaire est la, dans /usr/local/bin.
 #
 # On recree donc le seul chemin que paths.env cherche, apres le reclone. Un lien
 # symbolique, pas une copie : le binaire fait ~30 Mo et l'ISO tient en RAM.
@@ -1238,9 +1445,7 @@ chmod +x "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh"
 cat > "$ROOTFS/etc/systemd/system/osmo-qemu-link.service" <<'EOF'
 [Unit]
 Description=osmo_egprs - QEMU_BIN dans l'arbre qemu-src (build/qemu-system-arm)
-# APRES le reclone : c'est lui qui recree l'arbre, sans build/.
-After=osmo-update.service
-Wants=osmo-update.service
+After=local-fs.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
@@ -1383,7 +1588,7 @@ ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
 # est pose ici, par le demon lui-meme, donc il survit a un restart du service.
 # Non fatal (le script sort 0 quoi qu'il arrive) : l'audio ne doit jamais
 # empecher la pile de monter. AUDIO_LOCAL_LOOPBACK=0 le neutralise.
-# Passe par un wrapper /usr/local/sbin (meme patron que osmo-update.sh) : une
+# Passe par un wrapper /usr/local/sbin (meme patron que osmo-sms.sh) : une
 # directive `ExecStartPost=/bin/sh -c "... \" ... \" ..."` avec guillemets
 # imbriques est ACCEPTEE par `systemctl cat` mais rejetee par le parseur -
 # `systemctl show -p ExecStartPost` revient alors VIDE et rien ne s'execute.
@@ -1459,8 +1664,9 @@ LOGO
   printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
   # Le chemin annonce ici est celui de l'arbre FIGE, comme le message de login
   # et comme le lien osmo-start-direct. Il nommait /opt/GSM/osmo_egprs, que
-  # osmo-update.service efface et reclone au demarrage : sans reseau au boot, la
-  # premiere chose que lit l'utilisateur designe un arbre qui peut ne pas etre la.
+  # osmo-update.service effacait et reclonait au demarrage : sans reseau au boot,
+  # la premiere chose que lisait l'utilisateur designait un arbre qui pouvait ne
+  # pas etre la. Le reclone a disparu, l'arbre fige reste - il ne depend de rien.
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/osmo_egprs/start-direct.sh"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab Calypso/QEMU (A5/1)"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "Dashboard web  ->  http://<vm-ip>:8080"
@@ -1468,6 +1674,7 @@ LOGO
   printf "${B}  ║${N} ${Y}%-*s${N} ${B}║${N}\n" $((W-2)) "Wiki / docs        ->  pl4y.store"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "ssh root@<vm-ip>   -> mot de passe : osmo"
   printf "${B}  ║${N} ${Y}%-*s${N} ${B}║${N}\n" $((W-2)) "loadkeys fr   -> changer le clavier (apres boot)"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "osmo-update   -> met a jour les depots (git en place)"
   printf "${B}  ╚"; printf '═%.0s' $(seq 1 $W); printf "╝${N}\n\n"
 } > "$ROOTFS/etc/motd"
 
@@ -1508,9 +1715,10 @@ tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=20%   0 0
 FSTAB
 # /tmp : PAS dans fstab. Une entree fstab /tmp entre en collision avec l'unite
 # systemd tmp.mount -> "systemd-fstab-generator: tmp.mount already exists,
-# Duplicate entry in /etc/fstab" (generateur en exit 1) ; en plus tools/update.sh la
-# reinjecte au boot. On gere /tmp en natif systemd via un drop-in size=15% : une
-# seule source, zero doublon possible quoi que fasse update.sh.
+# Duplicate entry in /etc/fstab" (generateur en exit 1) ; et l'ancien update.sh
+# la reinjectait au boot, ce qui obligeait a la retirer apres coup. On gere /tmp
+# en natif systemd via un drop-in size=15% : une seule source, zero doublon -
+# et plus rien, au demarrage, qui reecrive fstab.
 mkdir -p "$ROOTFS/etc/systemd/system/tmp.mount.d"
 cat > "$ROOTFS/etc/systemd/system/tmp.mount.d/size.conf" <<'EOF'
 [Mount]
