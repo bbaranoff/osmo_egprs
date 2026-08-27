@@ -29,7 +29,25 @@ MOD_ENABLED_IF[asterisk]='[ "${NO_OSMO_START:-0}" != 1 ] && [ "${CORE_VOICE:-1}"
 : "${ASTERISK_CFG:=/etc/asterisk/asterisk.conf}"
 
 _ast_cli() { asterisk -rx "$1" 2>/dev/null; }
-_ast_ready() { _ast_cli "core show uptime" | grep -qi 'uptime'; }
+# PAS DE PIPELINE ICI. [2026-08-27] Cette sonde etait ecrite
+#     _ast_cli "core show uptime" | grep -qi 'uptime'
+# et run.sh tourne sous `set -o pipefail`. grep -q sort des la premiere
+# correspondance et ferme le tuyau ; asterisk -rx prend un SIGPIPE et sort en
+# 141 ; pipefail retient 141 pour tout le pipeline. Resultat : la sonde
+# repondait FAUX alors meme que la console repondait. Mesure sur la VM, console
+# ouverte et Asterisk pret :
+#     sans pipefail                -> rc=0
+#     avec pipefail (comme run.sh) -> rc=141, cinq fois sur cinq
+# La barriere ne pouvait donc jamais aboutir : 45 s d'attente puis
+#     console Asterisk : toujours pas pret apres 45s
+# — un message qui accusait Asterisk, le service, le lanceur, tout sauf la
+# sonde. On capture la sortie et on la teste, sans tuyau.
+_ast_ready() {
+    local out
+    out="$(_ast_cli "core show uptime")" || true
+    case "$out" in *[Uu]ptime*) return 0 ;; esac
+    return 1
+}
 
 # =============================================================================
 #  LANCEMENT DIRECT, PROPRIETAIRE UNIQUE  [2026-08-27]
