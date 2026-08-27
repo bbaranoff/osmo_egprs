@@ -1025,7 +1025,7 @@ cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 # ISO_ROLE passe par l environnement : le script est en quotes simples, rien n y
 # est substitue a l ecriture - c est voulu (aucune surprise d expansion), donc la
 # seule facon de lui dire quelle image on construit est de le lui passer.
-chroot "$ROOTFS" env ISO_ROLE="$ISO_ROLE" bash -c '
+chroot "$ROOTFS" env ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" bash -c '
 set -e; export DEBIAN_FRONTEND=noninteractive
 export DPKG_OPTIONS="--force-confold --force-confdef"
 
@@ -1116,6 +1116,27 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
       binutils-arm-none-eabi gdb-multiarch
       asterisk
       ffmpeg"
+
+    # ── En-tetes de build QEMU : l ISO NORMALE SEULEMENT ────────────────────
+    # L image normale embarque /opt/GSM/qemu-src avec son .git ET son build/ :
+    # c est un atelier, on y developpe l emulation Calypso et on doit pouvoir
+    # relancer "make -C build qemu-system-arm" sur la machine. Or les runtimes
+    # seuls (liburing2, libslirp0, libpixman-1-0) ne suffisent pas : ninja
+    # reclame le lien de developpement .so ET l en-tete.
+    #
+    # MESURE DU 2026-08-27, sur l ISO telle que construite jusqu ici :
+    #   ninja: error: '/usr/lib/x86_64-linux-gnu/libpixman-1.so' missing
+    #   include/block/aio.h:18: fatal error: liburing.h: No such file
+    # -> la recompilation etait IMPOSSIBLE sur la machine, alors que tout
+    # l atelier (sources, .git, build/ deja peuple) etait la pour ca.
+    #
+    # La LITE, elle, n est pas un atelier : elle part de Dockerfile.lite, qui
+    # elague justement les chaines de compilation. Trois paquets -dev de plus
+    # y seraient du poids sans usage - d ou le test sur ISO_LITE.
+    if [ "${ISO_LITE:-0}" != "1" ]; then
+        PKGS="$PKGS
+      liburing-dev libslirp-dev libpixman-1-dev"
+    fi
 fi
 
 apt-get install -y $APT_OPTS --no-install-recommends $PKGS
