@@ -302,6 +302,10 @@ apply_config_templates() {
     # +2 sur le pas de 10 de la BTS principale : 6010/6012, 6020/6022...
     local ipa_unit_id_bts1="${IPA_UNIT_ID_BTS1:-$(( 6000 + op_id * 10 + 2 ))}"
     local bsic="${BSIC:-$(( (op_id * 7) % 64 ))}"
+    # Le side-car a son propre BSIC : c'est lui qui departage deux cellules
+    # dans les mesures du mobile, et deux cellules du meme operateur qui
+    # portent le meme code sont indiscernables l'une de l'autre.
+    local bsic_bts1="${BSIC_BTS1:-$(( (bsic + 1) % 64 ))}"
     local lac="${LAC:-0x000${op_id}}"
     local cell_id="${CELL_ID:-$(( 6000 + op_id ))}"
     # Pas 6000+op_id : le gabarit de la SECONDE BTS
@@ -360,6 +364,7 @@ apply_config_templates() {
         printf 'PLAN_ARFCN_BTS1=%s\n'  "$arfcn_bts1"
         printf 'PLAN_UNIT_ID=%s\n'     "$ipa_unit_id"
         printf 'PLAN_UNIT_ID_BTS1=%s\n' "$ipa_unit_id_bts1"
+        printf 'PLAN_BSIC_BTS1=%s\n'    "$bsic_bts1"
         printf 'PLAN_LAC=%s\n'         "$lac"
         printf 'PLAN_BSIC=%s\n'        "$bsic"
         printf 'PLAN_CELL_ID=%s\n'     "$cell_id"
@@ -399,6 +404,7 @@ apply_config_templates() {
             -e "s|__ARFCN__|${arfcn}|g" -e "s|__IPA_UNIT_ID__|${ipa_unit_id}|g" \
             -e "s|__ARFCN_BTS1__|${arfcn_bts1}|g" \
             -e "s|__IPA_UNIT_ID_BTS1__|${ipa_unit_id_bts1}|g" \
+            -e "s|__BSIC_BTS1__|${bsic_bts1}|g" \
             -e "s|__CELL_ID__|${cell_id}|g" -e "s|__BSIC__|${bsic}|g" -e "s|__LAC__|${lac}|g" \
             -e "s|__BVCI__|${bvci}|g" -e "s|__NSEI__|${nsei}|g" -e "s|__NSVCI__|${nsvci}|g" \
             -e "s|__IMSI__|${imsi}|g" -e "s|__IMEI__|${imei}|g" -e "s|__KI__|${ki}|g" \

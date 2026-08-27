@@ -484,7 +484,7 @@ echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectes"
 # ── osmo_egprs : ARBRE a jour depuis GitHub (branche main), sans depot git ──
 EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-main}"
 EGPRS_TARBALL="https://codeload.github.com/bbaranoff/osmo_egprs/tar.gz/refs/heads/${EGPRS_BRANCH}"
-echo -e "${GREEN}[5d/7] Recuperation osmo_egprs (branche ${EGPRS_BRANCH}, tarball)...${NC}"
+echo -e "${GREEN}[5a/9] Recuperation osmo_egprs (branche ${EGPRS_BRANCH}, tarball)...${NC}"
 stage="$(mktemp -d)"
 if wget -qO- "$EGPRS_TARBALL" | tar -xz -C "$stage" --strip-components=1 \
    && [ -s "$stage/start.sh" ]; then
@@ -526,7 +526,7 @@ echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (/etc/osmoc
 # ecrase qemu-src par le checkout local de la VM, deja sur 'main' avec le binaire
 # build/ a jour. On retire .git (historique QEMU = lourd, inutile a l'execution).
 QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}/build}"
-echo -e "${GREEN}[5d/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
+echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
 # Le rm est HORS de la condition, et l'absence du binaire est FATALE. Avant, les
 # deux etaient dans la branche "binaire present" : sur une machine ou QEMU
 # n'avait pas ete recompile - le cas courant - on tombait dans le repli, qui se
@@ -537,13 +537,34 @@ echo -e "${GREEN}[5d/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_
 # Echouer ici coute une relance ; ne pas echouer coute une ISO inutilisable
 # (sans qemu-system-arm, MS#1 ne demarre pas) et deux fois plus lourde.
 rm -rf "$ROOTFS/opt/GSM/qemu-src"
-if [ ! -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ] && [ "$ISO_ROLE" != "interstp" ]; then
-    echo -e "${RED}${BOLD}[5d/9] qemu-system-arm introuvable : ${QEMU_BUILD_LOCAL}/qemu-system-arm${NC}" >&2
+
+# Le binaire vient peut-etre DEJA de l'image : "docker cp $CID:/usr/local/bin/."
+# (plus haut) copie /usr/local/bin/qemu-system-arm dans le rootfs, et c'est
+# exactement celui que le conteneur utilise pour emuler le Calypso. Exiger en
+# plus un build sur l'HOTE faisait echouer la construction sur une machine ou
+# QEMU n'a jamais ete recompile - le cas courant - alors que l'ISO aurait ete
+# parfaitement utilisable. On ne garde le caractere fatal que pour le vrai
+# probleme : aucun binaire, ni sur l'hote, ni dans l'image.
+#
+# Le pc-bios n'est pas necessaire ici : dans l'image, ni /usr/local/share/qemu
+# ni /usr/local/share/qemu-firmware n'existent, et la machine Calypso demarre
+# sans fichier de firmware QEMU (elle charge sa propre ROM). Les recopier
+# couterait 303 Mo dans une ISO qui tient en RAM.
+ROOTFS_QEMU="$ROOTFS/usr/local/bin/qemu-system-arm"
+if [ ! -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ] \
+   && [ ! -x "$ROOTFS_QEMU" ] && [ "$ISO_ROLE" != "interstp" ]; then
+    echo -e "${RED}${BOLD}[5b/9] qemu-system-arm introuvable${NC}" >&2
+    echo -e "  ${YELLOW}Ni build local : ${QEMU_BUILD_LOCAL}/qemu-system-arm${NC}" >&2
+    echo -e "  ${YELLOW}Ni binaire venu de l'image : ${ROOTFS_QEMU}${NC}" >&2
     echo -e "  ${YELLOW}L'image d'operateur emule le Calypso : sans ce binaire elle n'a pas de MS.${NC}" >&2
-    echo -e "  ${YELLOW}Compilez qemu-src, ou pointez OSMO_QEMU_BUILD sur un build existant.${NC}" >&2
+    echo -e "  ${YELLOW}Trois issues : compiler qemu-src, pointer OSMO_QEMU_BUILD sur un build${NC}" >&2
+    echo -e "  ${YELLOW}existant, ou reconstruire l'image docker qui, elle, porte le binaire.${NC}" >&2
     exit 1
 fi
-if [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
+if [ ! -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ] && [ -x "$ROOTFS_QEMU" ]; then
+    strip --strip-unneeded "$ROOTFS_QEMU" 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} qemu-system-arm repris de l'image ($(du -h "$ROOTFS_QEMU" | cut -f1)), pas de build hote necessaire"
+elif [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
     qpfx="$(sed -n 's/^prefix=//p' "$QEMU_BUILD_LOCAL/config-host.mak" 2>/dev/null)"
     qpfx="${qpfx:-/usr/local}"
 
@@ -563,8 +584,7 @@ else
     echo -e "  ${CYAN}Role inter-STP : pas de QEMU (aucun MS a emuler)${NC}"
 fi
 echo -e "${GREEN}[5c/9] Ajustements osmocom dans le rootfs...${NC}"
-echo -e "${GREEN}[5b/9] Patch configs ISO...${NC}"
-echo -e "${GREEN}[5b/9] Patch configs ISO...${NC}"
+echo -e "${GREEN}[5d/9] Patch configs ISO...${NC}"
 
 if [ -f "$ROOTFS/etc/osmocom/osmo-sgsn.cfg" ]; then
     sed -i \
