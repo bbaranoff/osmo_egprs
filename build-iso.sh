@@ -1530,6 +1530,55 @@ echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de q
     printf 'OSMO_HUB_IP=%s\n' "$ISO_HUB_IP"
 } > "$ROOTFS/etc/osmo-role"
 
+# ── /etc/os-release : l'image se nomme elle-meme ────────────────────────────
+# [2026-08-27] Les trois ISO se presentaient toutes comme "Ubuntu 22.04 LTS".
+# /etc/osmo-role dit deja ce que l'image est, mais lui ne s'affiche nulle part :
+# la banniere de login, `hostnamectl`, les rapports de bug et le tableau de bord
+# lisent os-release. Sur trois machines demarrees cote a cote, rien ne
+# distinguait le hub d'un noeud, ni le noeud complet de sa variante elaguee.
+#
+# ON NE TOUCHE QU'AUX CHAMPS D'AFFICHAGE. ID, VERSION_ID, VERSION_CODENAME et
+# UBUNTU_CODENAME restent ceux d'Ubuntu : apt, add-apt-repository et la moitie
+# des scripts de paquets s'en servent pour choisir leurs depots. Renommer ID
+# casserait l'image bien au-dela de sa banniere.
+# VARIANT / VARIANT_ID sont les champs prevus par os-release(5) pour exactement
+# cette distinction ; IMAGE_ID / IMAGE_VERSION, ceux prevus pour une image
+# construite. On les remplit plutot que d'inventer des noms a nous.
+case "$ISO_ROLE" in
+    interstp) OS_NAME="osmo-operator interstp"; OS_VARIANT_ID="interstp" ;;
+    *)        if [ "$ISO_LITE" = "1" ]; then
+                  OS_NAME="osmo-operator-lite"; OS_VARIANT_ID="operator-lite"
+              else
+                  OS_NAME="osmo-operator";      OS_VARIANT_ID="operator"
+              fi ;;
+esac
+# Le numero de noeud fait partie de l'identite quand il est fige dans l'image :
+# c'est la seule chose qui distingue osmo-operator-1.iso de osmo-operator-2.iso.
+OS_PRETTY="$OS_NAME"
+[ -n "$ISO_NODE" ] && OS_PRETTY="$OS_NAME (noeud $ISO_NODE)"
+
+# /etc/os-release est un lien vers ../usr/lib/os-release : on ecrit la cible et
+# on laisse le lien tranquille - le remplacer par un fichier ferait diverger les
+# deux chemins, que differents outils lisent indifferemment.
+_osrel="$ROOTFS/usr/lib/os-release"
+sed -i -e '/^NAME=/d' -e '/^PRETTY_NAME=/d' \
+       -e '/^VARIANT=/d' -e '/^VARIANT_ID=/d' \
+       -e '/^IMAGE_ID=/d' -e '/^IMAGE_VERSION=/d' \
+       -e '/^HOME_URL=/d' -e '/^SUPPORT_URL=/d' -e '/^BUG_REPORT_URL=/d' \
+       "$_osrel"
+{
+    printf 'NAME="%s"\n'          "$OS_NAME"
+    printf 'PRETTY_NAME="%s"\n'   "$OS_PRETTY"
+    printf 'VARIANT="%s"\n'       "$OS_PRETTY"
+    printf 'VARIANT_ID="%s"\n'    "$OS_VARIANT_ID"
+    printf 'IMAGE_ID="%s"\n'      "$OS_NAME"
+    printf 'IMAGE_VERSION="%s"\n' "$LABEL"
+    printf 'HOME_URL="https://github.com/bbaranoff/osmo_egprs"\n'
+    printf 'SUPPORT_URL="https://github.com/bbaranoff/osmo_egprs"\n'
+    printf 'BUG_REPORT_URL="https://github.com/bbaranoff/osmo_egprs/issues"\n'
+} >> "$_osrel"
+echo -e "  ${GREEN}✓${NC} os-release : ${CYAN}${OS_PRETTY}${NC}"
+
 if [ "$ISO_ROLE" = "interstp" ]; then
     # Le hub, lui, DOIT demarrer seul : les noeuds s'attachent a lui au boot, et
     # un hub qu'il faut lancer a la main transforme un demarrage simultane en
