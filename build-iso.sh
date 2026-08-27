@@ -339,7 +339,7 @@ echo -e "${GREEN}[2b/9] Preparation de l'image source de l'ISO...${NC}"
 
 ISO_N_MS=2
 ISO_OP_ID=1         # operateur unique de l'ISO (PLMN 001-01)
-ENCRYPTION="a5 0"   # A5/1 par defaut dans l'ISO (chiffrement bout-en-bout valide)
+ENCRYPTION="a5 1"   # A5/1 par defaut dans l'ISO -- la valeur suit enfin le commentaire
 
 # L'ISO tourne en NATIF, sans bridge docker. Les 172.20.0.x existaient quand
 # meme : 20-dhcp.network (plus bas) les alias sur le NIC par defaut. Mais faire

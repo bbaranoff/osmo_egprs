@@ -55,6 +55,22 @@ _GC_FILE="$_GC_HERE/globals.conf"
 # Format : CLE|VALEUR-PAR-DEFAUT|PER-OP|COMMENTAIRE
 #   PER-OP=1 -> la valeur est normalement derivee du numero d'operateur ;
 #               la figer n'a de sens qu'avec un seul operateur.
+#
+#  ATTENTION : le corps de _gc_table est une TABLE, pas du shell. La seule ligne
+#  non-donnee admise est « #SECTION|<titre> ». Un « # » ordinaire y devient une
+#  entree malformee -- verifie le 27/08, en cassant le module « gabarits » du run.
+#  Toute explication se met donc ICI, au-dessus de la fonction.
+#
+#  [2026-08-27] A5/1 EST LE DEFAUT ASSUME, ET IL A UN COUT CONNU. Le mobile
+#  derriere QEMU ne dechiffre pas encore l'A5/1 : le chemin cipher du modele n'est
+#  pas exerce (hw/arm/calypso/l1ctl_sock.c, « s'execute donc JAMAIS -- a verifier
+#  avant d'activer l'A5/1 »). Comptage des rejets LAPDm dans mobile.log de part et
+#  d'autre du CIPHERING MODE COMPLETE : 2 avant, 477 apres, et le LU s'arretait la
+#  (T3210). Le side-car osmocom-bb, lui, traite l'A5/1 sans broncher et obtient
+#  son LU ACCEPT : c'est le chemin emule qui doit rattraper, pas le reseau qui
+#  doit baisser la garde. Repli de travail : ENCRYPTION="a5 0" en ligne de
+#  commande, qui traverse jusqu'au fichier pose depuis que 08-gabarits.sh
+#  l'exporte.
 _gc_table() {
 cat <<'TABLE'
 #SECTION|Identite du reseau
@@ -62,15 +78,7 @@ MCC|001|0|Mobile Country Code (3 chiffres)
 MNC|01|0|Mobile Network Code (2 chiffres)
 OP_NAME|OsmoQEMU|0|Nom court et long du reseau
 #SECTION|Securite et carte SIM
-ENCRYPTION|a5 0|0|Chiffrement : "a5 0" (defaut, cf. ci-dessous), "a5 1", "a5 0 1 3"...
-# [2026-08-27] DEFAUT PASSE DE "a5 1" A "a5 0". Le mobile derriere QEMU ne
-# dechiffre pas l'A5/1 -- le chemin cipher du modele n'est pas exerce. Mesure
-# dans mobile.log de part et d'autre du CIPHERING MODE COMPLETE : 2 rejets
-# LAPDm avant, 477 apres, et le LU s'arretait la. Le side-car logiciel, lui,
-# traite l'A5/1 normalement : c'est le chemin emule qui ne suit pas.
-# Ce defaut s'alignait deja avec le moteur de run (08-gabarits.sh,
-# environnement/local.env) ; les deux divergeaient, d'ou un chiffrement qui
-# dependait du point d'entree. Remettre "a5 1" quand le modele dechiffrera.
+ENCRYPTION|a5 1|0|Chiffrement : "a5 1" (defaut), "a5 0" (aucun), "a5 0 1 3"...
 SIM_ALGO|comp128|0|Algorithme d'authentification (comp128, xor...)
 KI||1|Ki de la SIM, 16 octets hexa espaces
 IMSI||1|IMSI du mobile
@@ -175,8 +183,31 @@ _gc_set() {
 # en vrai le 2026-08-03. Les defauts appartiennent au SCRIPT ; globals.conf
 # n'est qu'une couche de surcharge par-dessus.
 gc_load() {
-    [ -f "$_GC_FILE" ] && . "$_GC_FILE"
     local key def perop comment
+    # ── LA LIGNE DE COMMANDE PRIME SUR globals.conf ──────────────────────────
+    # globals.conf affecte SECHEMENT (MCC=001, ENCRYPTION="a5 1", ...). Le sourcer
+    # en premier ecrasait donc ce que l'appelant venait de poser dans son
+    # environnement : sur une machine qui a un globals.conf,
+    #     ENCRYPTION="a5 0" ./run.sh
+    # etait avale sans un mot et le run repartait en a5 1. Constate le 2026-08-27,
+    # et c'est la meme famille de panne que les deux autres du jour : une valeur
+    # qui depend du chemin par lequel on entre, sans que rien ne le signale.
+    #
+    # On releve donc les cles DEJA presentes dans l'environnement AVANT de sourcer,
+    # et on les repose APRES. Precedence retablie, dans l'ordre habituel :
+    #     ligne de commande  >  globals.conf  >  defaut de _gc_table
+    local -A _gc_env=()
+    while IFS='|' read -r key def perop comment; do
+        [ -n "$key" ] && [ "$key" != "#SECTION" ] || continue
+        if [ -n "${!key:-}" ]; then _gc_env["$key"]="${!key}"; fi
+    done < <(_gc_table)
+
+    [ -f "$_GC_FILE" ] && . "$_GC_FILE"
+
+    if [ "${#_gc_env[@]}" -gt 0 ]; then
+        for key in "${!_gc_env[@]}"; do printf -v "$key" '%s' "${_gc_env[$key]}"; done
+    fi
+
     while IFS='|' read -r key def perop comment; do
         [ -n "$key" ] && [ "$key" != "#SECTION" ] || continue
         [ -n "${!key:-}" ] || printf -v "$key" '%s' "$def"
