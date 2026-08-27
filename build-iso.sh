@@ -1579,6 +1579,17 @@ sed -i -e '/^NAME=/d' -e '/^PRETTY_NAME=/d' \
 } >> "$_osrel"
 echo -e "  ${GREEN}✓${NC} os-release : ${CYAN}${OS_PRETTY}${NC}"
 
+# ── Asterisk : UN SEUL proprietaire, et c'est run_modules/19-asterisk.sh ────
+# [2026-08-27] Le paquet asterisk installe son unite `enabled` : systemd
+# demarrait donc un Asterisk au boot, pendant que 19-asterisk.sh lancait le sien
+# en direct. Deux proprietaires pour un seul /etc/asterisk et une seule socket
+# /var/run/asterisk/asterisk.ctl - la console finissait par ne plus repondre a
+# personne et la pile s'arretait sur "console Asterisk : toujours pas pret".
+# Le module ecarte deja systemd a chaque demarrage ; on le fait AUSSI ici pour
+# que le premier boot d'une ISO neuve parte propre, sans le coup de balai.
+chroot "$ROOTFS" systemctl disable asterisk >/dev/null 2>&1 || true
+echo -e "  ${GREEN}✓${NC} asterisk.service desactive - le PBX est lance par ${CYAN}19-asterisk.sh${NC}"
+
 if [ "$ISO_ROLE" = "interstp" ]; then
     # Le hub, lui, DOIT demarrer seul : les noeuds s'attachent a lui au boot, et
     # un hub qu'il faut lancer a la main transforme un demarrage simultane en
