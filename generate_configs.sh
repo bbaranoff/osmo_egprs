@@ -62,7 +62,15 @@ MCC|001|0|Mobile Country Code (3 chiffres)
 MNC|01|0|Mobile Network Code (2 chiffres)
 OP_NAME|OsmoQEMU|0|Nom court et long du reseau
 #SECTION|Securite et carte SIM
-ENCRYPTION|a5 1|0|Chiffrement : "a5 1" (defaut), "a5 0" (aucun), "a5 0 1 3"...
+ENCRYPTION|a5 0|0|Chiffrement : "a5 0" (defaut, cf. ci-dessous), "a5 1", "a5 0 1 3"...
+# [2026-08-27] DEFAUT PASSE DE "a5 1" A "a5 0". Le mobile derriere QEMU ne
+# dechiffre pas l'A5/1 -- le chemin cipher du modele n'est pas exerce. Mesure
+# dans mobile.log de part et d'autre du CIPHERING MODE COMPLETE : 2 rejets
+# LAPDm avant, 477 apres, et le LU s'arretait la. Le side-car logiciel, lui,
+# traite l'A5/1 normalement : c'est le chemin emule qui ne suit pas.
+# Ce defaut s'alignait deja avec le moteur de run (08-gabarits.sh,
+# environnement/local.env) ; les deux divergeaient, d'ou un chiffrement qui
+# dependait du point d'entree. Remettre "a5 1" quand le modele dechiffrera.
 SIM_ALGO|comp128|0|Algorithme d'authentification (comp128, xor...)
 KI||1|Ki de la SIM, 16 octets hexa espaces
 IMSI||1|IMSI du mobile
