@@ -1072,6 +1072,27 @@ ask_node_identity
 if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
     unset OSMO_NO_REGEN
     printf '  %sgabarits%s   regeneration demandee (--regen)\n' "${C_DIM:-}" "${C_Z:-}"
+
+    # ── REGEN : ON ARRETE D ABORD ───────────────────────────────────────────
+    # Regenerer /etc/osmocom sous une pile VIVANTE ne sert a rien et trompe :
+    # les demons ont deja lu leur configuration, ils gardent l'ancienne en
+    # memoire, et les fichiers neufs ne prennent effet qu'au demarrage suivant.
+    # On lisait donc une conf juste sur le disque pendant que la pile tournait
+    # sur la precedente -- le genre d'ecart qui se paie dix minutes plus tard.
+    # Un --regen arrete donc la pile, puis regenere : l'etat est sans ambiguite.
+    if [ -x "$RUN_SH" ] || [ -r "$RUN_SH" ]; then
+        say_begin "Arret de la pile avant regeneration"
+        bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true
+        say_end " OK " "$C_OK" "Arret de la pile avant regeneration"
+        declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
+        # Meme filet qu'au --stop : un python3 orphelin (pont, fake_trx, trxcon)
+        # garde son port et fait echouer le demarrage suivant sur « port UDP
+        # 5720 deja pris ». PORTEE : tue TOUS les python3 de la machine.
+        if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
+            killall python3 2>/dev/null && \
+                say_end " OK " "$C_OK" "python3 restants termines (killall)"
+        fi
+    fi
     # generate_configs.sh ne retablit l'adressage SS7 apres regeneration que
     # s'il sait QUI il sert, et il ne le lit que dans l'environnement
     # (OSMO_ROLE / OSMO_WAN_NODE). NODE_ID n'est qu'une variable locale du
