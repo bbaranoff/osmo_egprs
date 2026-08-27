@@ -103,6 +103,13 @@ Usage : ./start-direct.sh [options] [mode]
     --virtualbox[=N]    WAN entre CETTE machine et N-1 VM VirtualBox (implique
                         --wan). A lancer depuis l'hote, pas depuis une VM.
     --vbox-node N       numero de noeud porte par cette machine (defaut 1)
+    --mobile            client de couche 2 = mobile (defaut) -- pile L2/L3
+                        complete derriere le firmware QEMU
+    --ccch_scan         client de couche 2 = ccch_scan -- ecoute le CCCH
+    --bcch_scan         client de couche 2 = bcch_scan -- releve les BCCH
+    --cell_log          client de couche 2 = cell_log -- journal de cellules
+                        Ces quatre-la sont EXCLUSIFS et ECRASENT le mobile de
+                        QEMU : ils prennent sa socket L1CTL et sa VTY.
     -h, --help          cette aide
 
   Sans --wan : aucun WAN. Avec --wan le profil reste faketrx-qemu (hybride,
@@ -147,6 +154,20 @@ while [ $# -gt 0 ]; do
         --op=*)         NODE_OP="${1#*=}" ;;
         --hub-ip)       HUB_IP="${2:-}"; shift ;;
         --hub-ip=*)     HUB_IP="${1#*=}" ;;
+        --mobile|--ccch_scan|--bcch_scan|--cell_log)
+                       # run_modules/70-l2.sh gere deja les quatre clients via
+                       # CALYPSO_L2_CLIENT ; il manquait de quoi les choisir.
+                       # Un seul a la fois : ils se disputeraient la socket
+                       # L1CTL (/tmp/osmocom_l2) et la VTY 4247, et le second
+                       # lance resterait muet pour toujours.
+                       _l2c="${1#--}"
+                       if [ -n "${L2_CLIENT_CHOISI:-}" ] && \
+                          [ "$L2_CLIENT_CHOISI" != "$_l2c" ]; then
+                           printf '%s\n\n' \
+                             "--$_l2c et --$L2_CLIENT_CHOISI sont exclusifs : un seul client de couche 2" >&2
+                           usage >&2; exit 2
+                       fi
+                       L2_CLIENT_CHOISI="$_l2c" ;;
         -h|--help)     usage; exit 0 ;;
         faketrx-qemu|faketrx|qemu|virtphy|noproc|core|hybrid|hw)
             PROFILE="$1"
@@ -372,6 +393,13 @@ export CALYPSO_PROFILE MODE
 export PHY_MODE="${PHY_MODE:-faketrx}"
 export RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 export ENCRYPTION MS_COUNT HOST_IP
+# Client de couche 2 : l'option de ligne de commande ECRASE tout, et elle est
+# EXPORTEE -- une valeur posee sans export ne traverse pas jusqu'a run.sh,
+# defaut deja paye sur ENCRYPTION (cf. generate_configs.sh).
+if [ -n "${L2_CLIENT_CHOISI:-}" ]; then
+    CALYPSO_L2_CLIENT="$L2_CLIENT_CHOISI"
+fi
+export CALYPSO_L2_CLIENT="${CALYPSO_L2_CLIENT:-mobile}"
 export LOG_DIR RUN_DIR
 # --- 3. validation des chemins critiques --------------------------------------
 say_begin "Validation des chemins"
@@ -674,7 +702,24 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     # comme il n'est pas full-grgsm il DESACTIVE aussi 65-record-drain et
     # 66-grgsm-decode (MOD_ENABLED_IF) - le pont fournit lui-meme le GSMTAP.
     export CALYPSO_PIPELINE=bridge
-    _PONT="${PONT_PY:-/opt/GSM/pont/pont.py}"
+    # ── LE PONT VIENT DU DEPOT, POINT ──────────────────────────────────────
+    # Le defaut etait /opt/GSM/pont/pont.py, un chemin HORS DEPOT alimente par un
+    # `COPY pont/pont.py` de Dockerfile.run et fige par un `ENV PONT_PY=`. Rien
+    # ne le gardait en phase avec pont/pont.py, et rien ne signalait sa derive.
+    #
+    # CE QUE CA A COUTE, le 2026-08-27 : la copie executee etait restee a une
+    # version anterieure de 198 lignes, SANS AUCUN plan SDCCH/8 (ni PLAN_SD8, ni
+    # _dcch_plan, ni sacch_dl102). Elle raisonnait sur le SDCCH/4 combine du TS0
+    # pendant que le mobile parlait sur SDCCH/8 SS0 du TS1. Pendant deux heures,
+    # sans un seul message d erreur : 79 % de CRC fail, montant emis dans la
+    # fenetre du /4 (donc hors de celle que la BTS ecoute, avec hors_fenetre=0
+    # puisque coherent avec sa propre table), SABM sans reponse, T200 x6, LU en
+    # echec, SMS rejete, appel impossible. Restaurer la copie du depot a suffi a
+    # retablir le LU complet, chiffrement A5/1 compris, des le premier essai.
+    #
+    # La copie libre et son COPY sont supprimes ; PONT_PY reste disponible pour
+    # qui veut essayer une variante, mais c est alors un choix explicite.
+    _PONT="${PONT_PY:-${NITB_ROOT:-/opt/GSM/osmo_egprs}/pont/pont.py}"
 
     # ── LE PONT DOIT SAVOIR SUR QUELLE CELLULE IL TRAVAILLE ─────────────────
     # pont.py fait le codage/decodage de canal entre le Calypso de QEMU et la
@@ -933,6 +978,18 @@ case "$ACTION" in
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
         say_end " OK " "$C_OK" "Arret de la pile via run.sh"
         purge_sessions_tmux
+        # Filet identique a celui de run.sh, pose ici aussi : on peut arreter par
+        # ce script sans passer par l'autre, et un fake_trx.py orphelin suffit a
+        # faire echouer le run suivant sur « port UDP 5720 deja pris ».
+        # run.sh le fait deja de son cote ; le repeter ne coute rien et couvre le
+        # cas ou RUN_SH est introuvable ou sort en erreur.
+        # PORTEE : tue TOUS les python3 de la machine. CALYPSO_STOP_KILL_PYTHON=0
+        # le desactive.
+        if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
+            if killall python3 2>/dev/null; then
+                say_end " OK " "$C_OK" "python3 restants termines (killall)"
+            fi
+        fi
         exit 0
         ;;
     status)

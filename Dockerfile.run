@@ -65,8 +65,13 @@ COPY configs/asound.conf /etc/
 # laquelle pont/ doit figurer dans la charge de l'ISO.
 # (Le `mkdir -p /opt/GSM/pont` qui precedait est supprime : une COPY cree
 #  toujours ses repertoires parents.)
-COPY pont/pont.py /opt/GSM/pont/pont.py
-ENV PONT_PY=/opt/GSM/pont/pont.py
+# [2026-08-27] COPY RETIRE. Il fabriquait /opt/GSM/pont/pont.py, une copie
+# HORS DEPOT que rien ne gardait en phase avec pont/pont.py -- et l ENV
+# PONT_PY la rendait souveraine. Le 27/08 cette copie etait restee a une
+# version sans plan SDCCH/8 : deux heures de LU en echec, SMS rejete et
+# appel impossible, sans un message. Le depot est desormais la seule source ;
+# start-direct.sh resout $NITB_ROOT/pont/pont.py.
+ENV PONT_PY=/opt/GSM/osmo_egprs/pont/pont.py
 
 # Bits d'execution + chemins uniques. DOIT rester APRES toutes les COPY ci-dessus.
 # /scripts/run.sh (laissé par "COPY scripts/*") et /etc/osmocom/run.sh

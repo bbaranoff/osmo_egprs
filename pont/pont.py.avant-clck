@@ -141,70 +141,11 @@ def kc_read():
     _kc_cache = ((A5_FORCE if A5_FORCE else algo), kc)
     return _kc_cache
 
-# ── LE Kc SURVIT A UN EFFACEMENT PARASITE ─────────────────────────────────────
-# osmocon (osmocom-bb, hors de ce depot) remet /dev/shm/calypso_kc a zero sur
-# DM_EST_REQ **et** DM_REL_REQ :
-#     } else if (buf[0] == 0x05 /* DM_EST_REQ */ || buf[0] == 0x12 /* DM_REL_REQ */)
-# L'intention -- « nouveau canal dedie ou release -> repart en clair » -- est
-# juste pour le RELEASE. Elle est fausse pour l'ESTABLISH : le mobile emet aussi
-# un DM_EST_REQ pour ouvrir un lien SUPPLEMENTAIRE sur un canal DEJA chiffre
-# (le SAPI 3 du SMS, une re-etablissement LAPDm). La cle disparait alors que le
-# reseau, lui, continue de chiffrer.
-#
-# MESURE DU 2026-08-27 : une seule CRYPTO_REQ sur tout le run
-#     [osmocon] CRYPTO_REQ FILTRE: algo=1 key_len=8 key=86b592477f041c00
-#     [osmocon] Kc ecrit (seq=1 algo=1 cksn=0xff)
-# et pourtant /dev/shm/calypso_kc a zero, avec
-#     SOUS-VOIE ACTIVE : clair 50/277   chiffre 0/96
-# Zero bloc chiffre decode sur 96. Le LU mourait pile apres l'AUTHENTICATION
-# RESPONSE, a l'instant ou le reseau bascule en chiffre, puis T3210.
-#
-# On ne peut pas corriger osmocon d'ici. On rend donc le pont robuste : la cle
-# reste valable tant que le CANAL DEDIE n'a pas change. Le discriminant est le
-# `seq` de calypso_dcch_cfg, incremente a chaque nouveau canal par le firmware --
-# la meme source que _dcch_cfg(). Un vrai changement de canal libere la cle ; un
-# effacement parasite en cours de canal ne la perd plus.
-_kc_tenu = None          # (algo, kc, dcch_seq) retenu, ou None
-_kc_retenues = 0
-_kc_seq_fd = None
-
-def _dcch_seq():
-    """seq de calypso_dcch_cfg : incremente a CHAQUE nouveau canal dedie.
-    UN fd persistant + pread, comme _dcch_cfg (cf. l'audit des descripteurs)."""
-    global _kc_seq_fd
-    try:
-        if _kc_seq_fd is None:
-            _kc_seq_fd = os.open(DCCH_CFG, os.O_RDONLY)
-        b = os.pread(_kc_seq_fd, 4, 0)
-        return struct.unpack_from("<I", b, 0)[0] if len(b) >= 4 else 0
-    except OSError:
-        try:
-            if _kc_seq_fd is not None:
-                os.close(_kc_seq_fd)
-        except OSError:
-            pass
-        _kc_seq_fd = None
-        return 0
-
 _a5_last = {"applied": False, "algo": 0, "kc4": ""}
 
 def a5_apply(burst148, fn, uplink):
     """XOR du keystream A5 sur les 114 bits utiles. Renvoie le burst modifie."""
     algo, kc = kc_read()
-    global _kc_tenu
-    if algo:
-        _kc_tenu = (algo, kc, _dcch_seq())    # cle fraiche : on la retient
-    elif _kc_tenu is not None:
-        if _kc_tenu[2] == _dcch_seq():
-            algo, kc = _kc_tenu[0], _kc_tenu[1]   # effacement parasite : on tient
-            global _kc_retenues
-            _kc_retenues += 1
-            if _kc_retenues == 1 or (_kc_retenues % 500) == 0:
-                ST.log("Kc EFFACE EN COURS DE CANAL (dcch seq=%u inchange) -- "
-                       "on garde la cle (#%d). Cf. osmocon DM_EST_REQ."
-                       % (_kc_tenu[2], _kc_retenues))
-        else:
-            _kc_tenu = None                   # vrai changement de canal : on lache
     if not algo:
         _a5_last["applied"] = False
         return burst148                       # pas de Kc -> on ne touche a rien
@@ -1884,36 +1825,13 @@ def th_data_rx():
             airrec_feed(fn, tn, _b)
             dl_dispatch(tn, fn, burst)
 
-# [2026-08-27] UNE INDICATION PAR MULTITRAME, PAS UNE PAR TRAME.
-#
-# On en envoyait une toutes les FRAME_DUR, ~217/s. osmo-bts-trx appelle
-# trx_sched_clock() a CHAQUE indication et corrige a chaque fois : rattrapage par
-# bts_sched_fn() (« N FN slower ») ou reprogrammation du timerfd (« N FN
-# faster »). 217 indications/s, c'est 217 occasions de corriger par seconde, et
-# la gigue de time.sleep() en CPython suffit a en declencher une sur sept.
-# scheduler_trx.c pose MAX_FN_SKEW = 50 : la tolerance est dimensionnee pour une
-# indication PAR MULTITRAME DE 51. L'horloge fine est le timerfd du BTS ;
-# l'indication ne sert qu'a corriger la derive lente.
-#
-# MESURE qui motive ce changement (27/08, run de 17:01) :
-#   BTS#0 (derriere ce pont) 5502 compensations   BTS#1 (fake_trx) 190   -> 29x
-#   decodeur TCH : gap=1451 pour 407 blocs tentes -- l'accumulateur de 8 bursts
-#   vide 3,5 fois plus souvent qu'il n'aboutit, d'ou FACCH dl=0
-#   canal dedie : TS1/0 111/469 (24%) contre TS0/2 654/654 (100%) sur le commun
-#
-# CIBLE VERIFIABLE : gap doit s'effondrer et FACCH dl devenir non nul. Sinon la
-# cause est ailleurs, et on aura elimine cette variable proprement.
-# Le FN reste f(t) sur time.monotonic() : seule la CADENCE change, la valeur
-# annoncee reste exacte. PONT_CLCK_PERIOD_FN=1 retablit l'ancien comportement.
-CLCK_PERIOD_FN = int(os.environ.get("PONT_CLCK_PERIOD_FN", "51"))
-
 def th_clck():
     # POINT 4 — IND CLOCK périodique, FN dérivé du temps absolu.
     while True:
         fn = now_fn()
         if _bts_addr["clck"]:
             sk_clck.sendto(("IND CLOCK %u" % fn).encode() + b"\0", _bts_addr["clck"])
-        time.sleep(FRAME_DUR * CLCK_PERIOD_FN)   # le FN reste f(t), jamais accumule
+        time.sleep(FRAME_DUR)   # cadence d'indication ; le FN reste f(t), pas accumulé
 
 def th_stats():
     while True:

@@ -939,7 +939,9 @@ P="$ROOTFS/opt/osmo_egprs"
 # repertoire cible n'existait pas - et comme ils sont dans une chaine `&&`,
 # l'echec ne disait rien : l'ISO partait SANS aucun script WAN, et le seul
 # symptome etait un "introuvable" au moment d'en avoir besoin.
-mkdir -p "$P"/{scripts,configs,checks,helpers,lib,pont,network,tools,data}
+# [2026-08-27] `pont` RETIRE de la liste : Dockerfile.run ne fait plus de
+# `COPY pont/pont.py`, le pont est pris dans le depot embarque.
+mkdir -p "$P"/{scripts,configs,checks,helpers,lib,network,tools,data}
 # set_stp_ip.sh et network/set-node-id.sh MANQUAIENT : ce sont les deux scripts
 # que start-direct.sh appelle des qu'on lui donne --node. Sans set-node-id.sh il
 # refuse net ("network/set-node-id.sh absent", exit 1) - et c'est pourtant CE
