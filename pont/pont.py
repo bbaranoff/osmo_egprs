@@ -164,6 +164,30 @@ def kc_read():
 # `seq` de calypso_dcch_cfg, incremente a chaque nouveau canal par le firmware --
 # la meme source que _dcch_cfg(). Un vrai changement de canal libere la cle ; un
 # effacement parasite en cours de canal ne la perd plus.
+# [2026-08-27] RETENUE DESACTIVEE PAR DEFAUT -- LE DISCRIMINANT ETAIT FAUX.
+#
+# L'idee : ne pas perdre le Kc quand osmocon l'efface sur un DM_EST_REQ parasite.
+# Le discriminant choisi etait le `seq` de calypso_dcch_cfg. Il ne convient PAS :
+# l1ctl_sock.c ne l'incremente que `if (kind >= 0 && chan_nr != last_chan_nr)`,
+# or chan_nr reste 0x41 (SDCCH/8 SS0) du LU jusqu'a l'appel. Le seq restait donc
+# a 1 et la cle etait retenue INDEFINIMENT -- mesure : 13500 retenues.
+#
+# Consequence, immediate et pire que le mal : le canal de l'appel demarre EN
+# CLAIR, le pont lui appliquait quand meme l'A5 avec la cle perimee, l'UA
+# repondant a la SABM arrivait brouillee -> Timeout T200 x6 -> MDL-ERROR cause 1
+# -> appel mort avant meme le CM SERVICE. C'est exactement ce que le commentaire
+# d'osmocon annoncait : « sinon un Kc perime chiffrerait la SABM du canal
+# suivant ».
+#
+# Ce que la retenue a quand meme montre : elle fait passer la sous-voie active de
+# « chiffre 0/96 » a « chiffre 12/253 ». L'effacement parasite est donc reel et
+# coute des blocs. Mais il faut un discriminant qui distingue « meme canal, cle
+# effacee a tort » de « nouveau canal, qui demarre en clair » -- et chan_nr n'en
+# est pas un. Piste : detecter la SABM d'etablissement sur le dedie et lacher la
+# cle a ce moment-la.
+#
+# PONT_KC_RETENTION=1 la reactive pour experimenter. Defaut : 0.
+KC_RETENTION = os.environ.get("PONT_KC_RETENTION", "0") == "1"
 _kc_tenu = None          # (algo, kc, dcch_seq) retenu, ou None
 _kc_retenues = 0
 _kc_seq_fd = None
@@ -192,7 +216,9 @@ def a5_apply(burst148, fn, uplink):
     """XOR du keystream A5 sur les 114 bits utiles. Renvoie le burst modifie."""
     algo, kc = kc_read()
     global _kc_tenu
-    if algo:
+    if not KC_RETENTION:
+        pass                                  # retenue desactivee : cf. ci-dessus
+    elif algo:
         _kc_tenu = (algo, kc, _dcch_seq())    # cle fraiche : on la retient
     elif _kc_tenu is not None:
         if _kc_tenu[2] == _dcch_seq():
