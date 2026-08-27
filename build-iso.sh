@@ -583,6 +583,43 @@ else
     # emuler. Pour l'operateur, le test ci-dessus a deja arrete la construction.
     echo -e "  ${CYAN}Role inter-STP : pas de QEMU (aucun MS a emuler)${NC}"
 fi
+# ── Keymaps QEMU : 917 ko qui decident si la machine demarre ────────────────
+# [2026-08-27] Le commentaire du bloc ci-dessus dit vrai pour le pc-bios - 303 Mo
+# de ROMs (bios.bin, edk2, efi-*.rom) que la machine Calypso n'ouvre jamais,
+# elle charge la sienne. Il est FAUX pour les keymaps, qui ne sont pas du
+# firmware : l'interface graphique les lit a l'initialisation, machine Calypso
+# comprise. Sans $prefix/share/qemu/keymaps, qemu-system-arm ecrit
+#     qemu-system-arm: could not read keymap file: 'en-us'
+# et s'arrete AVANT le premier cycle. Vu de start-direct.sh, ca donne
+#     [FAIL] Calypso emulator (QEMU) (started but never ready)
+# c'est-a-dire une ISO sans MS - la panne exacte que le bloc precedent veut
+# eviter. On copie donc les keymaps SEULES : 917 ko, pas 303 Mo.
+if [ "$ISO_ROLE" != "interstp" ]; then
+    if [ -d "$ROOTFS/usr/local/share/qemu/keymaps" ]; then
+        echo -e "  ${GREEN}✓${NC} keymaps QEMU deja en place (${CYAN}/usr/local/share/qemu/keymaps${NC})"
+    else
+        qkm=""
+        for c in "$QEMU_BUILD_LOCAL/pc-bios/keymaps" \
+                 "$ROOTFS/opt/GSM/qemu-install/share/qemu/keymaps" \
+                 "$ROOTFS/usr/share/qemu/keymaps" \
+                 /usr/local/share/qemu/keymaps \
+                 /usr/share/qemu/keymaps; do
+            [ -d "$c" ] && { qkm="$c"; break; }
+        done
+        if [ -n "$qkm" ]; then
+            mkdir -p "$ROOTFS/usr/local/share/qemu"
+            cp -a "$qkm" "$ROOTFS/usr/local/share/qemu/"
+            echo -e "  ${GREEN}✓${NC} keymaps QEMU ($(du -sh "$ROOTFS/usr/local/share/qemu/keymaps" | cut -f1)) copiees depuis ${CYAN}${qkm}${NC}"
+        else
+            # Pas fatal : le binaire peut avoir ete configure avec un autre
+            # prefixe, ou une version future ne plus les lire. Mais c'est la
+            # premiere chose a regarder si QEMU "demarre puis s'arrete".
+            echo -e "  ${YELLOW}!${NC} keymaps QEMU introuvables - si QEMU s'arrete au demarrage," >&2
+            echo -e "  ${YELLOW}  cherchez \"could not read keymap file\" dans logs/qemu.log${NC}" >&2
+        fi
+    fi
+fi
+
 echo -e "${GREEN}[5c/9] Ajustements osmocom dans le rootfs...${NC}"
 echo -e "${GREEN}[5d/9] Patch configs ISO...${NC}"
 
@@ -1091,6 +1128,70 @@ WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} osmo-update (execute le gist tools/update.sh au demarrage)"
+
+# ── QEMU_BIN apres le reclone : build/qemu-system-arm dans l'arbre qemu-src ──
+# [2026-08-27] Deux decisions justes, prises separement, se contredisent :
+#
+#   1. [5b/9] ci-dessus n'embarque QUE l'artefact : "rm -rf $ROOTFS/opt/GSM/qemu-src",
+#      binaire dans /usr/local/bin. Sinon l'ISO porte 1,7 Go de sources QEMU.
+#   2. update.sh (recupere du depot au demarrage) reclone qemu-src depuis GitHub.
+#      Comme l'arbre a ete efface, il n'y a pas de .git : ce n'est pas un fetch
+#      incremental mais un clone FRAIS - donc un arbre SANS build/.
+#
+# Or environnement/paths.env du depot qemu resout QEMU_BIN a
+# $QEMU_TREE/build/qemu-system-arm. Apres le boot, ce chemin n'existe pas et
+# start-direct.sh s'arrete des le premier module :
+#     [FAIL] Prerequisite checks (dépendances introuvables : QEMU_BIN)
+# — la pile ne demarre pas du tout, alors que le binaire est la, dans le PATH.
+#
+# On recree donc le seul chemin que paths.env cherche, apres le reclone. Un lien
+# symbolique, pas une copie : le binaire fait ~30 Mo et l'ISO tient en RAM.
+# "build/" est la premiere ligne du .gitignore de qemu : le "git clean -fd" des
+# synchronisations suivantes (wipe=0, incremental) ne l'efface pas - seul un
+# clone frais le ferait, et ce service repasse a chaque demarrage.
+cat > "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh" <<'QLINK'
+#!/bin/bash
+# osmo-qemu-link.sh - rend QEMU_BIN resolvable apres le reclone de qemu-src.
+# Voir build-iso.sh, etape [6/9], pour le pourquoi.
+set -u
+SRC="${OSMO_QEMU_BIN:-/usr/local/bin/qemu-system-arm}"
+TREE="${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}"
+LNK="$TREE/build/qemu-system-arm"
+
+# Pas de binaire (image inter-STP) ou pas d'arbre (reclone impossible, reseau
+# coupe) : il n'y a rien a relier, et ce n'est pas ce service qui le dira.
+[ -x "$SRC" ] || { echo "osmo-qemu-link: $SRC absent - rien a faire"; exit 0; }
+[ -d "$TREE" ] || { echo "osmo-qemu-link: $TREE absent - rien a faire"; exit 0; }
+
+# Un VRAI build compile sur place gagne toujours : on ne remplace qu'un lien
+# (le notre) ou un chemin vide.
+if [ -e "$LNK" ] && [ ! -L "$LNK" ]; then
+    echo "osmo-qemu-link: $LNK est un vrai fichier - laisse tel quel"
+    exit 0
+fi
+
+mkdir -p "$TREE/build"
+ln -sfn "$SRC" "$LNK"
+echo "osmo-qemu-link: $LNK -> $SRC"
+QLINK
+chmod +x "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh"
+
+cat > "$ROOTFS/etc/systemd/system/osmo-qemu-link.service" <<'EOF'
+[Unit]
+Description=osmo_egprs - QEMU_BIN dans l'arbre qemu-src (build/qemu-system-arm)
+# APRES le reclone : c'est lui qui recree l'arbre, sans build/.
+After=osmo-update.service
+Wants=osmo-update.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/osmo-qemu-link.sh
+[Install]
+WantedBy=multi-user.target
+EOF
+chroot "$ROOTFS" systemctl enable osmo-qemu-link 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de qemu-src)"
+
 
 # ── Marqueur de role : ce que CETTE image est ───────────────────────────────
 # Lu par start-direct.sh et par la banniere. Sans lui, deux ISO issues de la
