@@ -336,10 +336,16 @@ apply_config_templates() {
     local ki="${KI:-00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x %02x' 1 "$op_id")}"
     local sms_sc="${SMS_SC:-+336661234$(printf '%04d' "$op_id")}"
 
-    local inter_local_ip rtp_start rtp_end sip_host_port
+    local inter_local_ip sip_remote_ip rtp_start rtp_end sip_host_port
     # Idem : sur un noeud de WAN, l'adresse source de l'ASP n'est pas une IP du
     # plan docker mais celle du segment - ou 0.0.0.0 quand elle vient du DHCP.
     inter_local_ip="${INTER_LOCAL_IP_OVERRIDE:-$(op_backbone_ip "$op_id")}"
+    # La patte SIP vers Asterisk n'est PAS la dorsale : elle est locale dans les
+    # deux topologies, et Asterisk ne l'identifie que sur la boucle (pjsip.conf
+    # [gsm_msc-identify] match=127.0.0.1). Elle avait herite d'inter_local_ip -
+    # donc de 172.20.0.11, absente de l'ISO - et tout INVITE sortait en
+    # "Invalid argument (22)" puis 503. Variable distincte, defaut loopback.
+    sip_remote_ip="${SIP_REMOTE_IP_OVERRIDE:-127.0.0.1}"
     rtp_start=$(linphone_rtp_start "$op_id"); rtp_end=$(linphone_rtp_end "$op_id")
     sip_host_port=$(linphone_sip_port "$op_id")
 
@@ -396,6 +402,7 @@ apply_config_templates() {
             -e "s|__INTER_STP_IP__|${inter_stp}|g" \
             -e "s|__INTER_STP_SHUTDOWN__|${inter_stp_shutdown}|g" \
             -e "s|__INTER_LOCAL_IP__|${inter_local_ip}|g" \
+            -e "s|__SIP_REMOTE_IP__|${sip_remote_ip}|g" \
             -e "s|__OPERATOR_ID__|${op_id}|g" \
             -e "s|__PC_MSC__|${pc_msc}|g" -e "s|__PC_STP__|${pc_stp}|g" -e "s|__PC_BSC__|${pc_bsc}|g" \
             -e "s|__RCTX_MSC__|${rctx_msc}|g" -e "s|__RCTX_STP__|${rctx_stp}|g" \
