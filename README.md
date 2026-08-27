@@ -1,5 +1,27 @@
 # osmo-nitb-for-calypso — Architecture Multi-PLMN SS7/IP
 
+Standalone mode (no interstp)
+```bash
+sudo docker pull bastienbaranoff/norf_gsm
+sudo docker tag bastienbaranoff/norf_gsm osmocom-nitb
+git clone https://github.com/bbaranoff/osmo_egprs
+cd osmo_egprs
+sudo ./start.sh
+```
+To go in container
+```bash
+sudo docker exec -ti osmo-operator-1 bash
+``` 
+
+then in docker container
+```bash
+cd /opt/GSM/osmo_egprs
+./start-direct.sh --regen
+./start-direct.sh --stop
+./start-direct.sh
+```
+
+
 Documentation d'architecture du projet **osmo-nitb-for-calypso** : simulation multi-opérateur GSM complète avec interconnexion SS7 sur IP, entièrement conteneurisée via Docker.
 
 Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisation complète d'une configuration SS7 inter-opérateurs habituellement réalisée à la main, reproductible d'un simple `tools/make-docker-image.sh && start.sh`.
