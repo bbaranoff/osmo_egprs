@@ -521,22 +521,52 @@ COEUR
 echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (/etc/osmocom)"
 
 
-# ── qemu-src : checkout LOCAL (branche main, build/qemu-system-arm recompile) ──
-# La copie docker cp ($CID:/opt/GSM) peut etre perimee / sur une autre branche. On
-# ecrase qemu-src par le checkout local de la VM, deja sur 'main' avec le binaire
-# build/ a jour. On retire .git (historique QEMU = lourd, inutile a l'execution).
+# ── qemu-src : arbre ELAGUE + binaire installe ──────────────────────────────
+# Deux choses distinctes, et l'ISO a besoin des DEUX :
+#   - l'arbre qemu-src (run.sh, run_modules/, environnement/, target/firmware) :
+#     c'est LUI le mode qemu de start-direct.sh. Il reste dans l'image, prive de
+#     .git et de build/ (voir plus bas).
+#   - le binaire qemu-system-arm, installe dans /usr/local/bin, et relie depuis
+#     l'arbre sous le nom que paths.env cherche (build/qemu-system-arm).
 QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}/build}"
 echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
-# Le rm est HORS de la condition, et l'absence du binaire est FATALE. Avant, les
-# deux etaient dans la branche "binaire present" : sur une machine ou QEMU
+# L'elagage est HORS de la condition, et l'absence du binaire est FATALE. Avant,
+# les deux etaient dans la branche "binaire present" : sur une machine ou QEMU
 # n'avait pas ete recompile - le cas courant - on tombait dans le repli, qui se
-# contentait d'un avertissement jaune, et l'arbre source venu du docker cp
-# ($CID:/opt/GSM) partait tel quel dans le squashfs : 1,7 Go de sources QEMU
+# contentait d'un avertissement jaune, et l'arbre venu du docker cp
+# ($CID:/opt/GSM) partait tel quel dans le squashfs, build/ compris : 1,7 Go
 # dans une ISO qui tient en RAM. Le message passait inapercu au milieu d'une
 # heure de construction, et la taille de l'ISO etait le seul indice.
 # Echouer ici coute une relance ; ne pas echouer coute une ISO inutilisable
 # (sans qemu-system-arm, MS#1 ne demarre pas) et deux fois plus lourde.
-rm -rf "$ROOTFS/opt/GSM/qemu-src"
+# ── qemu-src RESTE dans l'ISO : on ELAGUE, on n'EFFACE PAS ──────────────────
+# [2026-08-27] L'effacement pur ("rm -rf $ROOTFS/opt/GSM/qemu-src") reglait le
+# poids, mais retirait de l'image le depot dont run.sh, run_modules/ et
+# environnement/ SONT le mode qemu : l'ISO ne savait plus emuler le Calypso par
+# elle-meme et dependait, a CHAQUE demarrage, d'un reclone GitHub par
+# osmo-update.service. Pas de reseau au boot = pas de MS, et un arbre reclone
+# arrive sans build/, donc sans QEMU_BIN (voir osmo-qemu-link, etape [6/9]).
+#
+# Le poids ne venait pas des sources : dans l'image, sur 1,7 Go, build/ pese
+# 1,5 Go (objets de compilation) et .git 96 Mo (historique QEMU complet). Le
+# reste - ce qui fait tourner la chaine - tient en ~110 Mo, une fraction de
+# l'ISO une fois squashfs. On retire donc les deux gros, et RIEN d'autre.
+QSRC="$ROOTFS/opt/GSM/qemu-src"
+if [ ! -d "$QSRC" ]; then
+    # L'image ne l'avait pas : on prend l'arbre de l'hote, meme elagage.
+    QSRC_HOST="${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}"
+    if [ -d "$QSRC_HOST" ]; then
+        mkdir -p "$ROOTFS/opt/GSM"
+        tar -C "$QSRC_HOST" --exclude=./.git --exclude=./build -cf - . \
+            | (mkdir -p "$QSRC" && tar -C "$QSRC" -xf -)
+        echo -e "  ${GREEN}✓${NC} qemu-src repris de l'hote ${CYAN}${QSRC_HOST}${NC} (sans .git ni build/)"
+    else
+        echo -e "  ${YELLOW}!${NC} qemu-src introuvable (ni image, ni hote) - l'ISO n'aura pas le mode qemu" >&2
+    fi
+else
+    rm -rf "$QSRC/.git" "$QSRC/build"
+    echo -e "  ${GREEN}✓${NC} qemu-src conserve, elague ($(du -sh "$QSRC" | cut -f1) : sans .git ni build/)"
+fi
 
 # Le binaire vient peut-etre DEJA de l'image : "docker cp $CID:/usr/local/bin/."
 # (plus haut) copie /usr/local/bin/qemu-system-arm dans le rootfs, et c'est
@@ -583,8 +613,34 @@ else
     # emuler. Pour l'operateur, le test ci-dessus a deja arrete la construction.
     echo -e "  ${CYAN}Role inter-STP : pas de QEMU (aucun MS a emuler)${NC}"
 fi
+# ── QEMU_BIN dans l'arbre : le lien que paths.env cherche ──────────────────
+# environnement/paths.env du depot qemu resout QEMU_BIN a
+# $QEMU_TREE/build/qemu-system-arm. build/ vient d'etre elague (1,5 Go d'objets
+# de compilation) et le binaire, lui, est installe dans /usr/local/bin : sans ce
+# lien, run.sh s'arrete des le premier module -
+#     [FAIL] Prerequisite checks (dépendances introuvables : QEMU_BIN)
+# - alors que le binaire est la, dans le PATH. Un lien, pas une copie : l'ISO
+# tient en RAM et le binaire pese ~30 Mo.
+# osmo-qemu-link.service (etape [6/9]) refait le meme lien a chaque demarrage,
+# pour le cas ou osmo-update.service reclone l'arbre par-dessus.
+if [ -d "$QSRC" ]; then
+    qbin=""
+    for c in "$ROOTFS/usr/local/bin/qemu-system-arm" \
+             "$ROOTFS${qpfx:-/usr/local}/bin/qemu-system-arm"; do
+        [ -x "$c" ] && { qbin="${c#$ROOTFS}"; break; }
+    done
+    if [ -n "$qbin" ]; then
+        mkdir -p "$QSRC/build"
+        ln -sfn "$qbin" "$QSRC/build/qemu-system-arm"
+        echo -e "  ${GREEN}✓${NC} QEMU_BIN : ${CYAN}/opt/GSM/qemu-src/build/qemu-system-arm${NC} -> ${CYAN}${qbin}${NC}"
+    elif [ "$ISO_ROLE" != "interstp" ]; then
+        echo -e "  ${YELLOW}!${NC} binaire QEMU introuvable dans le rootfs - QEMU_BIN restera non resolu" >&2
+    fi
+fi
+
 # ── Keymaps QEMU : 917 ko qui decident si la machine demarre ────────────────
-# [2026-08-27] Le commentaire du bloc ci-dessus dit vrai pour le pc-bios - 303 Mo
+# [2026-08-27] Le commentaire du bloc d'installation ci-dessus dit vrai pour le
+# pc-bios - 303 Mo
 # de ROMs (bios.bin, edk2, efi-*.rom) que la machine Calypso n'ouvre jamais,
 # elle charge la sienne. Il est FAUX pour les keymaps, qui ne sont pas du
 # firmware : l'interface graphique les lit a l'initialisation, machine Calypso
@@ -600,6 +656,7 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     else
         qkm=""
         for c in "$QEMU_BUILD_LOCAL/pc-bios/keymaps" \
+                 "$QSRC/pc-bios/keymaps" \
                  "$ROOTFS/opt/GSM/qemu-install/share/qemu/keymaps" \
                  "$ROOTFS/usr/share/qemu/keymaps" \
                  /usr/local/share/qemu/keymaps \
@@ -1132,11 +1189,13 @@ echo -e "  ${GREEN}✓${NC} osmo-update (execute le gist tools/update.sh au dema
 # ── QEMU_BIN apres le reclone : build/qemu-system-arm dans l'arbre qemu-src ──
 # [2026-08-27] Deux decisions justes, prises separement, se contredisent :
 #
-#   1. [5b/9] ci-dessus n'embarque QUE l'artefact : "rm -rf $ROOTFS/opt/GSM/qemu-src",
-#      binaire dans /usr/local/bin. Sinon l'ISO porte 1,7 Go de sources QEMU.
-#   2. update.sh (recupere du depot au demarrage) reclone qemu-src depuis GitHub.
-#      Comme l'arbre a ete efface, il n'y a pas de .git : ce n'est pas un fetch
-#      incremental mais un clone FRAIS - donc un arbre SANS build/.
+#   1. [5b/9] ci-dessus embarque l'arbre qemu-src ELAGUE : sans .git (96 Mo
+#      d'historique QEMU) et sans build/ (1,5 Go d'objets). Le binaire, lui,
+#      est dans /usr/local/bin, et un lien build/qemu-system-arm y renvoie.
+#   2. update.sh (recupere du depot au demarrage) resynchronise qemu-src depuis
+#      GitHub. Faute de .git, ce n'est pas un fetch incremental mais un clone
+#      FRAIS, qui remplace l'arbre - donc un arbre SANS build/, et le lien
+#      pose a la construction disparait avec lui.
 #
 # Or environnement/paths.env du depot qemu resout QEMU_BIN a
 # $QEMU_TREE/build/qemu-system-arm. Apres le boot, ce chemin n'existe pas et
