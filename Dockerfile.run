@@ -122,7 +122,7 @@ ARG QEMU_CACHE_BUST
 # supprimé : il faisait doublon avec celui de la ligne ~192, et rien entre les
 # deux ne consomme /opt/GSM/osmo_egprs. On garde le plus tardif, au plus près
 # de l'entrypoint.
-RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo_egprs && git pull
+RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo_egprs && git checkout RELEASE-0.1 && git pull
 
 # ── Rebuild QEMU (pull latest from GitHub + rebuild) ─────────────────────────
 # [2026-08-12] `ninja` NE SUFFIT PAS APRES CE PULL.
@@ -139,7 +139,7 @@ RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo_egprs && git pull
 # (start.sh l.492-497 refait le pull et le `ninja` au demarrage du conteneur,
 #  mais PAS calypso-ipc-device : ce RUN est le seul endroit qui les garde
 #  synchronises. Ne pas le decouper en plusieurs RUN.)
-RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qemu-src && git pull && \
+RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qemu-src && git checkout RELEASE-0.1 && git pull && \
     (cd build && ninja) && \
     make -C tools/calypso-ipc-device clean && \
     make -C tools/calypso-ipc-device -j"$(nproc)"
