@@ -18,6 +18,24 @@
 #   ce que le Calypso ÉMET (sidebands)    -> renvoyé à la BTS comme son RX (on encode->TRXD).
 
 import socket, struct, threading, time, os, ctypes, sys, collections, signal
+import gc
+
+# ── LE RAMASSE-MIETTES CYCLIQUE EST COUPE ────────────────────────────────────
+# Ce pont fait du temps reel : un burst dure 4,615 ms et arrive ~1700 fois par
+# seconde. Le gc generationnel de CPython s'declenche sur un COMPTEUR
+# d'allocations, donc au milieu du traitement d'un burst, et sa pause n'est pas
+# bornee. Or tout ce que ce programme alloue en boucle est acyclique (bytes,
+# tuples, tableaux ctypes) : le comptage de references seul suffit a le liberer.
+# Le gc cyclique ne ramasse donc RIEN ici -- il ne fait que payer le parcours.
+# gc.freeze() met en prime les objets du demarrage hors des generations, pour
+# que le collecteur manuel (si on le rallume) n'ait pas a les revisiter.
+# PONT_GC=1 le rallume.
+if os.environ.get("PONT_GC", "0") != "1":
+    gc.disable()
+    try:
+        gc.freeze()          # Python 3.7+
+    except AttributeError:
+        pass
 
 # =========================== CONFIG (tête de fichier) ===========================
 TRX_BIND      = os.environ.get("PONT_TRX_BIND",   "127.0.0.1")
@@ -68,6 +86,18 @@ FRAME_DUR      = 60.0 / 13000.0         # 4.615 ms (POINT 4 : durée d'une trame
 _cod = ctypes.CDLL("libosmocoding.so", use_errno=True)
 ubit = ctypes.c_int8       # ubit_t : 0/1
 sbit = ctypes.c_int8       # sbit_t : soft-bit signé (+/-127)
+
+# ── ubit -> sbit EN UNE PASSE C, PLUS EN PYTHON ──────────────────────────────
+# La conversion « 0 -> +127, tout le reste -> -127 » (convention osmo_ubit2sbit)
+# se faisait par une boucle Python bit a bit, a deux endroits du chemin chaud :
+#   xcch_decode_4   : 4 x 116 = 464 iterations par bloc descendant
+#   tch_dl_burst    : 8 x 116 = 928 iterations par bloc de parole
+# Sur un run mesure (dl_dec=2479 + crc_fail=4319 = ~6800 blocs xcch), cela fait
+# ~3,2 millions d'iterations Python pour le seul xcch -- dans un pont deja a
+# 83 % d'un coeur, mono-thread sous le GIL. bytes.translate fait la meme chose
+# en une passe C, et from_buffer_copy remplit le tableau ctypes d'un seul memcpy.
+# 129 = 0x81, soit -127 lu comme int8.
+_TBL_SOFT = bytes([127] + [129] * 255)
 _cod.gsm0503_xcch_encode.argtypes      = [ctypes.POINTER(ubit), ctypes.POINTER(ctypes.c_uint8)]
 _cod.gsm0503_xcch_decode.argtypes      = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(sbit),
                                           ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
@@ -141,17 +171,185 @@ def kc_read():
     _kc_cache = ((A5_FORCE if A5_FORCE else algo), kc)
     return _kc_cache
 
+# ── LE Kc SURVIT A UN EFFACEMENT PARASITE ─────────────────────────────────────
+# osmocon (osmocom-bb, hors de ce depot) remet /dev/shm/calypso_kc a zero sur
+# DM_EST_REQ **et** DM_REL_REQ :
+#     } else if (buf[0] == 0x05 /* DM_EST_REQ */ || buf[0] == 0x12 /* DM_REL_REQ */)
+# L'intention -- « nouveau canal dedie ou release -> repart en clair » -- est
+# juste pour le RELEASE. Elle est fausse pour l'ESTABLISH : le mobile emet aussi
+# un DM_EST_REQ pour ouvrir un lien SUPPLEMENTAIRE sur un canal DEJA chiffre
+# (le SAPI 3 du SMS, une re-etablissement LAPDm). La cle disparait alors que le
+# reseau, lui, continue de chiffrer.
+#
+# MESURE DU 2026-08-27 : une seule CRYPTO_REQ sur tout le run
+#     [osmocon] CRYPTO_REQ FILTRE: algo=1 key_len=8 key=86b592477f041c00
+#     [osmocon] Kc ecrit (seq=1 algo=1 cksn=0xff)
+# et pourtant /dev/shm/calypso_kc a zero, avec
+#     SOUS-VOIE ACTIVE : clair 50/277   chiffre 0/96
+# Zero bloc chiffre decode sur 96. Le LU mourait pile apres l'AUTHENTICATION
+# RESPONSE, a l'instant ou le reseau bascule en chiffre, puis T3210.
+#
+# On ne peut pas corriger osmocon d'ici. On rend donc le pont robuste : la cle
+# reste valable tant que le CANAL DEDIE n'a pas change. Le discriminant est le
+# `seq` de calypso_dcch_cfg, incremente a chaque nouveau canal par le firmware --
+# la meme source que _dcch_cfg(). Un vrai changement de canal libere la cle ; un
+# effacement parasite en cours de canal ne la perd plus.
+# ── LE Kc SURVIT A UN EFFACEMENT PARASITE, ET SE LACHE SUR LA SABM ───────────
+#
+# LE PROBLEME. osmocon (osmocom-bb, hors de ce depot) remet /dev/shm/calypso_kc a
+# zero sur DM_EST_REQ **et** DM_REL_REQ. L'intention -- « nouveau canal dedie ou
+# release -> repart en clair » -- est juste pour le RELEASE, fausse pour
+# l'ESTABLISH : le mobile emet aussi un DM_EST_REQ pour ouvrir un lien
+# SUPPLEMENTAIRE sur un canal DEJA chiffre (SAPI 3 du SMS, re-etablissement
+# LAPDm). La cle disparait alors que le reseau continue de chiffrer. Mesure du
+# 27/08 : une seule CRYPTO_REQ de tout le run, et pourtant le fichier a zero,
+# avec « SOUS-VOIE ACTIVE : clair 50/277  chiffre 0/96 » -- zero bloc chiffre
+# decode sur 96, et le LU qui mourait pile apres l'AUTHENTICATION RESPONSE.
+#
+# LA PREMIERE TENTATIVE ETAIT FAUSSE, et il faut le dire : elle retenait la cle
+# tant que le `seq` de calypso_dcch_cfg ne bougeait pas. Or l1ctl_sock.c ne
+# l'incremente que `if (kind >= 0 && chan_nr != last_chan_nr)`, et chan_nr reste
+# 0x41 du LU jusqu'a l'appel. La cle etait donc retenue INDEFINIMENT (13500
+# retenues mesurees), le canal de l'appel -- qui demarre EN CLAIR -- se voyait
+# appliquer l'A5, l'UA revenait brouillee : T200 x6, MDL-ERROR cause 1, appel
+# mort avant le CM SERVICE. Exactement ce que le reset d'osmocon evitait.
+#
+# LE BON MARQUEUR EST LA SABM. Un lien LAPDm qui (re)demarre le fait TOUJOURS par
+# une SABM, et TOUJOURS en clair -- c'est la definition de l'etablissement. Le
+# pont voit cette trame en clair, avant encodage et avant chiffrement, dans
+# ul_sdcch_from_sideband (l2 = b[16:39], la L2 telle que le mobile l'a posee).
+# On lache donc la cle la, et on la reprend au CRYPTO_REQ suivant. Un effacement
+# parasite en cours de session ne la perd plus ; un vrai (re)demarrage la libere.
+#
+# PONT_KC_RETENTION=0 revient au comportement d'avant (aucune retenue).
+# [2026-08-27] DEFAUT REMIS A 0. Deux discriminants essayes, deux faux :
+#   - le `seq` de calypso_dcch_cfg : il ne bouge pas (chan_nr identique du LU a
+#     l'appel), la cle etait retenue indefiniment -> l'A5 s'appliquait au canal
+#     de l'appel qui demarre en clair -> appel mort.
+#   - la SABM montante : une SABM ne signifie PAS toujours « on repart en
+#     clair ». Un re-etablissement LAPDm sur un canal deja chiffre (SAPI 3 du
+#     SMS) est lui-meme chiffre. On lachait donc la cle en pleine session.
+# Le defaut d'origine (osmocon efface le Kc sur DM_EST_REQ) est reel et
+# mesurable, mais il faut un marqueur qui distingue « nouveau canal » de
+# « nouveau lien sur le meme canal ». Piste non essayee : l'IMMEDIATE
+# ASSIGNMENT descendant, qui est le seul octroi d'un canal NEUF. Tant que ce
+# n'est pas verifie, on n'ajoute pas de variable mobile de plus.
+# PONT_KC_RETENTION=1 reactive la retenue pour experimenter.
+# [2026-08-27, soir] LE MARQUEUR MANQUANT ETAIT L'IMMEDIATE ASSIGNMENT.
+# La note ci-dessus le disait deja : « Piste non essayee : l'IMMEDIATE
+# ASSIGNMENT descendant, qui est le seul octroi d'un canal NEUF. » Elle est
+# essayee maintenant, parce que la mesure ne laisse plus le choix.
+#
+# MESURE, run de 19:3x, SMS qui ne passent pas :
+#   446 DEDIE-TRACE, dont 338 « A5=non decode=NON » et 12 « A5=non decode=OUI »
+#   -> A5=non sur la TOTALITE des blocs du canal dedie, et 97 % d'echecs
+# et pourtant, cote osmocon, la cle etait bien captee NEUF fois :
+#   [osmocon] CRYPTO_REQ FILTRE: algo=1 key_len=8 key=6c39560b5bd77000
+#   [osmocon] Kc ecrit (seq=6..9 algo=1 cksn=0xff)
+# Entre les deux, l'effaceur de osmocon (DM_EST_REQ **et** DM_REL_REQ) remettait
+# le fichier a zero, et sans retenue le pont lisait algo=0 : il laissait en clair
+# un canal que le reseau chiffrait. Tout ce qui vit sur le dedie meurt la --
+# le SMS (SAPI 3) en premier, puisqu'il ouvre justement un lien SUPPLEMENTAIRE
+# sur un canal DEJA chiffre, donc un DM_EST_REQ de plus, donc un effacement de
+# plus, en plein milieu de la session.
+#
+# LES DEUX MARQUEURS ESSAYES AVANT, ET POURQUOI CELUI-CI EST DIFFERENT :
+#   - le `seq` de calypso_dcch_cfg : ne bouge pas du LU a l'appel -> cle retenue
+#     indefiniment, A5 applique a un canal qui demarre en clair.
+#   - la SABM montante : une SABM ne veut PAS dire « on repart en clair ». Un
+#     re-etablissement LAPDm sur canal chiffre en est une, et le SAPI 3 du SMS
+#     aussi. Mesure du meme run : 11 « Kc LACHE (SABM montante) » -- onze
+#     lachers en pleine session.
+#   - l'IMMEDIATE ASSIGNMENT descendant, lui, est le SEUL message par lequel le
+#     reseau octroie un canal dedie NEUF, et un canal neuf demarre TOUJOURS en
+#     clair (le chiffrement n'arrive qu'au CIPHERING MODE COMMAND suivant). Il
+#     ne se confond ni avec un lien de plus sur le canal courant (SAPI 3), ni
+#     avec l'ASSIGNMENT COMMAND vers le TCH -- lequel CONSERVE le chiffrement,
+#     et c'est precisement ce qu'il fallait cesser de casser.
+# On y ajoute le CHANNEL RELEASE : le canal est rendu, la cle avec.
+#
+# PONT_KC_RETENTION=0 revient au comportement d'avant (aucune retenue).
+# [2026-08-27, soir, 2e passe] LA RETENUE N EST PLUS LE BON OUTIL : LA SOURCE
+# A CHANGE. Tout ce qui precede raisonne sur un fichier alimente par un TIERS
+# qui espionne le L1CTL au passage (osmocon) et qui l EFFACE sur DM_EST_REQ.
+# Retenir la cle etait un pansement sur cet effaceur, et il fallait deviner
+# quand la lacher -- trois marqueurs essayes, trois faux departs.
+#
+# Desormais QEMU publie /dev/shm/calypso_kc depuis le NDB du DSP
+# (calypso_dsp_shunt.c, shunt_publish_kc) : d_a5mode et a_kc[4], que le
+# firmware charge lui-meme par dsp_load_ciph_param(). C est l etat de
+# chiffrement REEL de la couche 1, reaffirme toutes les ~100 ms, et remis a
+# zero par le firmware lui-meme quand il repart en clair.
+#
+# Un zero venu de LA veut donc dire << la L1 est en clair >>, et le retenir
+# serait chiffrer un canal qui ne l est pas. Retenue OFF, et c est le bon
+# reglage pour la premiere fois : il n y a plus d effacement parasite a
+# compenser. PONT_KC_RETENTION=1 la reactive pour comparer.
+KC_RETENTION = os.environ.get("PONT_KC_RETENTION", "0") == "1"
+_kc_tenu = None          # (algo, kc) retenu, ou None
+_kc_retenues = 0
+_kc_laches = 0
+
+def _est_sabm(l2):
+    """Vrai si cette L2 LAPDm est une SABM (etablissement).
+    Trame U : bits 0-1 du controle a 11. SABM = 0x2F, avec ou sans le bit P
+    (0x10) -- d'ou le masque 0xEF. GSM 04.06 3.4/3.6."""
+    if not l2 or len(l2) < 2:
+        return False
+    ctrl = l2[1]
+    return (ctrl & 0x03) == 0x03 and (ctrl & 0xEF) == 0x2F
+
+def kc_lacher(motif):
+    """Un lien redemarre en clair : la cle retenue cesse d'etre valable."""
+    global _kc_tenu, _kc_laches
+    if _kc_tenu is not None:
+        _kc_tenu = None
+        _kc_laches += 1
+        ST.log("Kc LACHE (%s) -- le lien repart en clair (#%d)" % (motif, _kc_laches))
+_kc_seq_fd = None
+
+def _dcch_seq():
+    """seq de calypso_dcch_cfg : incremente a CHAQUE nouveau canal dedie.
+    UN fd persistant + pread, comme _dcch_cfg (cf. l'audit des descripteurs)."""
+    global _kc_seq_fd
+    try:
+        if _kc_seq_fd is None:
+            _kc_seq_fd = os.open(DCCH_CFG, os.O_RDONLY)
+        b = os.pread(_kc_seq_fd, 4, 0)
+        return struct.unpack_from("<I", b, 0)[0] if len(b) >= 4 else 0
+    except OSError:
+        try:
+            if _kc_seq_fd is not None:
+                os.close(_kc_seq_fd)
+        except OSError:
+            pass
+        _kc_seq_fd = None
+        return 0
+
 _a5_last = {"applied": False, "algo": 0, "kc4": ""}
 
 def a5_apply(burst148, fn, uplink):
     """XOR du keystream A5 sur les 114 bits utiles. Renvoie le burst modifie."""
     algo, kc = kc_read()
+    global _kc_tenu, _kc_retenues, _a5_last
+    if algo:
+        _kc_tenu = (algo, kc)                 # cle fraiche : on la retient
+    elif KC_RETENTION and _kc_tenu is not None:
+        algo, kc = _kc_tenu                   # effacement parasite : on tient
+        _kc_retenues += 1
+        if _kc_retenues == 1 or (_kc_retenues % 2000) == 0:
+            ST.log("Kc EFFACE EN COURS DE SESSION -- on garde la cle (#%d) ; "
+                   "elle sera lachee a la prochaine SABM. Cf. osmocon DM_EST_REQ."
+                   % _kc_retenues)
     if not algo:
-        _a5_last["applied"] = False
+        # [audit A2] _a5_last = etat de SESSION DL (badge/DEDIE-TRACE) : SEUL le
+        # thread DL l'ecrit (rebind atomique), le montant n'y touche plus -> plus
+        # de lecture dechiree du badge par une passe UL concurrente.
+        if not uplink:
+            _a5_last = {"applied": False, "algo": 0, "kc4": ""}
         return burst148                       # pas de Kc -> on ne touche a rien
-    _a5_last["applied"] = True
-    _a5_last["algo"] = algo
-    _a5_last["kc4"] = kc[:4].hex()
+    if not uplink:
+        _a5_last = {"applied": True, "algo": algo, "kc4": kc[:4].hex()}
     key = (ctypes.c_uint8 * 8)(*kc)
     dl = (ubit * 114)(); ul = (ubit * 114)()
     _gsm.osmo_a5(algo, key, ctypes.c_uint32((fn + A5_FN_ADJ) & 0xffffffff), dl, ul)
@@ -198,13 +396,10 @@ def normal_from_burst116(cB):
 
 def xcch_decode_4(bursts4_116):
     """DL : 4x116 soft-bits -> L2[23]. bursts4_116 = liste de 4 séquences de 116."""
-    buf = (sbit * (4*116))()
-    for k in range(4):
-        for i in range(116):
-            v = bursts4_116[k][i]
-            # Convention osmocom (osmo_ubit2sbit) : ubit 1 -> sbit -127,
-            # ubit 0 -> sbit +127. L'inverse fait echouer TOUS les CRC.
-            buf[k*116+i] = -127 if v else 127
+    # Convention osmocom (osmo_ubit2sbit) : ubit 1 -> sbit -127, ubit 0 -> +127.
+    # L'inverse fait echouer TOUS les CRC. Cf. _TBL_SOFT.
+    buf = (sbit * (4*116)).from_buffer_copy(
+            b"".join(bytes(b).translate(_TBL_SOFT) for b in bursts4_116))
     l2 = (ctypes.c_uint8 * 23)()
     ne = ctypes.c_int(); nb = ctypes.c_int()
     rc = _cod.gsm0503_xcch_decode(l2, buf, ctypes.byref(ne), ctypes.byref(nb))
@@ -279,6 +474,23 @@ def mksock(bind_port):
     # "GSM clock skew: old fn=X, new fn=Y" en boucle. Sans lui, un second pont
     # echoue BRUYAMMENT (EADDRINUSE), ce qui est le comportement voulu.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # [2026-08-27] BORNE SO_RCVBUF RETIREE -- ELLE DETRUISAIT LA VOIX.
+    # J'avais borne le tampon a 10 Ko en pensant que la file (mesuree a 163840
+    # o) contenait des bursts perimes traites pour rien. C'etait faux : le pont
+    # est borne par le CPU (83 % d'un coeur, mono-thread sous le GIL), pas par
+    # la socket. Borner le tampon ne l'accelere donc pas -- ca lui retire la
+    # marge qui lui permet de rattraper pendant les creux. Mesure immediate :
+    #     Recv-Q=11520 (deborde)   drops=15310 bursts jetes par le noyau
+    #     CPU du pont : 83,6 %, inchange
+    # et la voix disparait. Le tampon par defaut du noyau est le bon choix tant
+    # que le cout par burst n'a pas baisse : la file est un SYMPTOME du CPU, pas
+    # sa cause. PONT_RCVBUF=<octets> permet d'experimenter, sans defaut.
+    _rb = os.environ.get("PONT_RCVBUF", "")
+    if _rb:
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, int(_rb))
+        except (OSError, ValueError):
+            pass
     try:
         s.bind((TRX_BIND, bind_port))
     except OSError as e:
@@ -348,7 +560,14 @@ def tap(fn, chan, l2, tn=0, uplink=False):
         pass
 
 def feed_dl_l2(fn, chan, l2, port):
-    sk_gsmtap.sendto(gsmtap(fn, chan, l2), (GSMTAP_HOST, port))
+    # [audit m4] sendto garde comme tap() : ce chemin tourne dans th_data_rx, une
+    # OSError (ENOBUFS sous pression) non gardee tuerait 1 s de decodage DL.
+    try:
+        sk_gsmtap.sendto(gsmtap(fn, chan, l2), (GSMTAP_HOST, port))
+    except OSError:
+        ST.n_feed_err = getattr(ST, "n_feed_err", 0) + 1
+        if ST.n_feed_err <= 3:
+            ST.log("feed_dl_l2 sendto ECHEC #%d (best-effort, ignore)" % ST.n_feed_err)
     tap(fn, chan, l2)          # miroir vers l'analyseur — meme L2, autre port
 
 # ============================== VOIX TCH/F ====================================
@@ -393,6 +612,36 @@ GSMTAP_FACCH = 0x09        # GSMTAP_CHANNEL_FACCH_F
 
 _tch_tn   = None           # timeslot TCH arme (None = pas d'appel)
 _tch_seq  = 0
+# ── ARMER N'EST PAS AVOIR BASCULE ────────────────────────────────────────────
+# tch_cfg est publie des qu'on voit l'ASSIGNMENT COMMAND DESCENDANT. C'est la
+# DEMANDE du reseau, pas la preuve que le mobile l'a suivie. Les deux etaient
+# confondus, et le pont se comportait comme si le mobile avait bascule.
+#
+# MESURE DU 2026-08-27, appel qui echoue : mobile.log contient ZERO
+# « ASSIGNMENT COMMAND » (le mobile ne l'a jamais recu, il est reste sur le
+# SDCCH TS1 a retransmettre son SETUP), pendant que le pont, lui, l'avait
+# decode et arme TN=2. Consequences mesurees :
+#   TCHUL bursts = 4463  pour  TCH ul = 1 bloc reel
+#     -> un flux montant continu sur un TS2 ou le mobile n'emet pas, d'ou le
+#        deluge cote BTS : « no space for uplink measurement, num_ul_meas=104 »
+#        (le tampon de 104 mesures deborde en permanence) ;
+#   puis DUL->FACCH #1..#10 : le VRAI montant SDCCH detourne vers TS2, donc
+#        meme les retransmissions du SETUP cessent d'atteindre le BSC
+#        -> REJ, RR, T200 TIMER_RECOV, RELEASE ;
+#   et cote BSC : rll_ready=no -> WAIT_RLL_RTP_ESTABLISH Timeout
+#        -> « Assignment failed, cause RADIO INTERFACE MESSAGE FAILURE ».
+#
+# On separe donc les deux etats. Tant que le mobile n'a pas PROUVE qu'il est
+# passe sur le TCH, le montant reste dans la fenetre SDCCH et AUCUN burst TCH
+# n'est emis. La preuve, c'est son ASSIGNMENT COMPLETE (RR PD=0x06 MT=0x29) :
+# le mobile ne peut l'envoyer que depuis le nouveau canal.
+#
+# Si la preuve ne vient pas, l'appel echoue toujours -- mais il echoue SANS que
+# le pont brouille la piste, et la sonde ci-dessous le dit au lieu de le taire.
+_tch_mobile_ok = False     # le mobile a-t-il prouve qu'il est sur le TCH ?
+_tch_arme_t    = None      # instant d'armement, pour la sonde de non-confirmation
+_tch_arme_dit  = False     # la non-confirmation a-t-elle deja ete signalee ?
+_tch_dl_ok_t   = None      # dernier bloc DESCENDANT du TCH effectivement decode
 _tch_dl_w = 0              # w_seq de l'anneau descendant
 _tch_fd   = None
 _tch_acc  = []             # fenetre glissante des 8 derniers bursts (114 bits)
@@ -426,8 +675,15 @@ def tch_write_cfg(tn, tsc, arfcn):
     fd = os.open(TCH_CFG, os.O_CREAT | os.O_WRONLY, 0o644)
     try:    os.pwrite(fd, bytes(buf), 0)
     finally: os.close(fd)
-    ST.log("ASSIGNMENT COMMAND -> TCH arme : TN=%d TSC=%d ARFCN=%d (seq=%u)"
-           % (tn, tsc, arfcn, _tch_wseq))
+    # Nouvelle assignation = nouvelle attente de preuve. Sans cette remise a
+    # zero, un appel heriterait de la confirmation du precedent.
+    global _tch_mobile_ok, _tch_arme_t, _tch_arme_dit
+    _tch_mobile_ok = False
+    _tch_arme_t    = time.monotonic()
+    _tch_arme_dit  = False
+    ST.log("ASSIGNMENT COMMAND -> TCH arme : TN=%d TSC=%d ARFCN=%d (seq=%u) "
+           "-- EN ATTENTE de l'ASSIGNMENT COMPLETE du mobile (aucun burst "
+           "montant TCH d'ici la)" % (tn, tsc, arfcn, _tch_wseq))
 
 def check_assignment(l2, fn):
     """Detecte un ASSIGNMENT COMMAND (RR PD=0x06, MT=0x2e) sur le SDCCH DL et
@@ -435,8 +691,14 @@ def check_assignment(l2, fn):
       b0 chan_nr -> TN = b0 & 7
       b1 : TSC=(b1>>5)&7, H=(b1>>4)&1, ARFCN_high = b1 & 3
       b2 : ARFCN_low -> ARFCN = (high<<8)|low   [si H=0]"""
-    for off in range(2, min(7, len(l2) - 5)):
-        if l2[off] != 0x06 or l2[off + 1] != 0x2e:
+    # [audit A1] Balayage restreint {0,3} (comme est_assignment_complete /
+    # est_channel_release ; les 3 detecteurs RR avaient 3 plages incoherentes) :
+    # off==0 (L3 nue) etait MANQUE, et le 2..6 large armait un TCH fantome sur
+    # une I-frame de contenu portant 0x06,0x2e alignes.
+    for off in (0, 3):
+        if len(l2) <= off + 4 or l2[off] != 0x06 or l2[off + 1] != 0x2e:
+            continue
+        if off == 3 and (l2[2] >> 2) < 2:      # en-tete LAPDm B : L3 >= PD+MT
             continue
         b0, b1, b2 = l2[off + 2], l2[off + 3], l2[off + 4]
         if (b1 >> 4) & 1:
@@ -446,6 +708,117 @@ def check_assignment(l2, fn):
             return
         tch_write_cfg(b0 & 0x07, (b1 >> 5) & 0x07, ((b1 & 0x03) << 8) | b2)
         return
+
+def est_assignment_complete(l2):
+    """ASSIGNMENT COMPLETE montant : RR (PD=0x06) MT=0x29, GSM 04.08 9.1.3.
+    Meme balayage d'offset que check_assignment : selon que la L2 porte un
+    en-tete LAPDm B (addr/ctrl/len) ou une SABM avec information, la L3 ne
+    commence pas au meme octet -- on ne fige donc pas la position."""
+    # [audit M1] Balayage RESTREINT a {0,3} : le large 0..7 atteignait les octets
+    # d'en-tete LAPDm (ctrl/len) et une I-frame ordinaire (N(S)=3 -> ctrl=0x06,
+    # len=0x29) matchait a off=1 -> bascule TCH fantome qui detournait tout le
+    # montant SDCCH (cause n1 des 'appels/SMS 1 fois sur 3').
+    for off in (0, 3):
+        if len(l2) > off + 1 and l2[off] == 0x06 and l2[off + 1] == 0x29:
+            if off == 3 and (len(l2) < 3 or (l2[2] >> 2) < 2):
+                continue
+            return True
+    return False
+
+# ── ARMER SANS JAMAIS DESARMER, C'EST PIRE QUE NE PAS ARMER ──────────────────
+# [2026-08-27] La preuve de bascule (ci-dessus) a ouvert le montant TCH, et
+# RIEN ne le refermait. Mesure du run de 19:2x, un appel puis plus rien :
+#   TCH dl=460 ul=98   (fige des la liberation)
+#   TCHUL bursts=3489 -> 14486 ... +1000 par intervalle de 5 s, INDEFINIMENT
+# Le pont continuait d'arroser le TS du TCH bien apres la fin de l'appel --
+# exactement le deluge decrit plus haut (« no space for uplink measurement,
+# num_ul_meas=104 » cote BTS). Et surtout, tant que `_tch_mobile_ok` tient,
+# ul_sdcch_from_sideband DETOURNE tout le montant SDCCH vers la FACCH de ce TS :
+# apres le premier appel, plus une SABM, plus un CM SERVICE REQUEST, plus un
+# SMS n'atteignait le BSC. Symptomes rapportes : « les calls passent une fois
+# sur 3 », « les SMS passent pas », et dans mobile.log les appels suivants qui
+# meurent tous en MMCC_REL_IND depuis MM_CONNECTION_PEND -- la couche MM
+# n'arrivait meme plus a s'etablir.
+#
+# Le TN n'est pas fige : osmo-bsc est en `channel allocator mode assignment
+# ascending` (et `chan-req descending` pour le SDCCH), donc le TCH peut tomber
+# sur n'importe quel TS libre. Tout ce qui suit lit le TN arme, ne le suppose
+# jamais.
+TCH_DL_SILENCE_S = 3.0     # sans un seul bloc DL decode pendant ce temps, on ferme
+
+def est_channel_release(l2):
+    """RR CHANNEL RELEASE descendant : PD=0x06 MT=0x0D (GSM 04.08 9.1.7).
+    C'est le message par lequel le reseau reprend le canal a la fin de l'appel.
+    Balayage RESTREINT aux deux seules positions ou la L3 peut commencer : 0
+    (L3 nue) et 3 (en-tete LAPD B : addr, ctrl, length). Le balayage large de
+    est_assignment_complete se paie ici en faux positifs -- un desarmement a
+    tort couperait un appel EN COURS."""
+    for off in (0, 3):
+        if len(l2) > off + 1 and l2[off] == 0x06 and l2[off + 1] == 0x0d:
+            return True
+    return False
+
+def tch_preuve_bascule(source, tn):
+    """Le mobile a PROUVE qu'il est sur le TCH : on ouvre le montant, et on
+    arme du meme coup le chien de garde qui le refermera."""
+    global _tch_mobile_ok, _tch_dl_ok_t
+    if _tch_mobile_ok:
+        return
+    _tch_mobile_ok = True
+    _tch_dl_ok_t   = time.monotonic()
+    ST.log("le mobile est sur le TCH TN=%s (preuve : %s) -- ouverture du "
+           "montant TCH" % (tn, source))
+
+def _tch_dl_vivant():
+    """Un bloc descendant du TCH vient d'etre decode : le canal vit."""
+    global _tch_dl_ok_t
+    _tch_dl_ok_t = time.monotonic()
+    # [audit m3] Canal SUSPENDU par le watchdog mais toujours arme : un bloc DL
+    # qui revient rouvre le montant -> l'appel survit au hoquet d'ordonnancement.
+    if not _tch_mobile_ok and _tch_tn is not None:
+        tch_preuve_bascule("bloc DL redecode apres suspension", _tch_tn)
+
+def tch_suspend(motif):
+    """[audit m3] Desarme SOFT : SUSPEND l'emission montante (le mobile n'est plus
+    repute present) mais GARDE le canal arme (_tch_tn/_tch_seq intacts). Un trou DL
+    bref (~3 s, hoquet QEMU) ne tue donc plus un appel que le radio-link-timeout
+    reel (~15 s) tolererait ; des qu'un bloc DL est redecode, _tch_dl_vivant ->
+    tch_preuve_bascule rouvre le montant. On ne remet PAS _tch_seq=0."""
+    global _tch_mobile_ok, _tch_dl_ok_t, _tch_tx_mask
+    if not _tch_mobile_ok:
+        return
+    _tch_mobile_ok = False
+    _tch_dl_ok_t   = None
+    _tch_tx_mask   = 0
+    ctypes.memset(_tch_tx_buf, 0, TCH_TX_NBURSTS * BPLEN)
+    with _tch_q_lock:
+        _tch_q_facch.clear(); _tch_q_voice.clear()
+    ST.log("TCH TN=%s SUSPENDU (%s) -- montant rendu au SDCCH, canal garde arme"
+           % (_tch_tn, motif))
+
+def tch_desarme(motif):
+    """Referme le TCH : plus un burst montant, et le montant SDCCH redevient
+    du SDCCH. On ne touche PAS au fichier calypso_tch_cfg : tch_cfg_read ne
+    relit son TN que si le `seq` a change, donc remettre _tch_tn a None suffit
+    a tenir jusqu'au prochain ASSIGNMENT COMMAND, qui incrementera ce seq."""
+    global _tch_tn, _tch_mobile_ok, _tch_arme_t, _tch_arme_dit
+    global _tch_last_fn, _tch_dl_ok_t, _tch_tx_mask
+    if _tch_tn is None and not _tch_mobile_ok:
+        return
+    tn = _tch_tn
+    _tch_tn = None; _tch_mobile_ok = False
+    _tch_arme_t = None; _tch_arme_dit = False
+    _tch_last_fn = None; _tch_dl_ok_t = None
+    del _tch_acc[:]
+    # [audit m2] Reset du tampon d'emission : sans ca _tch_tx_mask garde bit0=1 et
+    # _tch_tx_buf le contenu (voix+FACCH) de l'appel precedent -> bursts perimes
+    # emis au re-ancrage de l'appel suivant.
+    _tch_tx_mask = 0
+    ctypes.memset(_tch_tx_buf, 0, TCH_TX_NBURSTS * BPLEN)
+    with _tch_q_lock:
+        _tch_q_facch.clear()
+        _tch_q_voice.clear()
+    ST.log("TCH TN=%s DESARME (%s) -- montant rendu au SDCCH" % (tn, motif))
 
 def ul_facch_from_sideband():
     """FACCH montante : l'ASSIGNMENT COMPLETE du mobile part par la. Sans elle,
@@ -479,6 +852,37 @@ def ul_facch_from_sideband():
                     # l'emettra, en volant la voix comme le fait une vraie FACCH.
                     tap(now_fn(), GSMTAP_FACCH, l2[:GSM_MACBLOCK_LEN],
                         tch_cfg_read() or 0, True)
+                    # ── LA PREUVE DE LA BASCULE ARRIVE *ICI*, PAS SUR LE SDCCH ──
+                    # [2026-08-27] Le garde `_tch_mobile_ok` n'etait pose que dans
+                    # ul_sdcch_from_sideband, sur l'hypothese « le firmware ne poste
+                    # que DUL, donc l'ASSIGNMENT COMPLETE ressort par
+                    # calypso_sdcch_ul ». Elle est FAUSSE des que le shunt capture la
+                    # FACCH du TCH : /dev/shm/calypso_tch_facch_ul existe et se
+                    # remplit pendant l'appel. Le montant arrivait donc par CE thread,
+                    # qui empilait sans jamais poser la preuve -- et tch_ul_scheduler,
+                    # qui l'attend, se taisait. VERROU MORT : la preuve dormait dans
+                    # la file qu'elle devait debloquer.
+                    #
+                    # MESURE DU RUN DE 19:16 (appel MS#1 -> MS#2, echec) :
+                    #   [pont] TCH arme TN=2 depuis 5 s SANS ASSIGNMENT COMPLETE
+                    #   FACCH dl=0 ul=7 | TCHUL bursts=0 file_v=0 file_f=7 drop=0
+                    # 7 blocs en file = la SABM + ses 6 retransmissions (T200 x6),
+                    # ZERO burst emis. Cote mobile : ASSIGNMENT COMPLETE (cause #0)
+                    # puis 6 x « Timeout T200 state=LAPD_STATE_SABM_SENT » et
+                    # ASSIGNMENT FAILURE (cause #1) ; cote BSC :
+                    # WAIT_RLL_RTP_ESTABLISH Timeout (rll_ready=no) -> « Assignment
+                    # failed, cause RADIO INTERFACE MESSAGE FAILURE » ; cote MSC :
+                    # « Assignment Failure, releasing call ». Le mobile avait bien
+                    # bascule -- c'est le pont qui refusait de le suivre.
+                    #
+                    # Un bloc present dans calypso_tch_facch_ul est CAPTE SUR LE TCH
+                    # par le shunt : sa seule existence prouve que le mobile y est.
+                    # On n'exige donc pas d'y reconnaitre le MT 0x29 -- on le TRACE
+                    # quand c'est lui, pour que la piste reste lisible.
+                    tch_preuve_bascule(
+                        "bande laterale FACCH%s"
+                        % (", ASSIGNMENT COMPLETE"
+                           if est_assignment_complete(l2) else ""), tn)
                     with _tch_q_lock:
                         _tch_q_facch.append(bytes(l2[:GSM_MACBLOCK_LEN]))
                     ST.n_facch_ul += 1
@@ -486,14 +890,32 @@ def ul_facch_from_sideband():
             fd = None; time.sleep(0.05)
         time.sleep(FRAME_DUR / 8)
 
+_tch_cfg_fd = None
+_tch_cfg_t  = 0.0
+TCH_CFG_TTL = float(os.environ.get("PONT_TCH_CFG_TTL", "0.1"))
+
 def tch_cfg_read():
-    """TN du TCH assigne, ou None. Publie a l'ASSIGNMENT, donc jamais devine."""
-    global _tch_tn, _tch_seq
+    """TN du TCH assigne, ou None. Publie a l'ASSIGNMENT, donc jamais devine.
+    [audit M4] fd PERSISTANT + cache TTL (comme kc_read/_dcch_cfg) : l'ancienne
+    version faisait open+pread+close A CHAQUE appel (chaque burst DL + l'emetteur
+    UL temps-reel), la charge syscall que kc_read avait supprimee ('Stale TRXD',
+    voix hachee). PONT_TCH_CFG_TTL=0 pour relire a chaque appel."""
+    global _tch_tn, _tch_seq, _tch_cfg_fd, _tch_cfg_t
+    now = time.monotonic()
+    if _tch_cfg_fd is not None and TCH_CFG_TTL and (now - _tch_cfg_t) < TCH_CFG_TTL:
+        return _tch_tn
+    _tch_cfg_t = now
     try:
-        fd = os.open(TCH_CFG, os.O_RDONLY)
-        try:    b = os.pread(fd, 16, 0)
-        finally: os.close(fd)
+        if _tch_cfg_fd is None:
+            _tch_cfg_fd = os.open(TCH_CFG, os.O_RDONLY)
+        b = os.pread(_tch_cfg_fd, 16, 0)
     except OSError:
+        try:
+            if _tch_cfg_fd is not None:
+                os.close(_tch_cfg_fd)
+        except OSError:
+            pass
+        _tch_cfg_fd = None
         return _tch_tn
     if len(b) >= 8:
         seq = struct.unpack_from("<I", b, 0)[0]
@@ -567,17 +989,20 @@ def tch_dl_burst(fn, burst148):
     # m26==12 le decale. idx = m26 si m26<12, sinon m26-1. Les frontieres de bloc
     # (idx 7,11,15,19,23) tombent donc sur m26 ∈ {7,11,16,20,24}.
     idx = _tch_burst_idx(fn)
-    if len(_tch_acc) < 8 or (idx % 4) != 3:
+    # [audit M3] Instantane ATOMIQUE : tch_suspend/tch_desarme (thread scheduler)
+    # peut faire 'del _tch_acc[:]' entre le garde de longueur et le join. list()
+    # est une copie C atomique sous GIL -> un del concurrent donne au pire un acc
+    # court, capte par le garde len(acc)<8 au lieu de lever ValueError et de tuer
+    # th_data_rx (1 s sans recvfrom = tout le DL decroche).
+    acc = list(_tch_acc)
+    if len(acc) < 8 or (idx % 4) != 3:
         return
     # ⚠️ CORRIGE (audit) : gsm0503_tch_fr_decode indexe &bursts[i*116] — 8x116,
     # PAS 8x114 (les 2 bits de vol sont DANS les 116, poses par tch_burst_map).
     # L'ancienne allocation 8*114 faisait lire 928 octets dans 912 (hors bornes)
     # avec un pas decale : le codec ne pouvait produire que du bruit.
-    buf = (sbit * (8 * 116))()
-    for k in range(8):
-        b = _tch_acc[k]
-        for i in range(116):
-            buf[k * 116 + i] = -127 if b[i] else 127
+    buf = (sbit * (8 * 116)).from_buffer_copy(
+            b"".join(bytes(b).translate(_TBL_SOFT) for b in acc))
     fr = (ctypes.c_uint8 * FR_BYTES)()
     ne = ctypes.c_int(); nb = ctypes.c_int()
     # net_order = 1 (3e argument). osmo-bts et trxcon decodent TOUS DEUX avec 1
@@ -588,12 +1013,20 @@ def tch_dl_burst(fn, burst148):
     # correcte — d'ou une signalisation saine et une voix fausse.
     rc = _cod.gsm0503_tch_fr_decode(fr, buf, 1, 0, ctypes.byref(ne), ctypes.byref(nb))
     if rc == FR_BYTES:
+        _tch_dl_vivant()                       # le canal vit : chien de garde repousse
         tch_dl_publish(bytes(fr), fn)          # 33 o = trame voix FR
     elif rc == GSM_MACBLOCK_LEN:
         # ⚠️ CORRIGE (audit) : la lib rend 23 quand les bits de vol disent FACCH.
         # On jetait donc UA / ALERTING / CONNECT en les comptant « CRC fail ».
+        _tch_dl_vivant()
         feed_dl_l2(fn, GSMTAP_FACCH, bytes(fr)[:GSM_MACBLOCK_LEN], PORT_GSMTAP)
         ST.n_facch_dl += 1
+        # La fin d'appel arrive par la : le reseau reprend le canal avec un RR
+        # CHANNEL RELEASE sur la FACCH. C'est le signal le plus PRECOCE dont on
+        # dispose -- le chien de garde de tch_ul_scheduler n'est que le filet.
+        if est_channel_release(bytes(fr)[:GSM_MACBLOCK_LEN]):
+            tch_desarme("CHANNEL RELEASE descendant sur la FACCH")
+            kc_lacher("CHANNEL RELEASE (FACCH)")
     else:
         ST.n_tch_crc += 1
 
@@ -700,6 +1133,31 @@ def tch_ul_scheduler():
         tn = tch_cfg_read()
         if tn is None or not TCH_ENABLED:
             time.sleep(0.05); last_fn = None; continue
+        # Emettre avant la preuve, c'est arroser un slot ou le mobile n'est pas :
+        # 4463 bursts pour 1 bloc reel, et le tampon de mesures du BTS qui
+        # deborde a chaque trame. On se tait.
+        if not _tch_mobile_ok:
+            global _tch_arme_dit
+            if (not _tch_arme_dit and _tch_arme_t is not None
+                    and time.monotonic() - _tch_arme_t > 5.0):
+                _tch_arme_dit = True
+                ST.log("TCH arme TN=%d depuis 5 s SANS ASSIGNMENT COMPLETE : le "
+                       "mobile n'a pas bascule (il n'a probablement pas recu "
+                       "l'ASSIGNMENT COMMAND). Montant maintenu sur le SDCCH." % tn)
+            time.sleep(0.05); last_fn = None; continue
+        # ── LE FILET : un TCH vivant PARLE en descendant ─────────────────────
+        # Pendant un appel la BTS emet en continu sur ce TS -- on y decode un
+        # bloc (voix ou FACCH) plusieurs dizaines de fois par seconde. Des que
+        # le canal est rendu, ca s'arrete net. Si le CHANNEL RELEASE s'est
+        # perdu (il traverse une FACCH dont 45 % des blocs echouent au CRC sur
+        # ce banc), c'est ce silence-la qui referme le TCH -- sans lui, un seul
+        # RELEASE manque et le pont arrose le slot jusqu'au prochain
+        # redemarrage, en emportant tout le montant SDCCH avec lui.
+        if (_tch_dl_ok_t is not None
+                and time.monotonic() - _tch_dl_ok_t > TCH_DL_SILENCE_S):
+            tch_suspend("aucun bloc descendant decode depuis %.0f s"
+                        % TCH_DL_SILENCE_S)
+            time.sleep(0.05); last_fn = None; continue
         fn_air = (now_fn() + UL_FN_ADVANCE) % GSM_HYPERFRAME
         if fn_air == last_fn:
             time.sleep(FRAME_DUR / 4); continue
@@ -761,7 +1219,10 @@ def dl_dispatch(tn, fn, burst148):
         sb = (ctypes.c_uint8*4)()
         if _cod.gsm0503_sch_decode(sb, buf) == 0:
             # SCH -> feed_sb (4731) : BSIC + FN
-            sk_gsmtap.sendto(b"SCH1" + struct.pack("<iii", BSIC, fn, 0), (GSMTAP_HOST, PORT_SCH))
+            try:
+                sk_gsmtap.sendto(b"SCH1" + struct.pack("<iii", BSIC, fn, 0), (GSMTAP_HOST, PORT_SCH))
+            except OSError:
+                pass
         return
     # --- xcch : UNIQUEMENT les slots de signalisation. Les TS TCH/F envoient
     # de la voix/du dummy : les passer a xcch_decode ne produit que des CRC
@@ -955,16 +1416,32 @@ def _acc_dl(tn, phys, fn, burst148):
             # set_dcch(kind, ss) que le firmware publie depuis son chan_nr.
             feed_dl_l2(d["fn0"], GSMTAP_SDCCH4, l2, PORT_GSMTAP)
             check_assignment(l2, d["fn0"])     # arme le TCH si c'est un ASSIGNMENT
+            # Le CHANNEL RELEASE d'un appel avorte AVANT la bascule arrive ici,
+            # sur le SDCCH : sans ce desarmement, le TCH arme par l'ASSIGNMENT
+            # COMMAND resterait arme jusqu'a la prochaine assignation.
+            if est_channel_release(l2):
+                tch_desarme("CHANNEL RELEASE descendant sur le SDCCH")
+                kc_lacher("CHANNEL RELEASE (SDCCH)")
             return
         if base51 in plan.sacch_dl:
             feed_dl_l2(d["fn0"], GSMTAP_SACCH, l2, PORT_GSMTAP)   # SACCH dediee
             return
         # BCCH / CCCH : routage PAR CONTENU (le shunt dispatche sur le sub_type).
+        # [audit M2] Format pseudo-longueur BCCH/CCCH (PL@0 PD@1 MT@2) : on teste
+        # l2[1] AVANT l2[3], sinon un octet de corps L3 valant 0x06 en l2[3]
+        # faisait lire un faux MT et jetait SI/paging en silence (~1/256).
         mt = None
-        if len(l2) >= 5 and l2[3] == 0x06:   mt = l2[4]
-        elif len(l2) >= 3 and l2[1] == 0x06: mt = l2[2]
+        if len(l2) >= 3 and l2[1] == 0x06:   mt = l2[2]
+        elif len(l2) >= 5 and l2[3] == 0x06: mt = l2[4]
         if mt is None:
             return
+        # ── LE SEUL OCTROI D'UN CANAL NEUF ──────────────────────────────────
+        # IMMEDIATE ASSIGNMENT (0x3f) et sa forme etendue (0x39) donnent un
+        # canal dedie NEUF, qui demarre toujours en clair. C'est LA le moment
+        # ou une cle retenue cesse d'etre valable -- pas a chaque SABM.
+        # 0x3a (REJECT) n'octroie rien : on ne lache pas.
+        if mt in (0x3f, 0x39):
+            kc_lacher("IMMEDIATE ASSIGNMENT descendant")
         if mt in SI_TYPES:
             chan = GSMTAP_BCCH                # SI1/2/3/4/2bis/2ter -> feed_si
         elif mt in CCCH_TYPES:
@@ -1017,7 +1494,12 @@ CFILE_OSR  = int(os.environ.get("PONT_CFILE_OSR", "4"))
 #   pour rejouer/demontrer, PAS une preuve de ce qui est passe sur l'air.
 #   masque : en mode pont il n'existe aucune chaine IQ reelle a capturer.
 #   retirer : le jour ou une vraie source RF alimente le chemin.
-AIRREC      = os.environ.get("PONT_AIRREC", "1") not in ("0", "", "no")
+# [2026-08-27] DEFAUT PASSE A 0. L'enregistrement d'air coute 148 iterations
+# Python PAR BURST (~250 000/s) rien que pour fabriquer sa vue en bits, et il se
+# coupait de toute facon tout seul faute d'espace disque (« airrec descendant :
+# moins de 1024 Mo libres — COUPE ») -- on payait donc le calcul sans rien
+# enregistrer. PONT_AIRREC=1 le rallume quand on en a besoin.
+AIRREC      = os.environ.get("PONT_AIRREC", "0") not in ("0", "", "no")
 # [2026-08-16] SUR DISQUE, PLUS EN RAM. /dev/shm ne fait que 8 Go et porte
 # AUSSI les journaux du run : a 17,3 Mo/s (descendant + montant) il etait
 # plein en ~6 minutes, ce qui imposait un decoupage en segments. L'overlay
@@ -1100,6 +1582,8 @@ if CFILE:
     except ImportError:
         print("[pont] PONT_CFILE demande mais numpy absent -> pas de cfile", flush=True)
 
+_CAPTURE_MAX = int(os.environ.get("PONT_CAPTURE_MAX_MB", "512")) * 1048576   # 0 = illimite
+
 def capture_burst(fn, tn, bits148, uplink):
     """A : ecrit le burst dans le dump si le gate est pose."""
     if _bf is None:
@@ -1113,6 +1597,9 @@ def capture_burst(fn, tn, bits148, uplink):
     else:
         _bf.write(b"PBST" + struct.pack("<IBB", fn, tn, len(b)) + b)
     _bf.flush()
+    # [audit m5] Plafond roulant (etait sans borne, pouvait remplir le volume).
+    if _CAPTURE_MAX and os.fstat(_bf.fileno()).st_size >= _CAPTURE_MAX:
+        _bf.seek(0); _bf.truncate(0)
 
 def capture_iq(bits148):
     """B : module le burst en GMSK et l'ajoute au cfile (complex float32)."""
@@ -1137,6 +1624,9 @@ def capture_iq(bits148):
     phase = _np.cumsum(_np.convolve(up, g, mode="same")) * (_np.pi / 2.0)
     _np.exp(1j * phase).astype(_np.complex64).tofile(_cf)
     _cf.flush()
+    # [audit m5] Plafond roulant, comme AIRREC (etait sans borne).
+    if _CAPTURE_MAX and os.fstat(_cf.fileno()).st_size >= _CAPTURE_MAX:
+        _cf.seek(0); _cf.truncate(0)
 
 # ============ AIRREC : enregistrement permanent, descendant ET montant =======
 # UNE classe, DEUX instances. Le descendant et le montant partagent exactement la
@@ -1342,14 +1832,30 @@ class _AirRec:
                 except OSError:
                     pass
             if s.fifo_fd is not None:
+                # [audit m1] os.write sur pipe O_NONBLOCK peut n'ecrire qu'une
+                # PARTIE d'une trame (>PIPE_BUF) : l'ancien code ignorait le retour,
+                # perdait le reste et decalait DURABLEMENT le flux complex64 du
+                # lecteur FFT. On garde le reste (fifo_pending) colle a la trame
+                # suivante -> flux jamais rompu ; en cas de retard on lache des
+                # TRAMES ENTIERES par l'avant (multiple de len(octets) = de 8 o).
+                pend = getattr(s, "fifo_pending", b"")
+                data = pend + octets if pend else octets
+                maxq = 3 * len(octets)
+                if len(data) > maxq:
+                    drop = ((len(data) - maxq) // len(octets)) * len(octets)
+                    if drop:
+                        data = data[drop:]; s.n_fifo_drop += 1
                 try:
-                    os.write(s.fifo_fd, octets); s.n_fifo += 1
+                    n = os.write(s.fifo_fd, data)
+                    s.fifo_pending = data[n:]
+                    if n:
+                        s.n_fifo += 1
                 except BlockingIOError:
-                    s.n_fifo_drop += 1
+                    s.fifo_pending = data
                 except OSError:
                     try: os.close(s.fifo_fd)
                     except OSError: pass
-                    s.fifo_fd = None
+                    s.fifo_fd = None; s.fifo_pending = b""
         if s.mir_fh is not None:
             try:
                 s.mir_fh.write(octets); s.mir_bytes += len(octets)
@@ -1408,12 +1914,17 @@ class _AirRec:
         # entier, donc decodable tel quel. Une rotation aurait rendu la capture
         # inexploitable sans concatenation prealable.
         if s.bytes >= AIRREC_MAX:
-            ST.log("airrec %s : plafond %d Mo atteint — ARRET de l'ecriture, "
-                   "le fichier %s reste complet et decodable"
-                   % (s.sens, AIRREC_MAX // 1048576, s.path))
-            try: s.fh.flush()
-            except OSError: pass
-            s.off = True
+            # [demande operateur 2026-08-29] Au plafond on NE S'ARRETE PLUS : on RM
+            # (tronque a 0) et on RECOMMENCE -> buffer roulant borne a AIRREC_MAX,
+            # l'enregistrement ne s'interrompt jamais (symetrique du cfile #2 du
+            # shunt). L'ancien ARRET figeait la capture -> REC 0 o au plafond.
+            ST.log("airrec %s : plafond %d Mo atteint — ROTATION (rm + redemarrage),"
+                   " buffer roulant %s" % (s.sens, AIRREC_MAX // 1048576, s.path))
+            try:
+                s.fh.flush(); s.fh.seek(0); s.fh.truncate(0)
+                s.bytes = 0
+            except OSError:
+                s.off = True
         elif s.split:                # SIGUSR1 : nouveau fichier, a la demande
             s.split = False
             if not s.rotate():
@@ -1460,8 +1971,7 @@ def th_airrec():
     ils viennent en 8 datagrammes distincts et rien ne garantit leur ordre."""
     global _ar_g
     if not AIRREC:
-        ST.log("airrec DESACTIVE (PONT_AIRREC=0) — aucun cfile ne sera ecrit")
-        return
+        return          # main() ne demarre meme plus ce thread ; annonce faite la-bas
     if _np is None:
         try:
             import numpy as _n2
@@ -1667,6 +2177,7 @@ _ul_sd_n = [0]     # compteur d'emissions SDCCH montantes (pour la trace ci-dess
 
 def ul_sdcch_from_sideband():
     """Lit la L2 SDCCH déposée par l'ARM, l'encode et l'émet (4 bursts étalés)."""
+    global _tch_mobile_ok      # cette fonction POSE la preuve (voir plus bas)
     fd = None; last_seq = -1
     while True:
         try:
@@ -1681,30 +2192,84 @@ def ul_sdcch_from_sideband():
                     last_seq = seq
                     l1s_fn = struct.unpack_from("<I", b, 4)[0]
                     l2 = b[16:39]
+                    # [2026-08-27, soir] PLUS DE LACHER SUR LA SABM. Mesure du
+                    # run : 11 « Kc LACHE (SABM montante) » en fonctionnement
+                    # normal, chacun en pleine session chiffree -- un
+                    # re-etablissement LAPDm et le SAPI 3 du SMS sont des SABM,
+                    # et ils vivent sur un canal DEJA chiffre. Le lacher est
+                    # remonte la ou un canal est vraiment NEUF : l'IMMEDIATE
+                    # ASSIGNMENT descendant (et le CHANNEL RELEASE). _est_sabm
+                    # reste, il sert encore a lire les traces.
                     # MONTANT : on tape la L2 TELLE QUE LE MOBILE L'A POSEE,
                     # avant encodage et avant chiffrement. C'est la seule vue
                     # lisible du montant : aucun outil ne sait demoduler un
                     # enregistrement montant (pas de FCCH/SCH pour se caler).
-                    plan, ss, tn = _dcch_plan()
-                    tap(now_fn(), GSMTAP_SDCCH4, l2, tn, True)
-                    bursts = xcch_encode_4(l2)
-                    # ⚠️ MEME BUG QUE LE RACH : `l1s_fn` est l'horloge du FIRMWARE,
-                    # pas celle du pont (que la BTS suit via IND CLOCK). Emettre
-                    # dedans donnait 35 bursts "hors fenetre". On vise le prochain
-                    # bloc SDCCH montant de NOTRE horloge.
+                    # ── APRES L'ASSIGNATION, LE MONTANT EST DE LA FACCH ────
+                    # Le firmware ne poste QUE la tache DUL (12) en montant --
+                    # jamais TCHT (13) ni TCHA (14). Mesure du 27/08 sur les
+                    # sondes LATCH : task_u=0 (11865 fois) et task_u=12 (1639),
+                    # rien d'autre. shunt_capture_tch_ul() ne matche donc jamais,
+                    # /dev/shm/calypso_tch_facch_ul n'est JAMAIS cree, et
+                    # ul_facch_from_sideband boucle sur un open qui echoue :
+                    # FACCH ul = 0.
                     #
-                    # ⚠️ LE SLOT ETAIT LA CONSTANTE 0. Toute SABM partait donc sur
-                    # le TS0, quel que soit le chan_nr de l'IMMEDIATE ASSIGNMENT.
-                    # Des que le BSC allouait le SDCCH/8 du TS1, la BTS ecoutait
-                    # sur le TS1 et n'entendait rien : T200 x6 -> RR_REL_IND ->
-                    # « Location update failed », avec un lchan cote BSC bloque
-                    # en WAIT_RLL_RTP_ESTABLISH (rll_ready=no). Le slot vient
-                    # maintenant du firmware, comme la sous-voie et la fenetre.
-                    if _ul_sd_n[0] < 10 or (_ul_sd_n[0] % 50) == 0:
-                        ST.log("SDCCH-UL -> %s SS=%d TS=%d fenetre fn%%51=%d (#%d)"
-                               % (plan.name, ss, tn, plan.ul_base(ss), _ul_sd_n[0]))
-                    _ul_sd_n[0] += 1
-                    emit_with_timing(tn, next_sdcch_ul_fn(), bursts, cipher=True)
+                    # Consequence : meme apres avoir bascule sur le TCH, le
+                    # mobile depose sa L2 montante ici, dans calypso_sdcch_ul --
+                    # ASSIGNMENT COMPLETE compris. On la re-emettait alors dans
+                    # la fenetre SDCCH du TS1, alors que la BTS ecoute la FACCH
+                    # du TCH sur son propre slot. Le BSC restait en
+                    # WAIT_RR_ASS_COMPLETE et sortait en « EQUIPMENT FAILURE:
+                    # Timeout » -- exactement la panne que decrit la docstring
+                    # de ul_facch_from_sideband.
+                    #
+                    # Des que tch_cfg est arme, ce montant appartient donc au
+                    # TCH. On le FILE (on n'emet pas) : l'ordonnanceur unique
+                    # tch_ul_scheduler l'enverra en volant la voix, comme le
+                    # fait une vraie FACCH. Emettre ici entrelacerait deux
+                    # sequences de 8 bursts sans verrou -- le defaut corrige le
+                    # 16/08 dans ul_facch_from_sideband, qu'on ne refait pas.
+                    _tn_tch = tch_cfg_read() if TCH_ENABLED else None
+                    # L'ASSIGNMENT COMPLETE est LUI-MEME le premier message du
+                    # nouveau canal : il part en FACCH, et il fait basculer.
+                    if _tn_tch is not None and not _tch_mobile_ok:
+                        if est_assignment_complete(l2):
+                            tch_preuve_bascule("ASSIGNMENT COMPLETE montant sur "
+                                               "la bande laterale SDCCH", _tn_tch)
+                        else:
+                            # Pas encore passe : ce montant appartient toujours au
+                            # SDCCH. Le detourner ici, c'est le perdre.
+                            _tn_tch = None
+                    if _tn_tch is not None:
+                        tap(now_fn(), GSMTAP_FACCH, l2[:GSM_MACBLOCK_LEN],
+                            _tn_tch, True)
+                        with _tch_q_lock:
+                            _tch_q_facch.append(bytes(l2[:GSM_MACBLOCK_LEN]))
+                        ST.n_facch_ul += 1
+                        if ST.n_facch_ul <= 10 or (ST.n_facch_ul % 50) == 0:
+                            ST.log("DUL->FACCH #%d : TCH arme TN=%d -- le montant "
+                                   "part en FACCH et non dans la fenetre SDCCH"
+                                   % (ST.n_facch_ul, _tn_tch))
+                    else:
+                        plan, ss, tn = _dcch_plan()
+                        tap(now_fn(), GSMTAP_SDCCH4, l2, tn, True)
+                        bursts = xcch_encode_4(l2)
+                        # ⚠️ MEME BUG QUE LE RACH : `l1s_fn` est l'horloge du FIRMWARE,
+                        # pas celle du pont (que la BTS suit via IND CLOCK). Emettre
+                        # dedans donnait 35 bursts "hors fenetre". On vise le prochain
+                        # bloc SDCCH montant de NOTRE horloge.
+                        #
+                        # ⚠️ LE SLOT ETAIT LA CONSTANTE 0. Toute SABM partait donc sur
+                        # le TS0, quel que soit le chan_nr de l'IMMEDIATE ASSIGNMENT.
+                        # Des que le BSC allouait le SDCCH/8 du TS1, la BTS ecoutait
+                        # sur le TS1 et n'entendait rien : T200 x6 -> RR_REL_IND ->
+                        # « Location update failed », avec un lchan cote BSC bloque
+                        # en WAIT_RLL_RTP_ESTABLISH (rll_ready=no). Le slot vient
+                        # maintenant du firmware, comme la sous-voie et la fenetre.
+                        if _ul_sd_n[0] < 10 or (_ul_sd_n[0] % 50) == 0:
+                            ST.log("SDCCH-UL -> %s SS=%d TS=%d fenetre fn%%51=%d (#%d)"
+                                   % (plan.name, ss, tn, plan.ul_base(ss), _ul_sd_n[0]))
+                        _ul_sd_n[0] += 1
+                        emit_with_timing(tn, next_sdcch_ul_fn(), bursts, cipher=True)
         except OSError:
             fd = None
         time.sleep(FRAME_DUR / 8)
@@ -1816,14 +2381,43 @@ def th_data_rx():
                     ST.n_bsp_err += 1
                     if ST.n_bsp_err <= 3:
                         ST.log("BSP relais ECHEC #%d (%s)" % (ST.n_bsp_err, e))
-            _b = bytes(0x01 if b else 0xFF for b in burst)
-            capture_burst(fn, tn, _b, False)
+            # 148 iterations Python PAR BURST, soit ~250 000 par seconde --
+            # pour deux consommateurs qui sortent aussitot quand ils sont
+            # coupes (capture_burst : `if _bf is None: return` ; airrec_feed :
+            # `if AIRREC and ...`). On ne fabrique donc `_b` que si quelqu'un
+            # le lit vraiment.
+            if _bf is not None or AIRREC:
+                _b = bytes(0x01 if b else 0xFF for b in burst)
+                capture_burst(fn, tn, _b, False)
             # AIRREC : depot seul, aucun calcul ici (cf. airrec_feed). C'est le
             # SEUL point du programme ou le descendant est visible sous forme de
             # bits — capture_iq, lui, n'est appele que depuis send_trxd_ul et ne
             # voyait donc que le montant.
-            airrec_feed(fn, tn, _b)
+                airrec_feed(fn, tn, _b)
             dl_dispatch(tn, fn, burst)
+
+# [2026-08-27] UNE INDICATION PAR MULTITRAME, PAS UNE PAR TRAME.
+#
+# On en envoyait une toutes les FRAME_DUR, ~217/s. osmo-bts-trx appelle
+# trx_sched_clock() a CHAQUE indication et corrige a chaque fois : rattrapage par
+# bts_sched_fn() (« N FN slower ») ou reprogrammation du timerfd (« N FN
+# faster »). 217 indications/s, c'est 217 occasions de corriger par seconde, et
+# la gigue de time.sleep() en CPython suffit a en declencher une sur sept.
+# scheduler_trx.c pose MAX_FN_SKEW = 50 : la tolerance est dimensionnee pour une
+# indication PAR MULTITRAME DE 51. L'horloge fine est le timerfd du BTS ;
+# l'indication ne sert qu'a corriger la derive lente.
+#
+# MESURE qui motive ce changement (27/08, run de 17:01) :
+#   BTS#0 (derriere ce pont) 5502 compensations   BTS#1 (fake_trx) 190   -> 29x
+#   decodeur TCH : gap=1451 pour 407 blocs tentes -- l'accumulateur de 8 bursts
+#   vide 3,5 fois plus souvent qu'il n'aboutit, d'ou FACCH dl=0
+#   canal dedie : TS1/0 111/469 (24%) contre TS0/2 654/654 (100%) sur le commun
+#
+# CIBLE VERIFIABLE : gap doit s'effondrer et FACCH dl devenir non nul. Sinon la
+# cause est ailleurs, et on aura elimine cette variable proprement.
+# Le FN reste f(t) sur time.monotonic() : seule la CADENCE change, la valeur
+# annoncee reste exacte. PONT_CLCK_PERIOD_FN=1 retablit l'ancien comportement.
+CLCK_PERIOD_FN = int(os.environ.get("PONT_CLCK_PERIOD_FN", "51"))
 
 def th_clck():
     # POINT 4 — IND CLOCK périodique, FN dérivé du temps absolu.
@@ -1831,7 +2425,7 @@ def th_clck():
         fn = now_fn()
         if _bts_addr["clck"]:
             sk_clck.sendto(("IND CLOCK %u" % fn).encode() + b"\0", _bts_addr["clck"])
-        time.sleep(FRAME_DUR)   # cadence d'indication ; le FN reste f(t), pas accumulé
+        time.sleep(FRAME_DUR * CLCK_PERIOD_FN)   # le FN reste f(t), jamais accumule
 
 def th_stats():
     while True:
@@ -1882,6 +2476,21 @@ def _garde(fn):
             except Exception:
                 ST.log("THREAD %s EXCEPTION:\n%s" % (fn.__name__, traceback.format_exc()))
                 time.sleep(1)
+                continue
+            # --- _garde : retour normal = thread TERMINE, PAS a relancer -------
+            # [2026-08-27] Le `while True` relancait aussi les retours NORMAUX,
+            # sans le moindre sleep. Une fonction de thread qui choisit de rendre
+            # la main -- th_airrec le fait quand PONT_AIRREC=0 -- repartait donc
+            # aussitot, a pleine vitesse.
+            # CE QUE CA A COUTE : 18 146 889 lignes et 1,27 Go dans
+            # /dev/shm/pont.log, soit 1,2 Go de RAM (tmpfs), plus un coeur entier
+            # brule a tourner a vide, sur une VM de 8 Go. Le defaut PONT_AIRREC=1
+            # masquait le piege : la branche de retour n'etait jamais prise.
+            # Les autres threads sont tous des `while True` : ils ne retournent
+            # jamais normalement, donc parquer ici ne change rien pour eux.
+            ST.log("THREAD %s termine normalement — parque (pas de relance)"
+                   % fn.__name__)
+            return
     run.__name__ = fn.__name__
     return run
 
@@ -1941,9 +2550,17 @@ def main():
         ST.log("relais BSP desactive (PONT_BSP_FEED=0) — le BSP reste a sec")
     # apprend l'adresse CLCK/CTRL du BTS via un premier RSP/echo : simplifié, on
     # réutilise l'adresse DATA pour CLCK (même IP) dès qu'un burst arrive.
-    for fn in (th_ctrl, th_data_rx, th_clck, th_stats,
-               ul_sdcch_from_sideband, ul_rach_from_sideband, tch_ul_loop,
-               ul_facch_from_sideband, tch_ul_scheduler, th_airrec):
+    _threads = [th_ctrl, th_data_rx, th_clck, th_stats,
+                ul_sdcch_from_sideband, ul_rach_from_sideband, tch_ul_loop,
+                ul_facch_from_sideband, tch_ul_scheduler]
+    # On ne demarre pas un thread qui n'a rien a faire : plus lisible dans
+    # `ps -L` qu'un thread parque, et une sonde de moins a expliquer.
+    if AIRREC:
+        _threads.append(th_airrec)
+    else:
+        ST.log("airrec DESACTIVE (PONT_AIRREC=0) — thread non demarre, "
+               "aucun cfile ne sera ecrit")
+    for fn in _threads:
         threading.Thread(target=_garde(fn), daemon=True, name=fn.__name__).start()
     while True:
         time.sleep(3600)
