@@ -530,7 +530,7 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 # HEAD, un seul utilise. /opt/GSM/osmo_egprs est le chemin nominal, teste en
 # premier par build-iso.sh l.964 et update.sh l.329.
 RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs \
-      && cd osmo_egprs && git checkout RELEASE-0.1
+      && cd /opt/GSM/osmo_egprs && git checkout RELEASE-0.1
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
