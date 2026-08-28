@@ -266,9 +266,15 @@ RUN cd ${ROOT} && \
 # (Le `rm -rf /opt/GSM/firmware` qui precedait le clone dans Dockerfile.run est
 #  supprime : ici le chemin n'existe pas encore, l'instruction etait morte.)
 RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
-RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.elf /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.elf
-RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.bin /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.bin
-RUN cp /opt/GSM/firmware/board/compal_e88/layer1.highram.map /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.map
+# [2026-08-28] Les trois `cp` vers /opt/GSM/osmocom-bb/src/target/firmware qui
+# suivaient sont SUPPRIMES. Ils entretenaient un deuxieme exemplaire du firmware
+# que plus personne ne lit : depuis la normalisation, environnement/paths.env du
+# depot qemu ne connait qu'un chemin, $GSM_ROOT/firmware, et c'est celui que
+# QEMU (-kernel .elf) comme osmocon (romload .bin) recoivent.
+# Verifie sur le banc 192.168.1.7 : les deux exemplaires etaient bit a bit
+# identiques (md5 3363105f...), et seul /opt/GSM/firmware etait charge.
+# Si vous recompilez le firmware dans osmocom-bb, deposez le resultat dans
+# /opt/GSM/firmware : c'est desormais le seul endroit consulte.
 
 # ── gsup-smsc-proto : SMSC externe connecté à OsmoHLR via GSUP ────────────────
 # Programmes : proto-smsc-daemon (réception MO SMS + relai MT via GSUP)
