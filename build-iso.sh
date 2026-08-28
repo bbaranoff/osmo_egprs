@@ -160,13 +160,12 @@ if [ "$ISO_ALL" = "1" ] || { [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0
    && [ -z "$ISO_NODE" ] && [ "$ISO_LITE" = "0" ] && [ "$ISO_DESKTOP" = "0" ]; }; then
     # --all ajoute la desktop aux trois images historiques. Sans lui (aucun
     # role demande), on garde exactement les trois d'avant.
-    if [ "$ISO_ALL" = "1" ]; then _N="QUATRE"; else _N="TROIS"; fi
+    _N="QUATRE"   # [2026-08-29] --all par defaut : les QUATRE images, desktop incluse
     echo -e "${CYAN}${BOLD}══ Construction des ${_N} images ══${NC}"
     echo -e "  1. ${CYAN}interstp.iso${NC}               le hub SS7 (PC 0.0.0)"
     echo -e "  2. ${CYAN}osmo-operator.iso${NC}          un noeud - son numero se choisit au demarrage :"
     echo -e "     ${CYAN}./start-direct.sh --node N${NC}   (N de 1 a 9)"
     echo -e "  3. ${CYAN}osmo-operator-lite.iso${NC}     le meme noeud, sans les ateliers de compilation"
-    [ "$ISO_ALL" = "1" ] && \
     echo -e "  4. ${CYAN}osmo-operator-desktop.iso${NC}  le meme noeud, avec GNOME, wireshark et linphone"
     echo ""
 
@@ -196,11 +195,10 @@ if [ "$ISO_ALL" = "1" ] || { [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0
     "$0" --role=operator --lite --output=osmo-operator-lite.iso "${GRAFT_ARGS[@]+"${GRAFT_ARGS[@]}"}" \
         || { echo -e "${RED}Echec de osmo-operator-lite.iso${NC}" >&2; exit 1; }
     _ISOS=("$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" "$(pwd)/osmo-operator-lite.iso")
-    if [ "$ISO_ALL" = "1" ]; then
-        "$0" --role=operator --desktop --output=osmo-operator-desktop.iso "${GRAFT_ARGS[@]+"${GRAFT_ARGS[@]}"}" \
-            || { echo -e "${RED}Echec de osmo-operator-desktop.iso${NC}" >&2; exit 1; }
-        _ISOS+=("$(pwd)/osmo-operator-desktop.iso")
-    fi
+    # [2026-08-29] --all par defaut : la desktop est TOUJOURS construite.
+    "$0" --role=operator --desktop --output=osmo-operator-desktop.iso "${GRAFT_ARGS[@]+"${GRAFT_ARGS[@]}"}" \
+        || { echo -e "${RED}Echec de osmo-operator-desktop.iso${NC}" >&2; exit 1; }
+    _ISOS+=("$(pwd)/osmo-operator-desktop.iso")
     echo -e "${GREEN}${BOLD}═══ Les ${_N} images sont pretes ═══${NC}"
     ls -lh "${_ISOS[@]}" 2>/dev/null | sed 's/^/  /'
     exit 0
@@ -560,8 +558,19 @@ echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prete"
 # docker au runtime, pas de tar.gz de plusieurs Go embarque.
 
 # ── Etape 4 : Bootstrap rootfs minimal ─────────────────────────────────────
+# ── Cache des .deb (accelere les rebuilds) ─────────────────────────────────
+# ISO_DEB_CACHE=<dir absolu> : cache PERSISTANT que debootstrap reutilise
+# (--cache-dir) au lieu de re-telecharger la base a chaque build (les lignes
+# "I: Retrieving / I: Validating"). Vide ou --no-cache -> pas de cache.
+ISO_DEB_CACHE="${ISO_DEB_CACHE:-$HOME/.cache/osmo-iso-debs}"
+DEBOOTSTRAP_CACHE_OPT=""
+if [ -n "$ISO_DEB_CACHE" ] && [ -z "$NO_CACHE" ]; then
+    mkdir -p "$ISO_DEB_CACHE/debootstrap"
+    DEBOOTSTRAP_CACHE_OPT="--cache-dir=$ISO_DEB_CACHE/debootstrap"
+    echo -e "  ${GREEN}cache .deb debootstrap : $ISO_DEB_CACHE/debootstrap${NC}"
+fi
 echo -e "${GREEN}[4/9] debootstrap jammy (minimal)...${NC}"
-debootstrap --variant=minbase --include=\
+debootstrap $DEBOOTSTRAP_CACHE_OPT --variant=minbase --include=\
 systemd,systemd-sysv,dbus,kmod,\
 ca-certificates,curl,gnupg,\
 iproute2,iputils-ping,procps,less,nano \
@@ -1385,6 +1394,20 @@ GDM
     # ce chroot tourne dans un bash -c en quotes simples - d ou les \047.
     printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type=\047nothing\047\nsleep-inactive-battery-type=\047nothing\047\n\n[org.gnome.desktop.input-sources]\nsources=[(\047xkb\047,\047%s\047)]\n" \
         "${OSMO_ISO_KB:-fr}" > /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+    # ── Fond d ecran GSM LAB ────────────────────────────────────────────
+    # PNG 1920x1080 fige au build (configs/gsm-lab-wallpaper.png, rendu depuis
+    # la page bbaranoff.github.io), pose comme fond GNOME par DEFAUT de session
+    # (live sans persistance : il faut le defaut de schema, pas un reglage
+    # utilisateur). zoom : l image est en 16:9, elle remplit sans deformer.
+    _WP=/opt/GSM/osmo_egprs/configs/gsm-lab-wallpaper.png
+    if [ -f "$_WP" ]; then
+        install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-wallpaper.png
+        printf "\n[org.gnome.desktop.background]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" \
+            >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+        echo "  [desktop] fond d ecran GSM LAB pose"
+    else
+        echo "  [desktop] WARN: $_WP absent -- fond d ecran GNOME par defaut"
+    fi
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
 
     echo "  [desktop] GNOME pret : autologin osmocom, X11, NM masque"
