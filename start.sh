@@ -1961,13 +1961,10 @@ start_bridge_mode() {
         # Le start-direct lance DANS le conteneur doit connaitre son noeud : il
         # reverifie (et corrige) l'identite SS7 avant de demarrer la pile, au
         # lieu de dependre de ce que start.sh a ecrit dans les configs.
-        local _node_args=""
-        if [ "${WAN_MESH:-0}" = "1" ]; then
-            # --node-per-op : le conteneur 1 est le noeud de base lui-meme,
-            # donc WAN_NODE_ID convient ici. Les suivants recoivent le leur
-            # dans la boucle de demarrage (voir _node_i).
-            _node_args="--node ${WAN_NODE_ID} --op 1 --hub-ip ${WAN_STP_TARGET}"
-        fi
+        # Ces arguments sont fabriques par la fonction _node_args() plus bas,
+        # une par conteneur. La variable `_node_args` qui vivait ici n'etait
+        # LUE nulle part : une seconde version, figee sur "--op 1", du meme
+        # calcul. Supprimee pour qu'il n'en reste qu'une.
 
         local _wan_env=""
         if [ "${WAN_MESH:-0}" = "1" ]; then
@@ -2008,7 +2005,25 @@ start_bridge_mode() {
             else
                 _n="${WAN_NODE_ID:-1}"; _op="$1"
             fi
-            [ "${WAN_MESH:-0}" = "1" ] && printf -- '--node %s --op %s --hub-ip %s' "$_n" "$_op" "$WAN_STP_TARGET"
+            # Repli sur le noeud 1, TOUJOURS. Deux trous se referment ici :
+            #   - sans WAN (`./start.sh` sans argument), la fonction n'imprimait
+            #     RIEN : start-direct.sh partait sans identite et montait la
+            #     pile sur les point codes du gabarit (1.1.2), les memes pour
+            #     tout le monde ;
+            #   - avec WAN mais WAN_NODE_ID vide, elle imprimait `--node --op 1`
+            #     — bash recolle les mots, start-direct.sh lisait "--op" comme
+            #     numero de noeud et sortait sur
+            #     « [ KO ] --node (un chiffre de 1 a 9) ».
+            # Un noeud unique EST le noeud 1 : c'est deja ce que start.sh se
+            # donne lui-meme (WAN_NODE_ID="${WAN_NODE_ID:-1}" plus haut), on
+            # transmet donc la meme reponse au conteneur au lieu de rien.
+            [[ "$_n"  =~ ^[1-9]$ ]] || _n=1
+            [[ "$_op" =~ ^[1-9]$ ]] || _op=1
+            printf -- '--node %s --op %s' "$_n" "$_op"
+            # Le hub n'a de sens qu'en mesh : hors mesh il n'y a personne a
+            # joindre, et un `--hub-ip` vide decalerait les arguments suivants.
+            [ "${WAN_MESH:-0}" = "1" ] && [ -n "${WAN_STP_TARGET:-}" ] && \
+                printf -- ' --hub-ip %s' "$WAN_STP_TARGET"
             return 0
         }
 

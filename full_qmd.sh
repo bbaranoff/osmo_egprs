@@ -11,24 +11,41 @@
 #                          recherche plein-texte integree, index global.
 #
 # Usage :
-#   MODE=site ./full_qmd.sh              # -> ./calypso-qmd/ puis quarto render
-#   ./full_qmd.sh                        # -> ./calypso-full.qmd
-#   ./full_qmd.sh out.qmd                # custom output (mode single)
+# TOUT EST ECRIT DANS UN SEUL DOSSIER ($OUTDIR, par defaut ./bundle-qmd/) :
+# le .qmd, sketchy.css, sk-filter.html, et le rendu quarto. Le depot reste
+# propre, et une seconde execution ne rescanne pas sa propre sortie.
+#
+# Usage :
+#   MODE=site ./full_qmd.sh              # -> ./bundle-qmd/ (multi-pages)
+#   ./full_qmd.sh                        # -> ./bundle-qmd/<depot>-full.qmd
+#   ./full_qmd.sh out.qmd                # chemin explicite (mode single)
+#   OUTDIR=/tmp/x ./full_qmd.sh          # ailleurs
+#   PL4Y_SECTION=calypso ./full_qmd.sh   # section pl4y.store visee
 #   SCOPE=hw/arm/calypso ./full_qmd.sh   # only this subdir
 #   EXCLUDE='build|pc-bios' ./full_qmd.sh
 #   MAX_KB=256 ./full_qmd.sh             # troncature par fichier
 #   SPLIT_KB=300 MODE=site ./full_qmd.sh # taille max d'une page
 #   EMBED=true ./full_qmd.sh             # html self-contained (risque de crash)
 #   RENDER_MERMAID=0 ./full_qmd.sh       # .mmd en code au lieu de diagramme
-#   RENDER=1 ./full_qmd.sh               # enchaine quarto render
+#   RENDER=0 MODE=site ./full_qmd.sh     # sources .qmd seules, sans rendu
 
 set -uo pipefail
 
 case "${1:-}" in -h|--help) sed -n '2,30p' "$0"; exit 0;; esac
 
 MODE="${MODE:-single}"
-OUT="${1:-./calypso-full.qmd}"
-OUTDIR="${OUTDIR:-./calypso-qmd}"
+# Dossier unique de sortie, pour les DEUX modes. Le mode single ecrivait avant
+# a la racine du depot (calypso-full.qmd + sketchy.css + sk-filter.html, puis
+# calypso-full.html et calypso-full_files/ au rendu) : quatre artefacts laches
+# dans le depot, que la passe suivante rescannait comme des sources.
+# Nom derive du depot (osmo_egprs -> ./osmo_egprs-qmd) : les bundles de deux
+# depots differents peuvent ainsi etre deposes cote a cote sans collision.
+OUTDIR="${OUTDIR:-./$(basename "$(cd "$(dirname "$0")" && pwd)")-qmd}"
+# Section pl4y.store visee par ce bundle : ecrite dans .pl4y-section a la racine
+# du dossier de sortie. build.mjs (dans pl4y) la lit pour savoir sous quelle URL
+# publier, plutot que de deviner d'apres le nom du dossier.
+PL4Y_SECTION="${PL4Y_SECTION:-}"
+OUT="${1:-}"
 SCOPE="${SCOPE:-.}"
 TITLE="${TITLE:-Calypso QEMU}"
 SUBTITLE="${SUBTITLE:-Full source bundle - DSP C54x / osmocom-bb / SHUNT_LEGIT}"
@@ -36,13 +53,38 @@ MAX_KB="${MAX_KB:-512}"
 SPLIT_KB="${SPLIT_KB:-400}"
 RENDER_MERMAID="${RENDER_MERMAID:-1}"
 EMBED="${EMBED:-false}"
-RENDER="${RENDER:-0}"
+# En mode site on rend par defaut : le dossier produit est alors DIRECTEMENT
+# deposable dans pl4y/bundles/ (il contient _site/, du HTML). Sans rendu, ce
+# n'est qu'un projet Quarto, que rien en aval ne sait publier.
+# RENDER=0 pour ne generer que les sources .qmd.
+if [ "$MODE" = "site" ]; then RENDER="${RENDER:-1}"; else RENDER="${RENDER:-0}"; fi
 EXCLUDE_RE="${EXCLUDE:-subprojects|build|pc-bios|tests/functional|tests/qtest|tests/unit|tests/migration|tests/qemu-iotests|node_modules|\.git|\.pytest_cache}"
-
-if [ -d "$OUT" ]; then OUT="${OUT%/}/calypso-full.qmd"; fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
+
+# Le dossier existe avant toute chose : les deux modes ecrivent dedans.
+mkdir -p "$OUTDIR" || { echo "ERROR: mkdir '$OUTDIR'" >&2; exit 1; }
+OUTDIR="$(cd "$OUTDIR" && pwd)"
+
+# Slug de section : explicite via PL4Y_SECTION, sinon derive du depot.
+# qemu-calypso est publie sous /calypso/ — d'ou la seule correspondance
+# particuliere.
+if [ -z "$PL4Y_SECTION" ]; then
+    case "$(basename "$HERE")" in
+        qemu-calypso) PL4Y_SECTION="calypso" ;;
+        *)            PL4Y_SECTION="$(basename "$HERE")" ;;
+    esac
+fi
+printf '%s\n' "$PL4Y_SECTION" > "$OUTDIR/.pl4y-section"
+
+# Sans argument, le .qmd va dans $OUTDIR. Un argument explicite reste
+# respecte : `./full_qmd.sh /tmp/x.qmd` ecrit bien la (et son css/js a cote).
+if [ -z "$OUT" ]; then
+    OUT="$OUTDIR/$(basename "$HERE")-full.qmd"
+elif [ -d "$OUT" ]; then
+    OUT="${OUT%/}/$(basename "$HERE")-full.qmd"
+fi
 
 MAXB=$(( MAX_KB * 1024 ))
 SPLITB=$(( SPLIT_KB * 1024 ))
@@ -57,14 +99,19 @@ NOW="$(date -Iseconds)"
 SELF_FIXED=""      # fichier a exclure du scan (mode single)
 SELF_PREFIX=""     # prefixe de dossier a exclure (mode site)
 
+# $OUTDIR est exclu du scan dans LES DEUX modes. Auparavant le mode single
+# n'excluait que le .qmd lui-meme : sketchy.css, sk-filter.html et le
+# repertoire *_files/ du rendu precedent etaient reavales comme des sources a
+# chaque execution, et le bundle grossissait a chaque passe.
+SELF_PREFIX="${OUTDIR#"$HERE"/}/"
+[ "$SELF_PREFIX" = "$OUTDIR/" ] && SELF_PREFIX=""   # $OUTDIR hors du depot
+
 if [ "$MODE" = "site" ]; then
-    mkdir -p "$OUTDIR" || { echo "ERROR: mkdir '$OUTDIR'" >&2; exit 1; }
-    OUTDIR="$(cd "$OUTDIR" && pwd)"
-    SELF_PREFIX="${OUTDIR#"$HERE"/}/"
     DEST=""
 else
+    mkdir -p "$(dirname "$OUT")" || { echo "ERROR: mkdir pour '$OUT'" >&2; exit 1; }
     : > "$OUT" || { echo "ERROR: cannot write '$OUT'" >&2; exit 1; }
-    OUT_ABS="$(cd "$(dirname "$OUT")" 2>/dev/null && pwd)/$(basename "$OUT")"
+    OUT_ABS="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
     SELF_FIXED="${OUT_ABS#"$HERE"/}"
     DEST="$OUT"
 fi
@@ -531,8 +578,8 @@ if [ "$MODE" = "site" ]; then
     echo "Preview: (cd \"$OUTDIR\" && quarto preview)"
 else
     echo "Output : $OUT ($(du -h "$OUT" | cut -f1), $(wc -l < "$OUT") lignes)"
-    echo "         + sketchy.css + sk-filter.html a cote"
-    echo "Rendu  : quarto render \"$OUT\""
+    echo "         + sketchy.css + sk-filter.html dans $(dirname "$OUT")/"
+    echo "Rendu  : quarto render \"$OUT\"   (sortie dans $(dirname "$OUT")/)"
     if [ "$(wc -c < "$OUT")" -gt 1500000 ]; then
         echo
         echo "!! $(du -h "$OUT" | cut -f1) dans un seul document : Deno risque de casser"

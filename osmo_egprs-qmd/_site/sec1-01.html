@@ -1,0 +1,1745 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.6.40">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>1 - Documentation – Calypso QEMU</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<script src="site_libs/quarto-html/quarto.js"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-549806ee2085284f45b00abea8c6df48.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-81da2bf0d9b7d7198a35ccd6719febf4.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "sidebar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "start",
+  "type": "textbox",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<style>html{ scroll-behavior: smooth; }</style>
+
+
+<link rel="stylesheet" href="sketchy.css">
+</head>
+
+<body class="nav-sidebar floating">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./sec1-01.html">1 - Documentation</a></li><li class="breadcrumb-item"><a href="./sec1-01.html">partie 1</a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+      <button type="button" class="btn quarto-search-button" aria-label="Search" onclick="window.quartoOpenSearch();">
+        <i class="bi bi-search"></i>
+      </button>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div class="pt-lg-2 mt-2 text-left sidebar-header">
+    <div class="sidebar-title mb-0 py-0">
+      <a href="./">Calypso QEMU</a> 
+    </div>
+      </div>
+        <div class="mt-2 flex-shrink-0 align-items-center">
+        <div class="sidebar-search">
+        <div id="quarto-search" class="" title="Search"></div>
+        </div>
+        </div>
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Index</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text">1 - Documentation</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec1-01.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">partie 1</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false">
+ <span class="menu-text">2 - Tests</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec2-01.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">partie 1</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false">
+ <span class="menu-text">3 - Headers</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec3-01.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">partie 1</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false">
+ <span class="menu-text">4 - Sources</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec4-01.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">partie 1</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false">
+ <span class="menu-text">5 - Python</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec5-01.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">partie 1</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec5-02.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">partie 2</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false">
+ <span class="menu-text">6 - Shell</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec6-01.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">partie 1</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec6-02.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">partie 2</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./sec6-03.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">partie 3</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Fichiers</h2>
+   
+  <ul class="collapse">
+  <li><a href="#f-environment-readme-md" id="toc-f-environment-readme-md" class="nav-link active" data-scroll-target="#f-environment-readme-md"><code>environment/README.md</code></a></li>
+  <li><a href="#f-navigation-quickstart-md" id="toc-f-navigation-quickstart-md" class="nav-link" data-scroll-target="#f-navigation-quickstart-md"><code>navigation/QUICKSTART.md</code></a></li>
+  <li><a href="#f-navigation-status-md" id="toc-f-navigation-status-md" class="nav-link" data-scroll-target="#f-navigation-status-md"><code>navigation/STATUS.md</code></a></li>
+  <li><a href="#f-readme-md" id="toc-f-readme-md" class="nav-link" data-scroll-target="#f-readme-md"><code>README.md</code></a></li>
+  <li><a href="#f-services-readme-md" id="toc-f-services-readme-md" class="nav-link" data-scroll-target="#f-services-readme-md"><code>services/README.md</code></a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./sec1-01.html">1 - Documentation</a></li><li class="breadcrumb-item"><a href="./sec1-01.html">partie 1</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">1 - Documentation</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="f-environment-readme-md" class="level2">
+<h2 class="anchored" data-anchor-id="f-environment-readme-md"><code>environment/README.md</code></h2>
+<div class="file-meta">
+<p><span class="tag">.md</span> 85 lignes - 3,7KB</p>
+</div>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>environment/README.md</strong></pre>
+</div>
+<div class="sourceCode" id="cb1" data-filename="environment/README.md"><pre class="sourceCode numberSource markdown numberLines code-with-copy"><code class="sourceCode markdown"><span id="cb1-1"><a href="#cb1-1"></a><span class="fu"># `environment/` — la configuration, par domaine</span></span>
+<span id="cb1-2"><a href="#cb1-2"></a></span>
+<span id="cb1-3"><a href="#cb1-3"></a><span class="in">`calypso.env`</span> mélangeait 312 variables : chemins d'installation, cadences du modèle, sondes de</span>
+<span id="cb1-4"><a href="#cb1-4"></a>mesure et contournements, sans distinction. Ce répertoire les sépare **par ce qu'elles font**,</span>
+<span id="cb1-5"><a href="#cb1-5"></a>pour qu'on sache ce qu'on a le droit de toucher.</span>
+<span id="cb1-6"><a href="#cb1-6"></a></span>
+<span id="cb1-7"><a href="#cb1-7"></a>| Fichier | Domaine | Touchez-y ? |</span>
+<span id="cb1-8"><a href="#cb1-8"></a>|---|---|---|</span>
+<span id="cb1-9"><a href="#cb1-9"></a>| <span class="in">`paths.env`</span> | où sont les dépendances sur **votre** machine | **oui**, c'est le premier à régler |</span>
+<span id="cb1-10"><a href="#cb1-10"></a>| <span class="in">`modes.env`</span> | les profils prêts à l'emploi (le mode qui campe, le mode natif…) | **oui**, choisissez-en un |</span>
+<span id="cb1-11"><a href="#cb1-11"></a>| <span class="in">`bsp.env`</span> | BSP / DMA / DARAM / feed I-Q / horloge TDMA | si vous savez ce que vous faites |</span>
+<span id="cb1-12"><a href="#cb1-12"></a>| <span class="in">`dsp.env`</span> | cœur c54x : interruptions, IMR, cadence d'exécution | idem |</span>
+<span id="cb1-13"><a href="#cb1-13"></a>| <span class="in">`fbsb.env`</span> | FB / FBSB / corrélateur / démodulateur | idem |</span>
+<span id="cb1-14"><a href="#cb1-14"></a>| <span class="in">`shunt.env`</span> | canaux shunt DL/UL, injections | idem |</span>
+<span id="cb1-15"><a href="#cb1-15"></a>| <span class="in">`rf.env`</span> | TPU / TSP / RF / AFC | idem |</span>
+<span id="cb1-16"><a href="#cb1-16"></a>| <span class="in">`debug.env`</span> | sondes et traces — **sans effet** sur l'émulation | **oui**, librement |</span>
+<span id="cb1-17"><a href="#cb1-17"></a>| <span class="in">`fixes.env`</span> | le sas <span class="in">`CALYPSO_FIXES`</span> : correctifs en attente de validation | temporairement |</span>
+<span id="cb1-18"><a href="#cb1-18"></a>| <span class="in">`crutches.env`</span> | **les béquilles** — contournements de branches non implémentées | **non**, sauf pour diagnostiquer |</span>
+<span id="cb1-19"><a href="#cb1-19"></a></span>
+<span id="cb1-20"><a href="#cb1-20"></a><span class="fu">## Trois choses à savoir avant de modifier quoi que ce soit</span></span>
+<span id="cb1-21"><a href="#cb1-21"></a></span>
+<span id="cb1-22"><a href="#cb1-22"></a>**1. La vérité est le manifeste, pas la ligne de commande.**</span>
+<span id="cb1-23"><a href="#cb1-23"></a><span class="in">```bash</span></span>
+<span id="cb1-24"><a href="#cb1-24"></a><span class="fu">grep</span> <span class="st">"calypso-manifest"</span> /root/qemu.log</span>
+<span id="cb1-25"><a href="#cb1-25"></a><span class="in">```</span></span>
+<span id="cb1-26"><a href="#cb1-26"></a>Certaines variables en reposent d'autres silencieusement : <span class="in">`CALYPSO_NATIVE_HELPED=1`</span> allume aussi</span>
+<span id="cb1-27"><a href="#cb1-27"></a><span class="in">`FB_CORR_ENTRY`</span>, <span class="in">`FB_ENERGY`</span> et <span class="in">`FB_IQ_*`</span>. Retirer l'une d'elles de la ligne de commande ne la</span>
+<span id="cb1-28"><a href="#cb1-28"></a>supprime pas — elle revient à son défaut.</span>
+<span id="cb1-29"><a href="#cb1-29"></a></span>
+<span id="cb1-30"><a href="#cb1-30"></a>**2. `=0` ne coupe pas tout.** Quatre idiomes de gate coexistent :</span>
+<span id="cb1-31"><a href="#cb1-31"></a></span>
+<span id="cb1-32"><a href="#cb1-32"></a>| Idiome | Actif quand | Comment couper |</span>
+<span id="cb1-33"><a href="#cb1-33"></a>|---|---|---|</span>
+<span id="cb1-34"><a href="#cb1-34"></a>| <span class="in">`getenv("X") ? 1 : 0`</span> | la variable **existe**, même à `0` | **`unset X`** |</span>
+<span id="cb1-35"><a href="#cb1-35"></a>| <span class="in">`atoi(...) &gt; 0`</span> | valeur &gt; 0 | <span class="in">`X=0`</span> |</span>
+<span id="cb1-36"><a href="#cb1-36"></a>| <span class="in">`*e == '1'`</span> | exactement <span class="in">`"1"`</span> | toute autre valeur |</span>
+<span id="cb1-37"><a href="#cb1-37"></a>| défaut ON + <span class="in">`X_OFF`</span> | par défaut | poser <span class="in">`X_OFF`</span> |</span>
+<span id="cb1-38"><a href="#cb1-38"></a></span>
+<span id="cb1-39"><a href="#cb1-39"></a>**3. `:=` contre `=`.** Dans ces fichiers, <span class="in">`: "${VAR:=valeur}"`</span> laisse la ligne de commande gagner ;</span>
+<span id="cb1-40"><a href="#cb1-40"></a><span class="in">`VAR=valeur`</span> la **verrouille**. N'utilisez <span class="in">`=`</span> que pour ce qui ne doit jamais être surchargé.</span>
+<span id="cb1-41"><a href="#cb1-41"></a></span>
+<span id="cb1-42"><a href="#cb1-42"></a><span class="fu">## Référence complète</span></span>
+<span id="cb1-43"><a href="#cb1-43"></a></span>
+<span id="cb1-44"><a href="#cb1-44"></a>Les 312 variables, avec défaut, effet mesuré, mode, idiome, catégorie et dépendances :</span>
+<span id="cb1-45"><a href="#cb1-45"></a><span class="in">`../hw/arm/calypso/doc/VARIABLES_ENVIRONNEMENT.md`</span>.</span>
+<span id="cb1-46"><a href="#cb1-46"></a></span>
+<span id="cb1-47"><a href="#cb1-47"></a></span>
+<span id="cb1-48"><a href="#cb1-48"></a><span class="fu">## Comment ça se charge</span></span>
+<span id="cb1-49"><a href="#cb1-49"></a></span>
+<span id="cb1-50"><a href="#cb1-50"></a>Tout passe par <span class="in">`load.env`</span>, sourcé par <span class="in">`start-clean.sh`</span> :</span>
+<span id="cb1-51"><a href="#cb1-51"></a></span>
+<span id="cb1-52"><a href="#cb1-52"></a><span class="in">```bash</span></span>
+<span id="cb1-53"><a href="#cb1-53"></a><span class="bu">set</span> <span class="at">-a</span> <span class="kw">;</span> <span class="bu">.</span> ./environment/load.env <span class="kw">;</span> <span class="bu">set</span> +a</span>
+<span id="cb1-54"><a href="#cb1-54"></a><span class="in">```</span></span>
+<span id="cb1-55"><a href="#cb1-55"></a></span>
+<span id="cb1-56"><a href="#cb1-56"></a>L'ordre compte. Tous les fichiers utilisent <span class="in">`:=`</span> (« si pas déjà défini »), donc **le premier qui</span>
+<span id="cb1-57"><a href="#cb1-57"></a>pose une valeur gagne** :</span>
+<span id="cb1-58"><a href="#cb1-58"></a></span>
+<span id="cb1-59"><a href="#cb1-59"></a><span class="ss">1. </span>la **ligne de commande** — <span class="in">`VAR=x ./run.sh`</span> gagne toujours ;</span>
+<span id="cb1-60"><a href="#cb1-60"></a><span class="ss">2. </span><span class="in">`modes.env`</span> — le profil choisi ;</span>
+<span id="cb1-61"><a href="#cb1-61"></a><span class="ss">3. </span>les fichiers par domaine — les défauts ;</span>
+<span id="cb1-62"><a href="#cb1-62"></a><span class="ss">4. </span><span class="in">`calypso.env`</span> — l'ancien monolithe, conservé le temps de la migration. Il n'utilise que <span class="in">`:=`</span>,</span>
+<span id="cb1-63"><a href="#cb1-63"></a>   donc il ne peut rien écraser : il ne fournit que ce qui n'a pas encore été réparti. À vider</span>
+<span id="cb1-64"><a href="#cb1-64"></a>   progressivement.</span>
+<span id="cb1-65"><a href="#cb1-65"></a></span>
+<span id="cb1-66"><a href="#cb1-66"></a><span class="fu">## Les fichiers hérités</span></span>
+<span id="cb1-67"><a href="#cb1-67"></a></span>
+<span id="cb1-68"><a href="#cb1-68"></a><span class="in">`calypso.env`</span>, <span class="in">`calypso_hack.env`</span>, <span class="in">`calypso_native*.env`</span>, <span class="in">`calypso_shunt_*.env`</span>, <span class="in">`calypso_wire.env`</span></span>
+<span id="cb1-69"><a href="#cb1-69"></a>datent d'avant ce découpage. Ils sont conservés — on ne détruit pas ce qui marche — mais la</span>
+<span id="cb1-70"><a href="#cb1-70"></a>configuration nouvelle vit dans les fichiers par domaine.</span>
+<span id="cb1-71"><a href="#cb1-71"></a></span>
+<span id="cb1-72"><a href="#cb1-72"></a><span class="fu">## Ce que contient chaque domaine</span></span>
+<span id="cb1-73"><a href="#cb1-73"></a></span>
+<span id="cb1-74"><a href="#cb1-74"></a>| Fichier | Variables | dont béquilles |</span>
+<span id="cb1-75"><a href="#cb1-75"></a>|---|---|---|</span>
+<span id="cb1-76"><a href="#cb1-76"></a>| <span class="in">`bsp.env`</span> | 52 | 10 |</span>
+<span id="cb1-77"><a href="#cb1-77"></a>| <span class="in">`dsp.env`</span> | 52 | 15 |</span>
+<span id="cb1-78"><a href="#cb1-78"></a>| <span class="in">`fbsb.env`</span> | 52 | 25 |</span>
+<span id="cb1-79"><a href="#cb1-79"></a>| <span class="in">`shunt.env`</span> | 58 | 34 |</span>
+<span id="cb1-80"><a href="#cb1-80"></a>| <span class="in">`armdsp.env`</span> | 47 | 16 |</span>
+<span id="cb1-81"><a href="#cb1-81"></a>| <span class="in">`opcodes.env`</span> | 50 | 16 |</span>
+<span id="cb1-82"><a href="#cb1-82"></a></span>
+<span id="cb1-83"><a href="#cb1-83"></a>**116 béquilles sur 311 variables** — plus d'un tiers du projet est du contournement. Chacune est</span>
+<span id="cb1-84"><a href="#cb1-84"></a>annotée à son site de lecture dans le code (<span class="in">`grep -rn "@BEQUILLE" hw/arm/calypso/`</span>), avec ce</span>
+<span id="cb1-85"><a href="#cb1-85"></a>qu'elle masque et la condition qui la rendrait inutile.</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</section>
+<section id="f-navigation-quickstart-md" class="level2">
+<h2 class="anchored" data-anchor-id="f-navigation-quickstart-md"><code>navigation/QUICKSTART.md</code></h2>
+<div class="file-meta">
+<p><span class="tag">.md</span> 158 lignes - 6,9KB</p>
+</div>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>navigation/QUICKSTART.md</strong></pre>
+</div>
+<div class="sourceCode" id="cb2" data-filename="navigation/QUICKSTART.md"><pre class="sourceCode numberSource markdown numberLines code-with-copy"><code class="sourceCode markdown"><span id="cb2-1"><a href="#cb2-1"></a><span class="fu"># Console SS7 - demarrage rapide</span></span>
+<span id="cb2-2"><a href="#cb2-2"></a></span>
+<span id="cb2-3"><a href="#cb2-3"></a>Tout vit dans <span class="in">`navigation/`</span>. Aucune dependance : python3 de la distribution</span>
+<span id="cb2-4"><a href="#cb2-4"></a>suffit. Rien n'est ecrit en dur : point codes, hub, ports et abonnes sont lus</span>
+<span id="cb2-5"><a href="#cb2-5"></a>dans les conteneurs et dans les configurations du depot.</span>
+<span id="cb2-6"><a href="#cb2-6"></a></span>
+<span id="cb2-7"><a href="#cb2-7"></a><span class="fu">## 1. En trente secondes</span></span>
+<span id="cb2-8"><a href="#cb2-8"></a></span>
+<span id="cb2-9"><a href="#cb2-9"></a><span class="in">    cd /home/nirvana/osmo_egprs</span></span>
+<span id="cb2-10"><a href="#cb2-10"></a><span class="in">    sudo ./start.sh --wan --operators 2 --hub-ip 192.168.1.49   # le lab</span></span>
+<span id="cb2-11"><a href="#cb2-11"></a><span class="in">    ./ss7-console.py                                            # le schema</span></span>
+<span id="cb2-12"><a href="#cb2-12"></a></span>
+<span id="cb2-13"><a href="#cb2-13"></a>Le schema s'ouvre. On circule **aux fleches**, on ouvre avec **Entree**, on</span>
+<span id="cb2-14"><a href="#cb2-14"></a>revient avec **Echap**. <span class="in">`q`</span> quitte.</span>
+<span id="cb2-15"><a href="#cb2-15"></a></span>
+<span id="cb2-16"><a href="#cb2-16"></a><span class="fu">## 2. Les touches</span></span>
+<span id="cb2-17"><a href="#cb2-17"></a></span>
+<span id="cb2-18"><a href="#cb2-18"></a>| Touche | Effet |</span>
+<span id="cb2-19"><a href="#cb2-19"></a>|---|---|</span>
+<span id="cb2-20"><a href="#cb2-20"></a>| fleches | se deplacer de boite en boite, dans l'espace du schema |</span>
+<span id="cb2-21"><a href="#cb2-21"></a>| Entree | ouvrir le menu de l'element selectionne |</span>
+<span id="cb2-22"><a href="#cb2-22"></a>| Echap | revenir en arriere ; **dans un VTY : fermer CE VTY** et revenir au schema |</span>
+<span id="cb2-23"><a href="#cb2-23"></a>| Tab | element suivant |</span>
+<span id="cb2-24"><a href="#cb2-24"></a>| <span class="in">`v`</span> | ouvrir directement le VTY de l'element |</span>
+<span id="cb2-25"><a href="#cb2-25"></a>| <span class="in">`s`</span> | scripts SS7 (operations MAP) |</span>
+<span id="cb2-26"><a href="#cb2-26"></a>| <span class="in">`a`</span> | audit SS7 (DAUD) d'un point code |</span>
+<span id="cb2-27"><a href="#cb2-27"></a>| <span class="in">`c`</span> | connecter / deconnecter le lien M3UA de la console |</span>
+<span id="cb2-28"><a href="#cb2-28"></a>| <span class="in">`j`</span> | journal du lien M3UA |</span>
+<span id="cb2-29"><a href="#cb2-29"></a>| <span class="in">`r`</span> | relire la topologie |</span>
+<span id="cb2-30"><a href="#cb2-30"></a>| <span class="in">`?`</span> | aide |</span>
+<span id="cb2-31"><a href="#cb2-31"></a></span>
+<span id="cb2-32"><a href="#cb2-32"></a>Dans un VTY : <span class="in">`Entree`</span> envoie, haut/bas rejouent l'historique,</span>
+<span id="cb2-33"><a href="#cb2-33"></a>PagePrec/PageSuiv font defiler, <span class="in">`Echap`</span> ferme la session. Les autres VTY</span>
+<span id="cb2-34"><a href="#cb2-34"></a>restent ouverts : une session par port, independantes.</span>
+<span id="cb2-35"><a href="#cb2-35"></a></span>
+<span id="cb2-36"><a href="#cb2-36"></a><span class="fu">## 3. Ce que montre le schema</span></span>
+<span id="cb2-37"><a href="#cb2-37"></a></span>
+<span id="cb2-38"><a href="#cb2-38"></a><span class="in">    CONSOLE SS7 ---M3UA--- INTER-STP (hub)</span></span>
+<span id="cb2-39"><a href="#cb2-39"></a><span class="in">                                |</span></span>
+<span id="cb2-40"><a href="#cb2-40"></a><span class="in">                +---------------+---------------+</span></span>
+<span id="cb2-41"><a href="#cb2-41"></a><span class="in">             OP1 - STP                       OP2 - STP</span></span>
+<span id="cb2-42"><a href="#cb2-42"></a><span class="in">             1.11.2                          1.21.2</span></span>
+<span id="cb2-43"><a href="#cb2-43"></a><span class="in">                |                               |</span></span>
+<span id="cb2-44"><a href="#cb2-44"></a><span class="in">       STP  MSC/VLR  HLR  BSC  BTS  MGW  SGSN  GGSN  ...</span></span>
+<span id="cb2-45"><a href="#cb2-45"></a></span>
+<span id="cb2-46"><a href="#cb2-46"></a>Chaque boite de service porte son port VTY. Les couleurs suivent la famille :</span>
+<span id="cb2-47"><a href="#cb2-47"></a>SS7, coeur, abonnes, radio, media, data.</span>
+<span id="cb2-48"><a href="#cb2-48"></a></span>
+<span id="cb2-49"><a href="#cb2-49"></a><span class="fu">## 4. Sans interface : la ligne de commande</span></span>
+<span id="cb2-50"><a href="#cb2-50"></a></span>
+<span id="cb2-51"><a href="#cb2-51"></a><span class="in">    ./ss7-console.py list                 inventaire (PC, hub, SCCP, VTY)</span></span>
+<span id="cb2-52"><a href="#cb2-52"></a><span class="in">    ./ss7-console.py ops                  catalogue des operations MAP</span></span>
+<span id="cb2-53"><a href="#cb2-53"></a><span class="in">    ./ss7-console.py vty 1 4258 "show subscribers all"</span></span>
+<span id="cb2-54"><a href="#cb2-54"></a><span class="in">    ./ss7-console.py audit 1.11.1         le "ping" SS7 (DAUD -&gt; DAVA/DUNA)</span></span>
+<span id="cb2-55"><a href="#cb2-55"></a><span class="in">    ./ss7-console.py map sri-sm --pc 1.11.6 msisdn=600101 sc_addr=600999</span></span>
+<span id="cb2-56"><a href="#cb2-56"></a><span class="in">    ./ss7-console.py serve                repondeur MAP (HLR simule)</span></span>
+<span id="cb2-57"><a href="#cb2-57"></a></span>
+<span id="cb2-58"><a href="#cb2-58"></a><span class="in">`vty &lt;n&gt;`</span> accepte le numero d'operateur ou le nom du conteneur.</span>
+<span id="cb2-59"><a href="#cb2-59"></a></span>
+<span id="cb2-60"><a href="#cb2-60"></a><span class="fu">## 5. Les operations MAP</span></span>
+<span id="cb2-61"><a href="#cb2-61"></a></span>
+<span id="cb2-62"><a href="#cb2-62"></a>| Cle | Operation | Opcode | SSN vise |</span>
+<span id="cb2-63"><a href="#cb2-63"></a>|---|---|---|---|</span>
+<span id="cb2-64"><a href="#cb2-64"></a>| <span class="in">`sri-sm`</span> | sendRoutingInfoForSM | 45 | 6 (HLR) |</span>
+<span id="cb2-65"><a href="#cb2-65"></a>| <span class="in">`sri`</span> | sendRoutingInfo | 22 | 6 |</span>
+<span id="cb2-66"><a href="#cb2-66"></a>| <span class="in">`ati`</span> | anyTimeInterrogation | 71 | 6 |</span>
+<span id="cb2-67"><a href="#cb2-67"></a>| <span class="in">`sai`</span> | sendAuthenticationInfo | 56 | 6 |</span>
+<span id="cb2-68"><a href="#cb2-68"></a>| <span class="in">`send-imsi`</span> | sendIMSI | 58 | 6 |</span>
+<span id="cb2-69"><a href="#cb2-69"></a>| <span class="in">`psi`</span> | provideSubscriberInfo | 70 | 7 (VLR) |</span>
+<span id="cb2-70"><a href="#cb2-70"></a>| <span class="in">`ul`</span> | updateLocation | 2 | 6 |</span>
+<span id="cb2-71"><a href="#cb2-71"></a>| <span class="in">`raw`</span> | invoke brut (opcode + parametre hexa) | - | - |</span>
+<span id="cb2-72"><a href="#cb2-72"></a></span>
+<span id="cb2-73"><a href="#cb2-73"></a>La console est un **vrai** point SS7 : elle s'attache a l'inter-STP en M3UA sur</span>
+<span id="cb2-74"><a href="#cb2-74"></a>SCTP, enregistre dynamiquement une routing key pour son point code (RKM), passe</span>
+<span id="cb2-75"><a href="#cb2-75"></a>ASP_ACTIVE, puis emet du TCAP/MAP qui traverse le hub comme le trafic des</span>
+<span id="cb2-76"><a href="#cb2-76"></a>operateurs. Chaque envoi peut etre exporte en script Python autonome</span>
+<span id="cb2-77"><a href="#cb2-77"></a>(<span class="in">`navigation/scripts/&lt;operation&gt;-&lt;horodatage&gt;.py`</span>).</span>
+<span id="cb2-78"><a href="#cb2-78"></a></span>
+<span id="cb2-79"><a href="#cb2-79"></a><span class="fu">## 6. Le repondeur : un aller-retour MAP complet</span></span>
+<span id="cb2-80"><a href="#cb2-80"></a></span>
+<span id="cb2-81"><a href="#cb2-81"></a>Osmocom fait dialoguer MSC et HLR en **GSUP**, pas en MAP : un SRI-SM envoye au</span>
+<span id="cb2-82"><a href="#cb2-82"></a>vrai HLR ne trouve personne. Le repondeur comble ce trou en repondant avec les</span>
+<span id="cb2-83"><a href="#cb2-83"></a>donnees du VRAI HLR (lues par VTY), a travers le vrai hub.</span>
+<span id="cb2-84"><a href="#cb2-84"></a></span>
+<span id="cb2-85"><a href="#cb2-85"></a><span class="in">    # terminal A</span></span>
+<span id="cb2-86"><a href="#cb2-86"></a><span class="in">    ./ss7-console.py serve</span></span>
+<span id="cb2-87"><a href="#cb2-87"></a><span class="in">    # terminal B</span></span>
+<span id="cb2-88"><a href="#cb2-88"></a><span class="in">    ./ss7-console.py map sri-sm --pc 1.11.6 msisdn=600101 sc_addr=600999</span></span>
+<span id="cb2-89"><a href="#cb2-89"></a></span>
+<span id="cb2-90"><a href="#cb2-90"></a><span class="in">    resultat (opcode 45) :</span></span>
+<span id="cb2-91"><a href="#cb2-91"></a><span class="in">       IMSI                         001010001000001</span></span>
+<span id="cb2-92"><a href="#cb2-92"></a><span class="in">       Noeud de service             +600101</span></span>
+<span id="cb2-93"><a href="#cb2-93"></a></span>
+<span id="cb2-94"><a href="#cb2-94"></a><span class="fu">## 7. Diagnostic et tests</span></span>
+<span id="cb2-95"><a href="#cb2-95"></a></span>
+<span id="cb2-96"><a href="#cb2-96"></a><span class="in">    ./navigation/ss7-diag.py             diagnostic SS7 complet</span></span>
+<span id="cb2-97"><a href="#cb2-97"></a><span class="in">    ./navigation/ss7-diag.py --rapide    sans M3UA ni MAP</span></span>
+<span id="cb2-98"><a href="#cb2-98"></a><span class="in">    ./navigation/test-console.sh         teste CHAQUE commande, un log par test</span></span>
+<span id="cb2-99"><a href="#cb2-99"></a></span>
+<span id="cb2-100"><a href="#cb2-100"></a><span class="in">`ss7-diag.py`</span> verifie, dans l'ordre ou une panne se lit : environnement (SCTP),</span>
+<span id="cb2-101"><a href="#cb2-101"></a>topologie heritee des configs, STP/MSC/BSC/HLR de chaque operateur, association</span>
+<span id="cb2-102"><a href="#cb2-102"></a>SCTP vers le hub, attachement de la console comme ASP, audit de tous les point</span>
+<span id="cb2-103"><a href="#cb2-103"></a>codes connus, puis un aller-retour MAP reel. Le code de sortie est le nombre</span>
+<span id="cb2-104"><a href="#cb2-104"></a>d'echecs.</span>
+<span id="cb2-105"><a href="#cb2-105"></a></span>
+<span id="cb2-106"><a href="#cb2-106"></a><span class="in">`test-console.sh`</span> ecrit un fichier par commande dans</span>
+<span id="cb2-107"><a href="#cb2-107"></a><span class="in">`navigation/logs/&lt;horodatage&gt;/`</span>, plus un <span class="in">`rapport.txt`</span>.</span>
+<span id="cb2-108"><a href="#cb2-108"></a></span>
+<span id="cb2-109"><a href="#cb2-109"></a><span class="fu">## 8. A savoir sur ce lab</span></span>
+<span id="cb2-110"><a href="#cb2-110"></a></span>
+<span id="cb2-111"><a href="#cb2-111"></a><span class="ss">- </span>**Le lien M3UA depuis l'hote ne vit que quelques secondes.** L'inter-STP</span>
+<span id="cb2-112"><a href="#cb2-112"></a>  cesse de servir une association venue de l'hote au bout de ~3 s, et</span>
+<span id="cb2-113"><a href="#cb2-113"></a>  l'association SCTP expire vers 35 s. La console la renouvelle toute seule</span>
+<span id="cb2-114"><a href="#cb2-114"></a>  avant chaque echange (~0,3 s) : c'est invisible, mais cela explique un</span>
+<span id="cb2-115"><a href="#cb2-115"></a>  eventuel "pas de reponse" suivi d'un second essai qui marche.</span>
+<span id="cb2-116"><a href="#cb2-116"></a><span class="ss">- </span>**Le hub refuse le parametre "Service Indicators"** dans une routing key</span>
+<span id="cb2-117"><a href="#cb2-117"></a>  (registration status 9). Il est donc omis.</span>
+<span id="cb2-118"><a href="#cb2-118"></a><span class="ss">- </span>**Il faut proposer son propre routing context** : sans cela le hub rend le</span>
+<span id="cb2-119"><a href="#cb2-119"></a>  meme contexte a deux ASP differents, et en <span class="in">`traffic-mode override`</span> le dernier</span>
+<span id="cb2-120"><a href="#cb2-120"></a>  attache vole le trafic du premier (la destination du premier passe DUNA).</span>
+<span id="cb2-121"><a href="#cb2-121"></a><span class="ss">- </span>**Le DATA part sur le flux SCTP 1** : le flux 0 est reserve a la gestion, et</span>
+<span id="cb2-122"><a href="#cb2-122"></a>  un DATA dessus est refuse ("Invalid Stream Identifier").</span>
+<span id="cb2-123"><a href="#cb2-123"></a><span class="ss">- </span>**Les point codes sont au format ITU 3-8-3** : <span class="in">`a.b.c`</span> avec a et c de 0 a 7,</span>
+<span id="cb2-124"><a href="#cb2-124"></a>  b de 0 a 255. <span class="in">`1.11.60`</span> n'existe pas - il serait recu comme <span class="in">`1.15.4`</span>.</span>
+<span id="cb2-125"><a href="#cb2-125"></a><span class="ss">- </span>Les point codes de la console (<span class="in">`1.11.7`</span>, <span class="in">`1.11.6`</span>...) laissent des routes</span>
+<span id="cb2-126"><a href="#cb2-126"></a>  dynamiques <span class="in">`PROHIB`</span> dans les STP operateur quand elle se ferme : c'est normal,</span>
+<span id="cb2-127"><a href="#cb2-127"></a>  elles repassent <span class="in">`avail`</span> au retour.</span>
+<span id="cb2-128"><a href="#cb2-128"></a></span>
+<span id="cb2-129"><a href="#cb2-129"></a><span class="fu">## 9. Les modules</span></span>
+<span id="cb2-130"><a href="#cb2-130"></a></span>
+<span id="cb2-131"><a href="#cb2-131"></a>| Fichier | Role |</span>
+<span id="cb2-132"><a href="#cb2-132"></a>|---|---|</span>
+<span id="cb2-133"><a href="#cb2-133"></a>| <span class="in">`topo.py`</span> | inventaire : conteneurs, env, <span class="in">`/etc/osmocom/*.cfg`</span>, ports VTY |</span>
+<span id="cb2-134"><a href="#cb2-134"></a>| <span class="in">`vty.py`</span> | sessions VTY persistantes par <span class="in">`docker exec`</span> |</span>
+<span id="cb2-135"><a href="#cb2-135"></a>| <span class="in">`diagram.py`</span> | le schema et la navigation spatiale aux fleches |</span>
+<span id="cb2-136"><a href="#cb2-136"></a>| <span class="in">`tui.py`</span> | l'interface curses (schema, menus, formulaires, VTY) |</span>
+<span id="cb2-137"><a href="#cb2-137"></a>| <span class="in">`ber.py`</span> | BER/DER minimal |</span>
+<span id="cb2-138"><a href="#cb2-138"></a>| <span class="in">`sccp.py`</span> | SCCP UDT/UDTS, adresses, global titles, TBCD |</span>
+<span id="cb2-139"><a href="#cb2-139"></a>| <span class="in">`tcap.py`</span> | TCAP begin/end, invoke, returnResult, returnError, AARQ/AARE |</span>
+<span id="cb2-140"><a href="#cb2-140"></a>| <span class="in">`mapops.py`</span> | catalogue MAP : encodeurs, decodeurs, erreurs |</span>
+<span id="cb2-141"><a href="#cb2-141"></a>| <span class="in">`m3ua.py`</span> | ASP M3UA sur SCTP : ASPUP, RKM, ASPAC, DATA, battement |</span>
+<span id="cb2-142"><a href="#cb2-142"></a>| <span class="in">`ss7.py`</span> | la couche qui relie tout, et le compte rendu lisible |</span>
+<span id="cb2-143"><a href="#cb2-143"></a>| <span class="in">`responder.py`</span> | repondeur MAP adosse au vrai HLR |</span>
+<span id="cb2-144"><a href="#cb2-144"></a>| <span class="in">`quickcmd.py`</span> | commandes VTY utiles, par demon |</span>
+<span id="cb2-145"><a href="#cb2-145"></a>| <span class="in">`ss7-console.py`</span> | point d'entree (schema + sous-commandes) |</span>
+<span id="cb2-146"><a href="#cb2-146"></a>| <span class="in">`ss7-diag.py`</span> | diagnostic complet |</span>
+<span id="cb2-147"><a href="#cb2-147"></a>| <span class="in">`test-console.sh`</span> | test de chaque commande, avec journaux |</span>
+<span id="cb2-148"><a href="#cb2-148"></a></span>
+<span id="cb2-149"><a href="#cb2-149"></a><span class="fu">## 10. Depannage</span></span>
+<span id="cb2-150"><a href="#cb2-150"></a></span>
+<span id="cb2-151"><a href="#cb2-151"></a>| Symptome | Cause probable |</span>
+<span id="cb2-152"><a href="#cb2-152"></a>|---|---|</span>
+<span id="cb2-153"><a href="#cb2-153"></a>| <span class="in">`aucun inter-STP connu`</span> | lab arrete, ou <span class="in">`--hub-ip`</span> jamais donne a <span class="in">`start.sh`</span> |</span>
+<span id="cb2-154"><a href="#cb2-154"></a>| <span class="in">`le conteneur ... ne tourne pas`</span> | <span class="in">`docker ps`</span> ne le voit plus |</span>
+<span id="cb2-155"><a href="#cb2-155"></a>| <span class="in">`VTY ... injoignable`</span> | le demon n'est pas lance dans ce conteneur |</span>
+<span id="cb2-156"><a href="#cb2-156"></a>| <span class="in">`Aucune reponse`</span> a un MAP | personne n'ecoute ce SSN : lancez <span class="in">`serve`</span> |</span>
+<span id="cb2-157"><a href="#cb2-157"></a>| fleches sans effet | terminal en mode curseur normal - deja gere, sinon <span class="in">`TERM=xterm`</span> |</span>
+<span id="cb2-158"><a href="#cb2-158"></a>| <span class="in">`DUNA`</span> sur un point code | l'ASP de cette destination n'est pas attache au hub |</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</section>
+<section id="f-navigation-status-md" class="level2">
+<h2 class="anchored" data-anchor-id="f-navigation-status-md"><code>navigation/STATUS.md</code></h2>
+<div class="file-meta">
+<p><span class="tag">.md</span> 122 lignes - 6,9KB</p>
+</div>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>navigation/STATUS.md</strong></pre>
+</div>
+<div class="sourceCode" id="cb3" data-filename="navigation/STATUS.md"><pre class="sourceCode numberSource markdown numberLines code-with-copy"><code class="sourceCode markdown"><span id="cb3-1"><a href="#cb3-1"></a><span class="fu"># Etat des lieux et reste a faire</span></span>
+<span id="cb3-2"><a href="#cb3-2"></a></span>
+<span id="cb3-3"><a href="#cb3-3"></a>Derniere mise a jour : 2026-08-26, lab a l'arret (conteneurs <span class="in">`Exited (127)`</span>).</span>
+<span id="cb3-4"><a href="#cb3-4"></a></span>
+<span id="cb3-5"><a href="#cb3-5"></a><span class="fu">## 1. Ce qui est fait et verifie</span></span>
+<span id="cb3-6"><a href="#cb3-6"></a></span>
+<span id="cb3-7"><a href="#cb3-7"></a><span class="fu">### Correctifs du depot</span></span>
+<span id="cb3-8"><a href="#cb3-8"></a></span>
+<span id="cb3-9"><a href="#cb3-9"></a>| Fichier | Correctif | Verifie |</span>
+<span id="cb3-10"><a href="#cb3-10"></a>|---|---|---|</span>
+<span id="cb3-11"><a href="#cb3-11"></a>| <span class="in">`start.sh`</span> | <span class="in">`asound.conf`</span> : Docker avait cree un REPERTOIRE a la place du fichier, le mount echouait (<span class="in">`not a directory`</span>). Le repertoire parasite est supprime avant la copie, la copie est verifiee, sinon repli propre sur <span class="in">`ALSA_*=default`</span>. | oui, <span class="in">`bash -n`</span> + repertoire nettoye |</span>
+<span id="cb3-12"><a href="#cb3-12"></a>| <span class="in">`start.sh`</span> | <span class="in">`--hub-ip`</span> et <span class="in">`--node-per-op`</span> posent <span class="in">`WAN_MESH=1`</span> : sans cela le plan de point codes retombait sur le plan LOCAL (1.1.2 / 1.2.2, rctx 150 / 250), identique sur chaque machine du WAN. | syntaxe ; **a rejouer sur le lab** |</span>
+<span id="cb3-13"><a href="#cb3-13"></a>| <span class="in">`start.sh`</span> | le rang d'operateur passe a <span class="in">`start-direct.sh`</span> (<span class="in">`--op N`</span>) au lieu de <span class="in">`--op 1`</span> fige : <span class="in">`set-node-id.sh`</span> reecrivait les configs de l'operateur 2 avec l'identite de l'operateur 1. | syntaxe ; **a rejouer** |</span>
+<span id="cb3-14"><a href="#cb3-14"></a>| <span class="in">`start.sh`</span> | garde-fou : <span class="in">`--node-per-op`</span> refuse un numero de noeud hors de 1..9 avec un message qui dit quoi faire. | syntaxe ; **a rejouer** |</span>
+<span id="cb3-15"><a href="#cb3-15"></a>| <span class="in">`checks/_mode.sh`</span> | decouverte du hub distant (env des conteneurs puis <span class="in">`osmo-stp.cfg`</span>), point codes libres au format ITU 3-8-3, sonde d'association SCTP. | oui, sur le lab |</span>
+<span id="cb3-16"><a href="#cb3-16"></a>| <span class="in">`checks/ss7_check.sh`</span> | mode WAN : « Container absent » remplace par « hub distant + lien M3UA/SCTP », matrice de connectivite reactivee, route par defaut enfin verifiee. | oui : 19 pass, 0 warn |</span>
+<span id="cb3-17"><a href="#cb3-17"></a>| <span class="in">`checks/wan_ss7_check.sh`</span> | le hub parle SCTP : la sonde <span class="in">`nc -z 2908`</span> (TCP) rendait « injoignable » sur un lien parfait. Remplacee par l'association SCTP reelle. <span class="in">`HUB_IP`</span> lu dans les conteneurs. | oui : 25 ok, 0 echec |</span>
+<span id="cb3-18"><a href="#cb3-18"></a>| <span class="in">`checks/operator_summary.sh`</span> | section « hub distant » quand il ne figure pas dans le dump. | oui |</span>
+<span id="cb3-19"><a href="#cb3-19"></a></span>
+<span id="cb3-20"><a href="#cb3-20"></a><span class="fu">### Console SS7 (`navigation/`)</span></span>
+<span id="cb3-21"><a href="#cb3-21"></a></span>
+<span id="cb3-22"><a href="#cb3-22"></a>14 modules, ~4300 lignes de Python, sans dependance. Schema navigable aux</span>
+<span id="cb3-23"><a href="#cb3-23"></a>fleches, VTY par noeud (Echap ferme la session), ASP M3UA reel sur le hub,</span>
+<span id="cb3-24"><a href="#cb3-24"></a>operations MAP, repondeur, diagnostic, tests.</span>
+<span id="cb3-25"><a href="#cb3-25"></a></span>
+<span id="cb3-26"><a href="#cb3-26"></a>Verifie sur le lab en marche :</span>
+<span id="cb3-27"><a href="#cb3-27"></a></span>
+<span id="cb3-28"><a href="#cb3-28"></a><span class="ss">- </span>schema rendu et navigation spatiale (pilotage sous pty) ;</span>
+<span id="cb3-29"><a href="#cb3-29"></a><span class="ss">- </span>VTY OsmoBSC ouvert, commande envoyee, sortie reelle, Echap ferme ;</span>
+<span id="cb3-30"><a href="#cb3-30"></a><span class="ss">- </span>ASP M3UA : ASPUP / RKM / ASPAC -&gt; <span class="in">`ASP_ACTIVE`</span> sur <span class="in">`192.168.1.49:2908`</span> ;</span>
+<span id="cb3-31"><a href="#cb3-31"></a><span class="ss">- </span>DAUD : <span class="in">`DAVA`</span> sur les 6 point codes du lab, <span class="in">`DUNA`</span> sur un PC inexistant ;</span>
+<span id="cb3-32"><a href="#cb3-32"></a><span class="ss">- </span>aller-retour MAP complet : <span class="in">`sendRoutingInfoForSM 600101`</span> -&gt; `IMSI</span>
+<span id="cb3-33"><a href="#cb3-33"></a>  001010001000001`, a travers le hub ;</span>
+<span id="cb3-34"><a href="#cb3-34"></a><span class="ss">- </span><span class="in">`ss7-diag.py`</span> : 25 ok ;</span>
+<span id="cb3-35"><a href="#cb3-35"></a><span class="ss">- </span><span class="in">`test-console.sh`</span> : 10 tests passes avec le lab a l'arret (3 ignores), un</span>
+<span id="cb3-36"><a href="#cb3-36"></a>  journal par commande.</span>
+<span id="cb3-37"><a href="#cb3-37"></a></span>
+<span id="cb3-38"><a href="#cb3-38"></a><span class="fu">### Ce que le lab nous a appris (garde dans le code, avec le pourquoi)</span></span>
+<span id="cb3-39"><a href="#cb3-39"></a></span>
+<span id="cb3-40"><a href="#cb3-40"></a><span class="ss">- </span>le hub REFUSE le parametre « Service Indicators » d'une routing key ;</span>
+<span id="cb3-41"><a href="#cb3-41"></a><span class="ss">- </span>il faut PROPOSER son routing context, sinon deux ASP recoivent le meme et,</span>
+<span id="cb3-42"><a href="#cb3-42"></a>  en <span class="in">`traffic-mode override`</span>, le dernier vole le trafic du premier ;</span>
+<span id="cb3-43"><a href="#cb3-43"></a><span class="ss">- </span>le DATA doit partir sur le flux SCTP 1 (le 0 est reserve a la gestion) ;</span>
+<span id="cb3-44"><a href="#cb3-44"></a><span class="ss">- </span>une association venue de l'HOTE n'est servie que ~3 s, puis expire vers 35 s :</span>
+<span id="cb3-45"><a href="#cb3-45"></a>  la console renouvelle son lien avant chaque echange.</span>
+<span id="cb3-46"><a href="#cb3-46"></a></span>
+<span id="cb3-47"><a href="#cb3-47"></a><span class="fu">## 2. Ce que l'audit de la numerotation a trouve</span></span>
+<span id="cb3-48"><a href="#cb3-48"></a></span>
+<span id="cb3-49"><a href="#cb3-49"></a>Quatre cartographies (point codes, abonnes, indicatifs WAN, identifiants</span>
+<span id="cb3-50"><a href="#cb3-50"></a>reseau) confrontees aux sources. **12 problemes bloquants**, dont 3 corriges</span>
+<span id="cb3-51"><a href="#cb3-51"></a>ci-dessus. Les 9 autres, par ordre d'urgence :</span>
+<span id="cb3-52"><a href="#cb3-52"></a></span>
+<span id="cb3-53"><a href="#cb3-53"></a><span class="fu">### Bloquants, non corriges</span></span>
+<span id="cb3-54"><a href="#cb3-54"></a></span>
+<span id="cb3-55"><a href="#cb3-55"></a><span class="ss">1. </span>**Le MSISDN n'encode aucun noeud** — <span class="in">`600000 + op*100 + rang`</span>, et le Ki n'en</span>
+<span id="cb3-56"><a href="#cb3-56"></a>   depend pas non plus. Deux noeuds portent le meme <span class="in">`600101`</span> avec le meme Ki ;</span>
+<span id="cb3-57"><a href="#cb3-57"></a>   seul l'IMSI (via le MCC) les separe. Des qu'un chemin oublie de prefixer</span>
+<span id="cb3-58"><a href="#cb3-58"></a>   l'indicatif, il tombe sur l'homonyme local. <span class="in">`start.sh:1436-1437`</span>.</span>
+<span id="cb3-59"><a href="#cb3-59"></a><span class="ss">2. </span>**ISO : meme IMSI, meme MSISDN, meme Ki sur tous les noeuds** — <span class="in">`build-iso.sh`</span></span>
+<span id="cb3-60"><a href="#cb3-60"></a>   fige <span class="in">`MCC=001 MNC=01 op_id=1`</span>, ce qui contredit <span class="in">`op_mcc() = noeud`</span>.</span>
+<span id="cb3-61"><a href="#cb3-61"></a>   <span class="in">`build-iso.sh:289-290,369-373`</span>.</span>
+<span id="cb3-62"><a href="#cb3-62"></a><span class="ss">3. </span>**`--node-per-op` : l'operateur 2 d'un noeud distant est injoignable** — ses</span>
+<span id="cb3-63"><a href="#cb3-63"></a>   MSISDN sont <span class="in">`600201`</span> mais le maillage ne genere que <span class="in">`_&lt;ind&gt;6001XX`</span>.</span>
+<span id="cb3-64"><a href="#cb3-64"></a>   <span class="in">`network/setup-wan-mesh.sh:602,763`</span> vs <span class="in">`start.sh:1678`</span>.</span>
+<span id="cb3-65"><a href="#cb3-65"></a><span class="ss">4. </span>**`globals.conf` ecrase l'environnement** au lieu de le completer :</span>
+<span id="cb3-66"><a href="#cb3-66"></a>   <span class="in">`ARFCN=520 ./start-direct.sh`</span> est remis a vide. <span class="in">`globals.conf:23-45`</span>.</span>
+<span id="cb3-67"><a href="#cb3-67"></a><span class="ss">5. </span>**ARFCN / BSIC / LAC / CI ne dependent que de l'operateur** — deux noeuds</span>
+<span id="cb3-68"><a href="#cb3-68"></a>   diffusent <span class="in">`ARFCN 514 / BSIC 7 / LAC 0x0001 / CI 6001`</span>. <span class="in">`generate_configs.sh:287-306`</span>.</span>
+<span id="cb3-69"><a href="#cb3-69"></a><span class="ss">6. </span>**Le garde-fou `_gc_warn_perop` ne tourne jamais** sur le chemin reel (mode</span>
+<span id="cb3-70"><a href="#cb3-70"></a>   source) et teste <span class="in">`N_OPERATORS`</span>, que <span class="in">`start.sh`</span> ne lit nulle part.</span>
+<span id="cb3-71"><a href="#cb3-71"></a><span class="ss">7. </span>**La plage RTP du MGW (4002-16001) recouvre tous les ports de service** du</span>
+<span id="cb3-72"><a href="#cb3-72"></a>   conteneur, VTY compris. <span class="in">`configs/osmo-mgw.cfg:70-71`</span>.</span>
+<span id="cb3-73"><a href="#cb3-73"></a><span class="ss">8. </span>**`node_nops` : repli mort** — <span class="in">`WAN_NOPS[id]=1`</span> est toujours pose, donc un</span>
+<span id="cb3-74"><a href="#cb3-74"></a>   pair est toujours vu a 1 operateur. <span class="in">`network/wan-nodes.sh:109-120`</span>.</span>
+<span id="cb3-75"><a href="#cb3-75"></a><span class="ss">9. </span>**La grille d'AS du hub est indexee par RANG, pas par numero de noeud** — une</span>
+<span id="cb3-76"><a href="#cb3-76"></a>   table <span class="in">`1: 3: 5:`</span> produit <span class="in">`as-n1 as-n2 as-n3`</span>. <span class="in">`helpers/create_interop.sh:118-130`</span>.</span>
+<span id="cb3-77"><a href="#cb3-77"></a></span>
+<span id="cb3-78"><a href="#cb3-78"></a><span class="fu">### Serieux, notables</span></span>
+<span id="cb3-79"><a href="#cb3-79"></a></span>
+<span id="cb3-80"><a href="#cb3-80"></a><span class="ss">- </span>trois replis divergents pour MCC/MNC (<span class="in">`start-direct.sh`</span>, <span class="in">`run_modules/21`</span>,</span>
+<span id="cb3-81"><a href="#cb3-81"></a>  <span class="in">`scripts/sms-routing-setup.sh`</span>) ;</span>
+<span id="cb3-82"><a href="#cb3-82"></a><span class="ss">- </span>seules 2 routes SMS locales generees quel que soit <span class="in">`OP_MS`</span> ;</span>
+<span id="cb3-83"><a href="#cb3-83"></a><span class="ss">- </span><span class="in">`checks/diag-stp-operator.sh`</span> et <span class="in">`wan_ss7_check.sh`</span> figent l'operateur a 1 ;</span>
+<span id="cb3-84"><a href="#cb3-84"></a><span class="ss">- </span>deux identites de noeud pour la meme machine en <span class="in">`--node-per-op`</span> ;</span>
+<span id="cb3-85"><a href="#cb3-85"></a><span class="ss">- </span>aucun routage par global title (tout est en PC/SSN 254).</span>
+<span id="cb3-86"><a href="#cb3-86"></a></span>
+<span id="cb3-87"><a href="#cb3-87"></a><span class="fu">## 3. Reste a faire</span></span>
+<span id="cb3-88"><a href="#cb3-88"></a></span>
+<span id="cb3-89"><a href="#cb3-89"></a><span class="fu">### Priorite 1 — rejouer ce qui est corrige</span></span>
+<span id="cb3-90"><a href="#cb3-90"></a></span>
+<span id="cb3-91"><a href="#cb3-91"></a><span class="ss">- </span><span class="va">[ ]</span> relancer le lab et verifier les 3 correctifs <span class="in">`start.sh`</span> :</span>
+<span id="cb3-92"><a href="#cb3-92"></a>      <span class="in">`sudo ./start.sh --wan --operators 2 --hub-ip 192.168.1.49`</span></span>
+<span id="cb3-93"><a href="#cb3-93"></a>      puis <span class="in">`./navigation/ss7-diag.py`</span> (attendu : 2 PC distincts par operateur,</span>
+<span id="cb3-94"><a href="#cb3-94"></a>      rctx distincts, aucun <span class="in">`DUNA`</span> sur les PC du lab) ;</span>
+<span id="cb3-95"><a href="#cb3-95"></a><span class="ss">- </span><span class="va">[ ]</span> <span class="in">`./navigation/test-console.sh`</span> lab en marche (les 3 sections ignorees</span>
+<span id="cb3-96"><a href="#cb3-96"></a>      doivent passer).</span>
+<span id="cb3-97"><a href="#cb3-97"></a></span>
+<span id="cb3-98"><a href="#cb3-98"></a><span class="fu">### Priorite 2 — numerotation</span></span>
+<span id="cb3-99"><a href="#cb3-99"></a></span>
+<span id="cb3-100"><a href="#cb3-100"></a><span class="ss">- </span><span class="va">[ ]</span> trancher le plan MSISDN : y encoder le noeud, ou assumer que l'indicatif</span>
+<span id="cb3-101"><a href="#cb3-101"></a>      est le seul discriminant et verifier CHAQUE chemin qui le retire ;</span>
+<span id="cb3-102"><a href="#cb3-102"></a><span class="ss">- </span><span class="va">[ ]</span> <span class="in">`build-iso.sh`</span> : deriver MCC/MNC/op_id du <span class="in">`--node`</span>, comme <span class="in">`start.sh`</span> ;</span>
+<span id="cb3-103"><a href="#cb3-103"></a><span class="ss">- </span><span class="va">[ ]</span> <span class="in">`generate_configs.sh`</span> : indexer ARFCN / BSIC / LAC / CI par noeud ;</span>
+<span id="cb3-104"><a href="#cb3-104"></a><span class="ss">- </span><span class="va">[ ]</span> <span class="in">`globals.conf`</span> : passer aux affectations <span class="in">`${VAR:=...}`</span> pour tenir la</span>
+<span id="cb3-105"><a href="#cb3-105"></a>      promesse du commentaire, ou corriger le commentaire ;</span>
+<span id="cb3-106"><a href="#cb3-106"></a><span class="ss">- </span><span class="va">[ ]</span> <span class="in">`network/wan-nodes.sh`</span> : ne poser <span class="in">`WAN_NOPS`</span> que si le champ existe.</span>
+<span id="cb3-107"><a href="#cb3-107"></a></span>
+<span id="cb3-108"><a href="#cb3-108"></a><span class="fu">### Priorite 3 — outillage</span></span>
+<span id="cb3-109"><a href="#cb3-109"></a></span>
+<span id="cb3-110"><a href="#cb3-110"></a><span class="ss">- </span><span class="va">[ ]</span> <span class="in">`checks/diag-stp-operator.sh`</span> : ne plus figer l'operateur 1 ;</span>
+<span id="cb3-111"><a href="#cb3-111"></a><span class="ss">- </span><span class="va">[ ]</span> console : bornes du repondeur (plusieurs operateurs, choix du SSN) ;</span>
+<span id="cb3-112"><a href="#cb3-112"></a><span class="ss">- </span><span class="va">[ ]</span> console : rejouer un script exporte (<span class="in">`navigation/scripts/`</span>) depuis le</span>
+<span id="cb3-113"><a href="#cb3-113"></a>      schema.</span>
+<span id="cb3-114"><a href="#cb3-114"></a></span>
+<span id="cb3-115"><a href="#cb3-115"></a><span class="fu">## 4. Points d'attention</span></span>
+<span id="cb3-116"><a href="#cb3-116"></a></span>
+<span id="cb3-117"><a href="#cb3-117"></a><span class="ss">- </span><span class="in">`navigation/`</span> appartient a <span class="in">`nirvana:nirvana`</span> ; <span class="in">`start.sh`</span> reste <span class="in">`root:root`</span></span>
+<span id="cb3-118"><a href="#cb3-118"></a>  comme avant.</span>
+<span id="cb3-119"><a href="#cb3-119"></a><span class="ss">- </span>Sauvegardes : <span class="in">`start.sh.bak.20260826-221924`</span> (asound) et</span>
+<span id="cb3-120"><a href="#cb3-120"></a>  <span class="in">`start.sh.bak.*-numerotation`</span> (les 3 correctifs), <span class="in">`checks/*.bak`</span>.</span>
+<span id="cb3-121"><a href="#cb3-121"></a><span class="ss">- </span>L'audit complet (phase 2 et 3 du workflow) n'a pas ete rejoue : seules les</span>
+<span id="cb3-122"><a href="#cb3-122"></a>  quatre cartographies ont abouti. Leurs conclusions sont resumees ici.</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</section>
+<section id="f-readme-md" class="level2">
+<h2 class="anchored" data-anchor-id="f-readme-md"><code>README.md</code></h2>
+<div class="file-meta">
+<p><span class="tag">.md</span> 552 lignes - 19KB</p>
+</div>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>README.md</strong></pre>
+</div>
+<div class="sourceCode" id="cb4" data-filename="README.md"><pre class="sourceCode numberSource markdown numberLines code-with-copy"><code class="sourceCode markdown"><span id="cb4-1"><a href="#cb4-1"></a><span class="fu"># osmo-nitb-for-calypso — Architecture Multi-PLMN SS7/IP</span></span>
+<span id="cb4-2"><a href="#cb4-2"></a></span>
+<span id="cb4-3"><a href="#cb4-3"></a>Standalone mode (no interstp)</span>
+<span id="cb4-4"><a href="#cb4-4"></a><span class="in">```bash</span></span>
+<span id="cb4-5"><a href="#cb4-5"></a><span class="fu">sudo</span> docker pull bastienbaranoff/norf_gsm</span>
+<span id="cb4-6"><a href="#cb4-6"></a><span class="fu">sudo</span> docker tag bastienbaranoff/norf_gsm osmocom-nitb</span>
+<span id="cb4-7"><a href="#cb4-7"></a><span class="fu">git</span> clone https://github.com/bbaranoff/osmo_egprs</span>
+<span id="cb4-8"><a href="#cb4-8"></a><span class="bu">cd</span> osmo_egprs</span>
+<span id="cb4-9"><a href="#cb4-9"></a><span class="fu">sudo</span> ./start.sh</span>
+<span id="cb4-10"><a href="#cb4-10"></a><span class="in">```</span></span>
+<span id="cb4-11"><a href="#cb4-11"></a>To go in container</span>
+<span id="cb4-12"><a href="#cb4-12"></a><span class="in">```bash</span></span>
+<span id="cb4-13"><a href="#cb4-13"></a><span class="fu">sudo</span> docker exec <span class="at">-ti</span> osmo-operator-1 bash</span>
+<span id="cb4-14"><a href="#cb4-14"></a><span class="in">```</span> </span>
+<span id="cb4-15"><a href="#cb4-15"></a></span>
+<span id="cb4-16"><a href="#cb4-16"></a>then in docker container</span>
+<span id="cb4-17"><a href="#cb4-17"></a><span class="in">```bash</span></span>
+<span id="cb4-18"><a href="#cb4-18"></a><span class="bu">cd</span> /opt/GSM/osmo_egprs</span>
+<span id="cb4-19"><a href="#cb4-19"></a><span class="ex">./start-direct.sh</span> <span class="at">--regen</span></span>
+<span id="cb4-20"><a href="#cb4-20"></a><span class="ex">./start-direct.sh</span> <span class="at">--stop</span></span>
+<span id="cb4-21"><a href="#cb4-21"></a><span class="ex">./start-direct.sh</span></span>
+<span id="cb4-22"><a href="#cb4-22"></a><span class="in">```</span></span>
+<span id="cb4-23"><a href="#cb4-23"></a></span>
+<span id="cb4-24"><a href="#cb4-24"></a></span>
+<span id="cb4-25"><a href="#cb4-25"></a>Documentation d'architecture du projet **osmo-nitb-for-calypso** : simulation multi-opérateur GSM complète avec interconnexion SS7 sur IP, entièrement conteneurisée via Docker.</span>
+<span id="cb4-26"><a href="#cb4-26"></a></span>
+<span id="cb4-27"><a href="#cb4-27"></a>Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisation complète d'une configuration SS7 inter-opérateurs habituellement réalisée à la main, reproductible d'un simple <span class="in">`tools/make-docker-image.sh &amp;&amp; start.sh`</span>.</span>
+<span id="cb4-28"><a href="#cb4-28"></a></span>
+<span id="cb4-29"><a href="#cb4-29"></a>**Support N opérateurs** : le démarrage en mode bridge accepte de 1 à 9 opérateurs sans modifier aucune configuration. Tous les fichiers (pjsip, dialplan, SMS routing, inter-STP) sont générés dynamiquement selon N.</span>
+<span id="cb4-30"><a href="#cb4-30"></a></span>
+<span id="cb4-31"><a href="#cb4-31"></a>---</span>
+<span id="cb4-32"><a href="#cb4-32"></a></span>
+<span id="cb4-33"><a href="#cb4-33"></a><span class="fu">## 1. Architecture d'un PLMN (Osmocom)</span></span>
+<span id="cb4-34"><a href="#cb4-34"></a></span>
+<span id="cb4-35"><a href="#cb4-35"></a>Chaque opérateur simulé repose sur la stack Osmocom standard, tous les composants dans un seul conteneur Docker.</span>
+<span id="cb4-36"><a href="#cb4-36"></a></span>
+<span id="cb4-37"><a href="#cb4-37"></a><span class="in">```mermaid</span></span>
+<span id="cb4-38"><a href="#cb4-38"></a><span class="in">flowchart LR</span></span>
+<span id="cb4-39"><a href="#cb4-39"></a><span class="in">    UE --&gt; BTS</span></span>
+<span id="cb4-40"><a href="#cb4-40"></a><span class="in">    BTS --&gt;|Abis/IP| BSC</span></span>
+<span id="cb4-41"><a href="#cb4-41"></a><span class="in">    BSC --&gt;|SCCP via STP| MSC</span></span>
+<span id="cb4-42"><a href="#cb4-42"></a><span class="in">    MSC --&gt;|GSUP| HLR</span></span>
+<span id="cb4-43"><a href="#cb4-43"></a><span class="in">    MSC --&gt;|MGCP| MGW</span></span>
+<span id="cb4-44"><a href="#cb4-44"></a><span class="in">    MSC --&gt;|MNCC| Asterisk</span></span>
+<span id="cb4-45"><a href="#cb4-45"></a><span class="in">```</span></span>
+<span id="cb4-46"><a href="#cb4-46"></a></span>
+<span id="cb4-47"><a href="#cb4-47"></a>Tous ces composants tournent dans le même conteneur et communiquent via <span class="in">`127.0.0.1`</span>. Le STP local sert de hub de signalisation intra-PLMN.</span>
+<span id="cb4-48"><a href="#cb4-48"></a></span>
+<span id="cb4-49"><a href="#cb4-49"></a>---</span>
+<span id="cb4-50"><a href="#cb4-50"></a></span>
+<span id="cb4-51"><a href="#cb4-51"></a><span class="fu">## 2. Interconnexion Multi-PLMN</span></span>
+<span id="cb4-52"><a href="#cb4-52"></a></span>
+<span id="cb4-53"><a href="#cb4-53"></a>L'architecture centrale du projet. N opérateurs distincts, chacun avec son core network dans un conteneur dédié, reliés par un Inter-STP central qui route la signalisation M3UA/SCCP entre eux.</span>
+<span id="cb4-54"><a href="#cb4-54"></a></span>
+<span id="cb4-55"><a href="#cb4-55"></a><span class="in">```mermaid</span></span>
+<span id="cb4-56"><a href="#cb4-56"></a><span class="in">flowchart LR</span></span>
+<span id="cb4-57"><a href="#cb4-57"></a><span class="in">    subgraph "Conteneur osmo-operator-1"</span></span>
+<span id="cb4-58"><a href="#cb4-58"></a><span class="in">        BSC_A["BSC (1.23.3)"]</span></span>
+<span id="cb4-59"><a href="#cb4-59"></a><span class="in">        MSC_A["MSC (1.23.1)"]</span></span>
+<span id="cb4-60"><a href="#cb4-60"></a><span class="in">        STP_A["STP (1.23.2)"]</span></span>
+<span id="cb4-61"><a href="#cb4-61"></a><span class="in">        BSC_A --&gt;|127.0.0.1:2905| STP_A</span></span>
+<span id="cb4-62"><a href="#cb4-62"></a><span class="in">        MSC_A --&gt;|127.0.0.1:2905| STP_A</span></span>
+<span id="cb4-63"><a href="#cb4-63"></a><span class="in">    end</span></span>
+<span id="cb4-64"><a href="#cb4-64"></a></span>
+<span id="cb4-65"><a href="#cb4-65"></a><span class="in">    subgraph "Conteneur osmo-operator-2"</span></span>
+<span id="cb4-66"><a href="#cb4-66"></a><span class="in">        BSC_B["BSC (2.23.3)"]</span></span>
+<span id="cb4-67"><a href="#cb4-67"></a><span class="in">        MSC_B["MSC (2.23.1)"]</span></span>
+<span id="cb4-68"><a href="#cb4-68"></a><span class="in">        STP_B["STP (2.23.2)"]</span></span>
+<span id="cb4-69"><a href="#cb4-69"></a><span class="in">        BSC_B --&gt;|127.0.0.1:2905| STP_B</span></span>
+<span id="cb4-70"><a href="#cb4-70"></a><span class="in">        MSC_B --&gt;|127.0.0.1:2905| STP_B</span></span>
+<span id="cb4-71"><a href="#cb4-71"></a><span class="in">    end</span></span>
+<span id="cb4-72"><a href="#cb4-72"></a></span>
+<span id="cb4-73"><a href="#cb4-73"></a><span class="in">    subgraph "Conteneur osmo-operator-N"</span></span>
+<span id="cb4-74"><a href="#cb4-74"></a><span class="in">        BSC_N["BSC (N.23.3)"]</span></span>
+<span id="cb4-75"><a href="#cb4-75"></a><span class="in">        MSC_N["MSC (N.23.1)"]</span></span>
+<span id="cb4-76"><a href="#cb4-76"></a><span class="in">        STP_N["STP (N.23.2)"]</span></span>
+<span id="cb4-77"><a href="#cb4-77"></a><span class="in">    end</span></span>
+<span id="cb4-78"><a href="#cb4-78"></a></span>
+<span id="cb4-79"><a href="#cb4-79"></a><span class="in">    subgraph "Conteneur osmo-inter-stp"</span></span>
+<span id="cb4-80"><a href="#cb4-80"></a><span class="in">        INTER["Inter-STP (0.23.0)"]</span></span>
+<span id="cb4-81"><a href="#cb4-81"></a><span class="in">    end</span></span>
+<span id="cb4-82"><a href="#cb4-82"></a></span>
+<span id="cb4-83"><a href="#cb4-83"></a><span class="in">    STP_A &lt;--&gt;|"RCTX 150 / :2908"| INTER</span></span>
+<span id="cb4-84"><a href="#cb4-84"></a><span class="in">    STP_B &lt;--&gt;|"RCTX 250 / :2908"| INTER</span></span>
+<span id="cb4-85"><a href="#cb4-85"></a><span class="in">    STP_N &lt;--&gt;|"RCTX N×50 / :2908"| INTER</span></span>
+<span id="cb4-86"><a href="#cb4-86"></a><span class="in">```</span></span>
+<span id="cb4-87"><a href="#cb4-87"></a></span>
+<span id="cb4-88"><a href="#cb4-88"></a>---</span>
+<span id="cb4-89"><a href="#cb4-89"></a></span>
+<span id="cb4-90"><a href="#cb4-90"></a><span class="fu">## 3. Topologie réseau Docker</span></span>
+<span id="cb4-91"><a href="#cb4-91"></a></span>
+<span id="cb4-92"><a href="#cb4-92"></a><span class="fu">### 3.1 Réseaux</span></span>
+<span id="cb4-93"><a href="#cb4-93"></a></span>
+<span id="cb4-94"><a href="#cb4-94"></a>| Réseau Docker | Plage | Rôle |</span>
+<span id="cb4-95"><a href="#cb4-95"></a>|---------------|-------|------|</span>
+<span id="cb4-96"><a href="#cb4-96"></a>| <span class="in">`gsm-inter`</span> | <span class="in">`172.20.0.0/24`</span> | Backbone interop (M3UA inter-STP) |</span>
+<span id="cb4-97"><a href="#cb4-97"></a>| <span class="in">`gsm-net-opN`</span> | <span class="in">`172.20.N.0/24`</span> | Réseau privé opérateur N (GSMTAP, GPRS) |</span>
+<span id="cb4-98"><a href="#cb4-98"></a></span>
+<span id="cb4-99"><a href="#cb4-99"></a><span class="fu">### 3.2 Adresses IP</span></span>
+<span id="cb4-100"><a href="#cb4-100"></a></span>
+<span id="cb4-101"><a href="#cb4-101"></a>| Composant | IP backbone (<span class="in">`gsm-inter`</span>) | IP privée (<span class="in">`gsm-net-opN`</span>) |</span>
+<span id="cb4-102"><a href="#cb4-102"></a>|-----------|--------------------------|--------------------------|</span>
+<span id="cb4-103"><a href="#cb4-103"></a>| Inter-STP | <span class="in">`172.20.0.10`</span> | — |</span>
+<span id="cb4-104"><a href="#cb4-104"></a>| Conteneur OpN | <span class="in">`172.20.0.(10+N)`</span> | <span class="in">`172.20.N.10`</span> |</span>
+<span id="cb4-105"><a href="#cb4-105"></a></span>
+<span id="cb4-106"><a href="#cb4-106"></a>**Formule générale** : opérateur N → backbone <span class="in">`172.20.0.(10+N)`</span>, privé <span class="in">`172.20.N.10`</span></span>
+<span id="cb4-107"><a href="#cb4-107"></a></span>
+<span id="cb4-108"><a href="#cb4-108"></a><span class="fu">### 3.3 Communication intra-conteneur</span></span>
+<span id="cb4-109"><a href="#cb4-109"></a></span>
+<span id="cb4-110"><a href="#cb4-110"></a>Tous les composants communiquent via <span class="in">`127.0.0.1`</span> (fix de la race condition Docker) :</span>
+<span id="cb4-111"><a href="#cb4-111"></a></span>
+<span id="cb4-112"><a href="#cb4-112"></a><span class="in">```</span></span>
+<span id="cb4-113"><a href="#cb4-113"></a><span class="in">BSC ──(127.0.0.1:2905)──► STP local</span></span>
+<span id="cb4-114"><a href="#cb4-114"></a><span class="in">MSC ──(127.0.0.1:2905)──► STP local</span></span>
+<span id="cb4-115"><a href="#cb4-115"></a><span class="in">MSC ──(127.0.0.2:4222)──► HLR</span></span>
+<span id="cb4-116"><a href="#cb4-116"></a><span class="in">MSC ──(127.0.0.1:2427)──► MGW</span></span>
+<span id="cb4-117"><a href="#cb4-117"></a><span class="in">```</span></span>
+<span id="cb4-118"><a href="#cb4-118"></a></span>
+<span id="cb4-119"><a href="#cb4-119"></a>Le STP écoute sur <span class="in">`127.0.0.1:2905`</span> immédiatement, sans dépendre de l'interface réseau Docker (attachée après démarrage du container via <span class="in">`docker network connect`</span>).</span>
+<span id="cb4-120"><a href="#cb4-120"></a></span>
+<span id="cb4-121"><a href="#cb4-121"></a><span class="fu">### 3.4 Communication inter-conteneur</span></span>
+<span id="cb4-122"><a href="#cb4-122"></a></span>
+<span id="cb4-123"><a href="#cb4-123"></a>Uniquement le lien STP↔Inter-STP traverse le réseau Docker :</span>
+<span id="cb4-124"><a href="#cb4-124"></a></span>
+<span id="cb4-125"><a href="#cb4-125"></a><span class="in">```</span></span>
+<span id="cb4-126"><a href="#cb4-126"></a><span class="in">STP OpN (172.20.0.(10+N)) ──SCTP──► Inter-STP (172.20.0.10:2908)</span></span>
+<span id="cb4-127"><a href="#cb4-127"></a><span class="in">```</span></span>
+<span id="cb4-128"><a href="#cb4-128"></a></span>
+<span id="cb4-129"><a href="#cb4-129"></a>---</span>
+<span id="cb4-130"><a href="#cb4-130"></a></span>
+<span id="cb4-131"><a href="#cb4-131"></a><span class="fu">## 4. Signalisation SS7</span></span>
+<span id="cb4-132"><a href="#cb4-132"></a></span>
+<span id="cb4-133"><a href="#cb4-133"></a><span class="fu">### 4.1 Point codes</span></span>
+<span id="cb4-134"><a href="#cb4-134"></a></span>
+<span id="cb4-135"><a href="#cb4-135"></a>Format ITU 14-bit (3.8.3 : <span class="in">`zone.network.node`</span>)</span>
+<span id="cb4-136"><a href="#cb4-136"></a></span>
+<span id="cb4-137"><a href="#cb4-137"></a>| Nœud | Point Code | Formule |</span>
+<span id="cb4-138"><a href="#cb4-138"></a>|------|-----------|---------|</span>
+<span id="cb4-139"><a href="#cb4-139"></a>| Inter-STP | <span class="in">`0.23.0`</span> | fixe |</span>
+<span id="cb4-140"><a href="#cb4-140"></a>| MSC OpN | <span class="in">`N.23.1`</span> | zone=N |</span>
+<span id="cb4-141"><a href="#cb4-141"></a>| STP OpN | <span class="in">`N.23.2`</span> | zone=N |</span>
+<span id="cb4-142"><a href="#cb4-142"></a>| BSC OpN | <span class="in">`N.23.3`</span> | zone=N |</span>
+<span id="cb4-143"><a href="#cb4-143"></a></span>
+<span id="cb4-144"><a href="#cb4-144"></a><span class="fu">### 4.2 Routing Contexts (RCTX)</span></span>
+<span id="cb4-145"><a href="#cb4-145"></a></span>
+<span id="cb4-146"><a href="#cb4-146"></a>| RCTX | Formule | Usage |</span>
+<span id="cb4-147"><a href="#cb4-147"></a>|------|---------|-------|</span>
+<span id="cb4-148"><a href="#cb4-148"></a>| <span class="in">`N×100+10`</span> | <span class="in">`rctx_msc`</span> | MSC OpN → STP OpN |</span>
+<span id="cb4-149"><a href="#cb4-149"></a>| <span class="in">`N×100+20`</span> | <span class="in">`rctx_stp`</span> | STP OpN (registration) |</span>
+<span id="cb4-150"><a href="#cb4-150"></a>| <span class="in">`N×100+30`</span> | <span class="in">`rctx_bsc`</span> | BSC OpN → STP OpN |</span>
+<span id="cb4-151"><a href="#cb4-151"></a>| **`N×100+50`** | **`rctx_inter`** | **STP OpN → Inter-STP** |</span>
+<span id="cb4-152"><a href="#cb4-152"></a></span>
+<span id="cb4-153"><a href="#cb4-153"></a>Le RCTX inter (<span class="in">`N×100+50`</span>) est le plus critique : il doit correspondre dans <span class="in">`osmo-stp.cfg`</span> (STP opérateur) et être cohérent avec la connexion vers l'inter-STP.</span>
+<span id="cb4-154"><a href="#cb4-154"></a></span>
+<span id="cb4-155"><a href="#cb4-155"></a><span class="fu">### 4.3 Configuration inter-STP (générée)</span></span>
+<span id="cb4-156"><a href="#cb4-156"></a></span>
+<span id="cb4-157"><a href="#cb4-157"></a>L'inter-STP utilise des **AS sans routing-key** (catch-all par opérateur). Le routage se fait uniquement sur le DPC :</span>
+<span id="cb4-158"><a href="#cb4-158"></a></span>
+<span id="cb4-159"><a href="#cb4-159"></a><span class="in">```</span></span>
+<span id="cb4-160"><a href="#cb4-160"></a><span class="in">cs7 instance 0</span></span>
+<span id="cb4-161"><a href="#cb4-161"></a><span class="in"> point-code 0.23.0</span></span>
+<span id="cb4-162"><a href="#cb4-162"></a><span class="in"> listen m3ua 2908</span></span>
+<span id="cb4-163"><a href="#cb4-163"></a><span class="in">  accept-asp-connections dynamic-permitted</span></span>
+<span id="cb4-164"><a href="#cb4-164"></a></span>
+<span id="cb4-165"><a href="#cb4-165"></a><span class="in"> as as-opN m3ua</span></span>
+<span id="cb4-166"><a href="#cb4-166"></a><span class="in">  traffic-mode override     ← PAS de routing-key</span></span>
+<span id="cb4-167"><a href="#cb4-167"></a></span>
+<span id="cb4-168"><a href="#cb4-168"></a><span class="in"> route-table system</span></span>
+<span id="cb4-169"><a href="#cb4-169"></a><span class="in">  update route N.23.1 7.255.7 linkset as-opN</span></span>
+<span id="cb4-170"><a href="#cb4-170"></a><span class="in">  update route N.23.2 7.255.7 linkset as-opN</span></span>
+<span id="cb4-171"><a href="#cb4-171"></a><span class="in">  update route N.23.3 7.255.7 linkset as-opN</span></span>
+<span id="cb4-172"><a href="#cb4-172"></a><span class="in">```</span></span>
+<span id="cb4-173"><a href="#cb4-173"></a></span>
+<span id="cb4-174"><a href="#cb4-174"></a><span class="fu">### 4.4 Chemin complet d'un message SS7</span></span>
+<span id="cb4-175"><a href="#cb4-175"></a></span>
+<span id="cb4-176"><a href="#cb4-176"></a><span class="in">```mermaid</span></span>
+<span id="cb4-177"><a href="#cb4-177"></a><span class="in">flowchart LR</span></span>
+<span id="cb4-178"><a href="#cb4-178"></a><span class="in">    MSC_A["MSC Op1\n1.23.1"] --&gt;|"SCTP 127.0.0.1:2905"| STP_A["STP Op1\n1.23.2"]</span></span>
+<span id="cb4-179"><a href="#cb4-179"></a><span class="in">    STP_A --&gt;|"catch-all → as-inter\n172.20.0.10:2908"| INTER["Inter-STP\n0.23.0"]</span></span>
+<span id="cb4-180"><a href="#cb4-180"></a><span class="in">    INTER --&gt;|"DPC 2.23.x → as-op2"| STP_B["STP Op2\n2.23.2"]</span></span>
+<span id="cb4-181"><a href="#cb4-181"></a><span class="in">    STP_B --&gt;|"DPC 2.23.1 → dyn\n127.0.0.1"| MSC_B["MSC Op2\n2.23.1"]</span></span>
+<span id="cb4-182"><a href="#cb4-182"></a><span class="in">```</span></span>
+<span id="cb4-183"><a href="#cb4-183"></a></span>
+<span id="cb4-184"><a href="#cb4-184"></a>---</span>
+<span id="cb4-185"><a href="#cb4-185"></a></span>
+<span id="cb4-186"><a href="#cb4-186"></a><span class="fu">## 5. Génération dynamique — N opérateurs</span></span>
+<span id="cb4-187"><a href="#cb4-187"></a></span>
+<span id="cb4-188"><a href="#cb4-188"></a>Toutes les configurations dépendant de N sont **générées au démarrage**. Aucun fichier template ne contient de valeur hardcodée pour un nombre spécifique d'opérateurs.</span>
+<span id="cb4-189"><a href="#cb4-189"></a></span>
+<span id="cb4-190"><a href="#cb4-190"></a><span class="fu">### 5.1 Template engine (placeholders)</span></span>
+<span id="cb4-191"><a href="#cb4-191"></a></span>
+<span id="cb4-192"><a href="#cb4-192"></a><span class="in">`apply_config_templates()`</span> dans <span class="in">`start.sh`</span> résout en **1 seul passage `sed`** :</span>
+<span id="cb4-193"><a href="#cb4-193"></a></span>
+<span id="cb4-194"><a href="#cb4-194"></a>| Placeholder | Formule | Exemple N=2 |</span>
+<span id="cb4-195"><a href="#cb4-195"></a>|------------|---------|-------------|</span>
+<span id="cb4-196"><a href="#cb4-196"></a>| <span class="in">`__PC_MSC__`</span> | <span class="in">`N.23.1`</span> | <span class="in">`2.23.1`</span> |</span>
+<span id="cb4-197"><a href="#cb4-197"></a>| <span class="in">`__PC_STP__`</span> | <span class="in">`N.23.2`</span> | <span class="in">`2.23.2`</span> |</span>
+<span id="cb4-198"><a href="#cb4-198"></a>| <span class="in">`__PC_BSC__`</span> | <span class="in">`N.23.3`</span> | <span class="in">`2.23.3`</span> |</span>
+<span id="cb4-199"><a href="#cb4-199"></a>| <span class="in">`__RCTX_MSC__`</span> | <span class="in">`N×100+10`</span> | <span class="in">`210`</span> |</span>
+<span id="cb4-200"><a href="#cb4-200"></a>| <span class="in">`__RCTX_BSC__`</span> | <span class="in">`N×100+30`</span> | <span class="in">`230`</span> |</span>
+<span id="cb4-201"><a href="#cb4-201"></a>| <span class="in">`__RCTX_INTER__`</span> | <span class="in">`N×100+50`</span> | <span class="in">`250`</span> |</span>
+<span id="cb4-202"><a href="#cb4-202"></a>| <span class="in">`__ARFCN__`</span> | <span class="in">`512+N×2`</span> | <span class="in">`516`</span> |</span>
+<span id="cb4-203"><a href="#cb4-203"></a>| <span class="in">`__INTER_LOCAL_IP__`</span> | <span class="in">`172.20.0.(10+N)`</span> | <span class="in">`172.20.0.12`</span> |</span>
+<span id="cb4-204"><a href="#cb4-204"></a>| <span class="in">`__CONTAINER_IP__`</span> | <span class="in">`172.20.N.10`</span> | <span class="in">`172.20.2.10`</span> |</span>
+<span id="cb4-205"><a href="#cb4-205"></a></span>
+<span id="cb4-206"><a href="#cb4-206"></a><span class="fu">### 5.2 Sections générées (dépendent de N total)</span></span>
+<span id="cb4-207"><a href="#cb4-207"></a></span>
+<span id="cb4-208"><a href="#cb4-208"></a>Après la substitution sed, <span class="in">`start.sh`</span> **appende** à chaque opérateur :</span>
+<span id="cb4-209"><a href="#cb4-209"></a></span>
+<span id="cb4-210"><a href="#cb4-210"></a>| Section | Fichier | Contenu |</span>
+<span id="cb4-211"><a href="#cb4-211"></a>|---------|---------|---------|</span>
+<span id="cb4-212"><a href="#cb4-212"></a>| Trunks PJSIP | <span class="in">`pjsip.conf`</span> | N-1 blocs <span class="in">`[interop_trunk_opX]`</span> |</span>
+<span id="cb4-213"><a href="#cb4-213"></a>| Dialplan sortant | <span class="in">`extensions.conf`</span> | Contexte <span class="in">`[interop_out]`</span> avec N-1 extensions |</span>
+<span id="cb4-214"><a href="#cb4-214"></a>| Routage SMS | <span class="in">`sms-routing.conf`</span> | Table complète pour N opérateurs |</span>
+<span id="cb4-215"><a href="#cb4-215"></a>| Config inter-STP | <span class="in">`osmo-stp-interop.cfg`</span> | N AS + N×3 routes SS7 |</span>
+<span id="cb4-216"><a href="#cb4-216"></a></span>
+<span id="cb4-217"><a href="#cb4-217"></a><span class="fu">### 5.3 Séquence de démarrage</span></span>
+<span id="cb4-218"><a href="#cb4-218"></a></span>
+<span id="cb4-219"><a href="#cb4-219"></a><span class="in">```</span></span>
+<span id="cb4-220"><a href="#cb4-220"></a><span class="in">./start.sh  [bridge mode]</span></span>
+<span id="cb4-221"><a href="#cb4-221"></a><span class="in"> ├── Saisie N opérateurs + MCC/MNC/nom par opérateur</span></span>
+<span id="cb4-222"><a href="#cb4-222"></a><span class="in"> ├── Création réseau gsm-inter (172.20.0.0/24)</span></span>
+<span id="cb4-223"><a href="#cb4-223"></a><span class="in"> ├── create_interop.sh N → osmo-stp-interop.cfg</span></span>
+<span id="cb4-224"><a href="#cb4-224"></a><span class="in"> ├── Lancement osmo-inter-stp (doit écouter :2908 AVANT les opérateurs)</span></span>
+<span id="cb4-225"><a href="#cb4-225"></a><span class="in"> └── Pour chaque opérateur N :</span></span>
+<span id="cb4-226"><a href="#cb4-226"></a><span class="in">      ├── apply_config_templates (sed + génération sections dynamiques)</span></span>
+<span id="cb4-227"><a href="#cb4-227"></a><span class="in">      ├── docker run sur gsm-inter @ 172.20.0.(10+N)</span></span>
+<span id="cb4-228"><a href="#cb4-228"></a><span class="in">      ├── docker network connect gsm-net-opN @ 172.20.N.10</span></span>
+<span id="cb4-229"><a href="#cb4-229"></a><span class="in">      └── Services via run.sh + tmux</span></span>
+<span id="cb4-230"><a href="#cb4-230"></a><span class="in">```</span></span>
+<span id="cb4-231"><a href="#cb4-231"></a></span>
+<span id="cb4-232"><a href="#cb4-232"></a>L'ordre est critique : l'Inter-STP doit écouter avant que les STPs opérateurs tentent de s'y connecter.</span>
+<span id="cb4-233"><a href="#cb4-233"></a></span>
+<span id="cb4-234"><a href="#cb4-234"></a>---</span>
+<span id="cb4-235"><a href="#cb4-235"></a></span>
+<span id="cb4-236"><a href="#cb4-236"></a><span class="fu">## 6. SMS</span></span>
+<span id="cb4-237"><a href="#cb4-237"></a></span>
+<span id="cb4-238"><a href="#cb4-238"></a><span class="fu">### 6.1 SMS intra-opérateur</span></span>
+<span id="cb4-239"><a href="#cb4-239"></a></span>
+<span id="cb4-240"><a href="#cb4-240"></a><span class="in">```mermaid</span></span>
+<span id="cb4-241"><a href="#cb4-241"></a><span class="in">sequenceDiagram</span></span>
+<span id="cb4-242"><a href="#cb4-242"></a><span class="in">    participant MS_A as MS (expéditeur)</span></span>
+<span id="cb4-243"><a href="#cb4-243"></a><span class="in">    participant MSC as MSC (sms-over-gsup)</span></span>
+<span id="cb4-244"><a href="#cb4-244"></a><span class="in">    participant HLR as HLR</span></span>
+<span id="cb4-245"><a href="#cb4-245"></a><span class="in">    participant SMSC as proto-smsc-daemon</span></span>
+<span id="cb4-246"><a href="#cb4-246"></a><span class="in">    participant MS_B as MS (destinataire)</span></span>
+<span id="cb4-247"><a href="#cb4-247"></a></span>
+<span id="cb4-248"><a href="#cb4-248"></a><span class="in">    MS_A-&gt;&gt;MSC: SMS MO</span></span>
+<span id="cb4-249"><a href="#cb4-249"></a><span class="in">    MSC-&gt;&gt;HLR: GSUP MO-forwardSM</span></span>
+<span id="cb4-250"><a href="#cb4-250"></a><span class="in">    HLR-&gt;&gt;SMSC: GSUP MO-forwardSM</span></span>
+<span id="cb4-251"><a href="#cb4-251"></a><span class="in">    SMSC-&gt;&gt;HLR: GSUP MT-forwardSM</span></span>
+<span id="cb4-252"><a href="#cb4-252"></a><span class="in">    HLR-&gt;&gt;MSC: GSUP MT-forwardSM</span></span>
+<span id="cb4-253"><a href="#cb4-253"></a><span class="in">    MSC-&gt;&gt;MS_B: SMS MT</span></span>
+<span id="cb4-254"><a href="#cb4-254"></a><span class="in">```</span></span>
+<span id="cb4-255"><a href="#cb4-255"></a></span>
+<span id="cb4-256"><a href="#cb4-256"></a><span class="fu">### 6.2 SMS inter-opérateur</span></span>
+<span id="cb4-257"><a href="#cb4-257"></a></span>
+<span id="cb4-258"><a href="#cb4-258"></a><span class="in">`sms-interop-relay.py`</span> surveille le log MO de <span class="in">`proto-smsc-daemon`</span>, parse le TPDU GSM 03.40, consulte <span class="in">`sms-routing.conf`</span> (longest-prefix match), et transfère via TCP port 7890 au relay de l'opérateur cible.</span>
+<span id="cb4-259"><a href="#cb4-259"></a></span>
+<span id="cb4-260"><a href="#cb4-260"></a><span class="in">```mermaid</span></span>
+<span id="cb4-261"><a href="#cb4-261"></a><span class="in">sequenceDiagram</span></span>
+<span id="cb4-262"><a href="#cb4-262"></a><span class="in">    participant SMSC_A as proto-smsc Op1</span></span>
+<span id="cb4-263"><a href="#cb4-263"></a><span class="in">    participant RELAY_A as relay Op1</span></span>
+<span id="cb4-264"><a href="#cb4-264"></a><span class="in">    participant RELAY_B as relay Op2</span></span>
+<span id="cb4-265"><a href="#cb4-265"></a><span class="in">    participant SMSC_B as proto-smsc Op2</span></span>
+<span id="cb4-266"><a href="#cb4-266"></a></span>
+<span id="cb4-267"><a href="#cb4-267"></a><span class="in">    SMSC_A-&gt;&gt;RELAY_A: MO log file</span></span>
+<span id="cb4-268"><a href="#cb4-268"></a><span class="in">    RELAY_A-&gt;&gt;RELAY_A: Parse TPDU, lookup sms-routing.conf</span></span>
+<span id="cb4-269"><a href="#cb4-269"></a><span class="in">    RELAY_A-&gt;&gt;RELAY_B: TCP:7890 JSON {dest, text, from}</span></span>
+<span id="cb4-270"><a href="#cb4-270"></a><span class="in">    RELAY_B-&gt;&gt;RELAY_B: HLR VTY MSISDN→IMSI</span></span>
+<span id="cb4-271"><a href="#cb4-271"></a><span class="in">    RELAY_B-&gt;&gt;SMSC_B: proto-smsc-sendmt</span></span>
+<span id="cb4-272"><a href="#cb4-272"></a><span class="in">```</span></span>
+<span id="cb4-273"><a href="#cb4-273"></a></span>
+<span id="cb4-274"><a href="#cb4-274"></a>---</span>
+<span id="cb4-275"><a href="#cb4-275"></a></span>
+<span id="cb4-276"><a href="#cb4-276"></a><span class="fu">## 7. Voix</span></span>
+<span id="cb4-277"><a href="#cb4-277"></a></span>
+<span id="cb4-278"><a href="#cb4-278"></a><span class="fu">### 7.1 Intra-opérateur</span></span>
+<span id="cb4-279"><a href="#cb4-279"></a></span>
+<span id="cb4-280"><a href="#cb4-280"></a><span class="in">```</span></span>
+<span id="cb4-281"><a href="#cb4-281"></a><span class="in">MS → BTS → BSC → MSC → MNCC → Asterisk → MNCC → MSC → BSC → BTS → MS</span></span>
+<span id="cb4-282"><a href="#cb4-282"></a><span class="in">                              ↕ MGCP</span></span>
+<span id="cb4-283"><a href="#cb4-283"></a><span class="in">                            OsmoMGW (RTP)</span></span>
+<span id="cb4-284"><a href="#cb4-284"></a><span class="in">```</span></span>
+<span id="cb4-285"><a href="#cb4-285"></a></span>
+<span id="cb4-286"><a href="#cb4-286"></a><span class="fu">### 7.2 Inter-opérateur</span></span>
+<span id="cb4-287"><a href="#cb4-287"></a></span>
+<span id="cb4-288"><a href="#cb4-288"></a><span class="in">```</span></span>
+<span id="cb4-289"><a href="#cb4-289"></a><span class="in">MS(OpX) → MSC(OpX) → MNCC → Asterisk(OpX)</span></span>
+<span id="cb4-290"><a href="#cb4-290"></a><span class="in">              ─── SIP trunk 172.20.0.(10+X) ↔ 172.20.0.(10+Y) ───</span></span>
+<span id="cb4-291"><a href="#cb4-291"></a><span class="in">                               Asterisk(OpY) → MNCC → MSC(OpY) → MS(OpY)</span></span>
+<span id="cb4-292"><a href="#cb4-292"></a><span class="in">```</span></span>
+<span id="cb4-293"><a href="#cb4-293"></a></span>
+<span id="cb4-294"><a href="#cb4-294"></a>Le dialplan <span class="in">`[interop_out]`</span> route automatiquement sur le premier chiffre du numéro composé (convention : chiffre N = opérateur N). Pour 3 opérateurs, Op1 a des trunks vers Op2 et Op3, etc.</span>
+<span id="cb4-295"><a href="#cb4-295"></a></span>
+<span id="cb4-296"><a href="#cb4-296"></a>---</span>
+<span id="cb4-297"><a href="#cb4-297"></a></span>
+<span id="cb4-298"><a href="#cb4-298"></a><span class="fu">## 8. Utilisation du lab</span></span>
+<span id="cb4-299"><a href="#cb4-299"></a></span>
+<span id="cb4-300"><a href="#cb4-300"></a><span class="fu">### 8.1 Démarrage et arrêt</span></span>
+<span id="cb4-301"><a href="#cb4-301"></a></span>
+<span id="cb4-302"><a href="#cb4-302"></a><span class="in">```bash</span></span>
+<span id="cb4-303"><a href="#cb4-303"></a><span class="fu">sudo</span> ./tools/make-docker-image.sh          <span class="co"># Build l'image Docker (1 fois)</span></span>
+<span id="cb4-304"><a href="#cb4-304"></a><span class="fu">sudo</span> ./start.sh          <span class="co"># Lance tout (choisir bridge, saisir N opérateurs)</span></span>
+<span id="cb4-305"><a href="#cb4-305"></a><span class="fu">sudo</span> ./start.sh stop     <span class="co"># Arrête tous les containers</span></span>
+<span id="cb4-306"><a href="#cb4-306"></a></span>
+<span id="cb4-307"><a href="#cb4-307"></a><span class="fu">sudo</span> ./provision_hlr.sh  <span class="co"># Provisionne les abonnés de test dans les HLR</span></span>
+<span id="cb4-308"><a href="#cb4-308"></a><span class="in">```</span></span>
+<span id="cb4-309"><a href="#cb4-309"></a></span>
+<span id="cb4-310"><a href="#cb4-310"></a>Trois modes PHY pour le côté MS, sélectionnés via <span class="in">`PHY_MODE`</span> à l'intérieur du</span>
+<span id="cb4-311"><a href="#cb4-311"></a>container avant d'invoquer <span class="in">`run.sh`</span> :</span>
+<span id="cb4-312"><a href="#cb4-312"></a></span>
+<span id="cb4-313"><a href="#cb4-313"></a>| <span class="in">`PHY_MODE`</span> | Pile | Usage |</span>
+<span id="cb4-314"><a href="#cb4-314"></a>|------------|------|-------|</span>
+<span id="cb4-315"><a href="#cb4-315"></a>| <span class="in">`faketrx`</span> (défaut) | <span class="in">`fake_trx`</span> → <span class="in">`trxcon`</span> → <span class="in">`mobile`</span> | Multi-MS, rapide, pas de DSP |</span>
+<span id="cb4-316"><a href="#cb4-316"></a>| <span class="in">`virtphy`</span> | <span class="in">`osmo-bts-virtual`</span> ↔ <span class="in">`virtphy`</span> ↔ <span class="in">`mobile`</span> | Multi-MS via multicast UDP |</span>
+<span id="cb4-317"><a href="#cb4-317"></a>| <span class="in">`qemu`</span> | <span class="in">`osmo-bts-trx`</span> ↔ <span class="in">`bridge.py`</span> ↔ QEMU Calypso ↔ <span class="in">`mobile`</span> | Baseband émulé (ARM7+DSP), 1 MS |</span>
+<span id="cb4-318"><a href="#cb4-318"></a></span>
+<span id="cb4-319"><a href="#cb4-319"></a>Voir §11 pour le mode QEMU.</span>
+<span id="cb4-320"><a href="#cb4-320"></a></span>
+<span id="cb4-321"><a href="#cb4-321"></a><span class="fu">### 8.2 Accès aux containers</span></span>
+<span id="cb4-322"><a href="#cb4-322"></a></span>
+<span id="cb4-323"><a href="#cb4-323"></a><span class="in">```bash</span></span>
+<span id="cb4-324"><a href="#cb4-324"></a><span class="co"># Opérateur N — tmux avec STP/MSC/HLR/BSC/BTS/SMSC</span></span>
+<span id="cb4-325"><a href="#cb4-325"></a><span class="fu">sudo</span> docker exec <span class="at">-ti</span> osmo-operator-1 tmux attach</span>
+<span id="cb4-326"><a href="#cb4-326"></a><span class="fu">sudo</span> docker exec <span class="at">-ti</span> osmo-operator-2 tmux attach</span>
+<span id="cb4-327"><a href="#cb4-327"></a><span class="fu">sudo</span> docker exec <span class="at">-ti</span> osmo-operator-N tmux attach</span>
+<span id="cb4-328"><a href="#cb4-328"></a></span>
+<span id="cb4-329"><a href="#cb4-329"></a><span class="co"># Inter-STP</span></span>
+<span id="cb4-330"><a href="#cb4-330"></a><span class="fu">sudo</span> docker exec <span class="at">-ti</span> osmo-inter-stp tmux attach <span class="at">-t</span> stp</span>
+<span id="cb4-331"><a href="#cb4-331"></a><span class="in">```</span></span>
+<span id="cb4-332"><a href="#cb4-332"></a></span>
+<span id="cb4-333"><a href="#cb4-333"></a><span class="fu">### 8.3 Navigation tmux</span></span>
+<span id="cb4-334"><a href="#cb4-334"></a></span>
+<span id="cb4-335"><a href="#cb4-335"></a>| Raccourci | Fenêtre |</span>
+<span id="cb4-336"><a href="#cb4-336"></a>|-----------|---------|</span>
+<span id="cb4-337"><a href="#cb4-337"></a>| <span class="in">`Ctrl-b 0`</span> | faketrx |</span>
+<span id="cb4-338"><a href="#cb4-338"></a>| <span class="in">`Ctrl-b 1`</span> | MS1 (trxcon + mobile) |</span>
+<span id="cb4-339"><a href="#cb4-339"></a>| <span class="in">`Ctrl-b 2`</span> | Asterisk |</span>
+<span id="cb4-340"><a href="#cb4-340"></a>| <span class="in">`Ctrl-b 3`</span> | SMSC (proto-smsc-daemon + relay) |</span>
+<span id="cb4-341"><a href="#cb4-341"></a>| <span class="in">`Ctrl-b w`</span> | Liste toutes les fenêtres |</span>
+<span id="cb4-342"><a href="#cb4-342"></a>| <span class="in">`Ctrl-b d`</span> | Détacher |</span>
+<span id="cb4-343"><a href="#cb4-343"></a></span>
+<span id="cb4-344"><a href="#cb4-344"></a><span class="fu">### 8.4 Interfaces VTY (telnet depuis le container)</span></span>
+<span id="cb4-345"><a href="#cb4-345"></a></span>
+<span id="cb4-346"><a href="#cb4-346"></a>| Port | Composant |</span>
+<span id="cb4-347"><a href="#cb4-347"></a>|------|-----------|</span>
+<span id="cb4-348"><a href="#cb4-348"></a>| <span class="in">`4239`</span> | OsmoSTP |</span>
+<span id="cb4-349"><a href="#cb4-349"></a>| <span class="in">`4242`</span> | OsmoBSC |</span>
+<span id="cb4-350"><a href="#cb4-350"></a>| <span class="in">`4243`</span> | OsmoMGW |</span>
+<span id="cb4-351"><a href="#cb4-351"></a>| <span class="in">`4254`</span> | OsmoMSC |</span>
+<span id="cb4-352"><a href="#cb4-352"></a>| <span class="in">`4258`</span> | OsmoHLR |</span>
+<span id="cb4-353"><a href="#cb4-353"></a></span>
+<span id="cb4-354"><a href="#cb4-354"></a><span class="fu">### 8.5 Commandes VTY essentielles</span></span>
+<span id="cb4-355"><a href="#cb4-355"></a></span>
+<span id="cb4-356"><a href="#cb4-356"></a><span class="in">```</span></span>
+<span id="cb4-357"><a href="#cb4-357"></a><span class="in"># Sur STP (4239) — diagnostic SS7</span></span>
+<span id="cb4-358"><a href="#cb4-358"></a><span class="in">OsmoSTP&gt; show cs7 instance 0 asp          # État ASP (ACTIVE/DOWN)</span></span>
+<span id="cb4-359"><a href="#cb4-359"></a><span class="in">OsmoSTP&gt; show cs7 instance 0 as all       # État AS</span></span>
+<span id="cb4-360"><a href="#cb4-360"></a><span class="in">OsmoSTP&gt; show cs7 instance 0 route        # Table de routage — PROHIB ?</span></span>
+<span id="cb4-361"><a href="#cb4-361"></a></span>
+<span id="cb4-362"><a href="#cb4-362"></a><span class="in"># Sortie saine STP OpN :</span></span>
+<span id="cb4-363"><a href="#cb4-363"></a><span class="in"># N.23.1/14   as-dyn-…  avail  avail  dyn   ← MSC (dynamique)</span></span>
+<span id="cb4-364"><a href="#cb4-364"></a><span class="in"># N.23.3/14   as-dyn-…  avail  avail  dyn   ← BSC (dynamique)</span></span>
+<span id="cb4-365"><a href="#cb4-365"></a><span class="in"># 0.0.0/0     as-inter  avail  avail        ← catch-all inter-STP</span></span>
+<span id="cb4-366"><a href="#cb4-366"></a></span>
+<span id="cb4-367"><a href="#cb4-367"></a><span class="in"># Sur MSC (4254)</span></span>
+<span id="cb4-368"><a href="#cb4-368"></a><span class="in">OsmoMSC# subscriber msisdn 10001 sms sender msisdn 10002 send Bonjour</span></span>
+<span id="cb4-369"><a href="#cb4-369"></a><span class="in">OsmoMSC# show subscriber all</span></span>
+<span id="cb4-370"><a href="#cb4-370"></a></span>
+<span id="cb4-371"><a href="#cb4-371"></a><span class="in"># Sur HLR (4258)</span></span>
+<span id="cb4-372"><a href="#cb4-372"></a><span class="in">OsmoHLR# subscriber imsi 001010000000001 show</span></span>
+<span id="cb4-373"><a href="#cb4-373"></a><span class="in">OsmoHLR# show gsup-clients</span></span>
+<span id="cb4-374"><a href="#cb4-374"></a><span class="in">```</span></span>
+<span id="cb4-375"><a href="#cb4-375"></a></span>
+<span id="cb4-376"><a href="#cb4-376"></a><span class="fu">### 8.6 Wireshark</span></span>
+<span id="cb4-377"><a href="#cb4-377"></a></span>
+<span id="cb4-378"><a href="#cb4-378"></a>Lancé automatiquement sur le bridge Docker avec filtre <span class="in">`sctp or udp port 4729`</span>.</span>
+<span id="cb4-379"><a href="#cb4-379"></a></span>
+<span id="cb4-380"><a href="#cb4-380"></a><span class="in">```</span></span>
+<span id="cb4-381"><a href="#cb4-381"></a><span class="in">m3ua                      # Trafic M3UA uniquement</span></span>
+<span id="cb4-382"><a href="#cb4-382"></a><span class="in">sccp                      # Messages SCCP</span></span>
+<span id="cb4-383"><a href="#cb4-383"></a><span class="in">gsm_map                   # Messages MAP</span></span>
+<span id="cb4-384"><a href="#cb4-384"></a><span class="in">gsmtap                    # Trafic radio (Um)</span></span>
+<span id="cb4-385"><a href="#cb4-385"></a><span class="in">sctp.srcport == 2908      # Trafic vers/depuis l'inter-STP</span></span>
+<span id="cb4-386"><a href="#cb4-386"></a><span class="in">```</span></span>
+<span id="cb4-387"><a href="#cb4-387"></a></span>
+<span id="cb4-388"><a href="#cb4-388"></a>---</span>
+<span id="cb4-389"><a href="#cb4-389"></a></span>
+<span id="cb4-390"><a href="#cb4-390"></a><span class="fu">## 9. Diagnostic — Résoudre les PROHIB</span></span>
+<span id="cb4-391"><a href="#cb4-391"></a></span>
+<span id="cb4-392"><a href="#cb4-392"></a><span class="in">```bash</span></span>
+<span id="cb4-393"><a href="#cb4-393"></a><span class="co"># 1. L'inter-STP tourne-t-il ?</span></span>
+<span id="cb4-394"><a href="#cb4-394"></a><span class="fu">sudo</span> docker ps <span class="kw">|</span> <span class="fu">grep</span> inter-stp</span>
+<span id="cb4-395"><a href="#cb4-395"></a></span>
+<span id="cb4-396"><a href="#cb4-396"></a><span class="co"># 2. L'ASP vers l'inter-STP est-il ACTIVE ?</span></span>
+<span id="cb4-397"><a href="#cb4-397"></a><span class="fu">sudo</span> docker exec osmo-operator-1 sh <span class="at">-c</span> <span class="dt">\</span></span>
+<span id="cb4-398"><a href="#cb4-398"></a>  <span class="st">'echo "show cs7 instance 0 asp" | telnet 127.0.0.1 4239 2&gt;/dev/null'</span></span>
+<span id="cb4-399"><a href="#cb4-399"></a></span>
+<span id="cb4-400"><a href="#cb4-400"></a><span class="co"># 3. L'inter-STP voit-il les opérateurs ?</span></span>
+<span id="cb4-401"><a href="#cb4-401"></a><span class="fu">sudo</span> docker exec osmo-inter-stp sh <span class="at">-c</span> <span class="dt">\</span></span>
+<span id="cb4-402"><a href="#cb4-402"></a>  <span class="st">'echo "show cs7 instance 0 asp" | telnet 127.0.0.1 4239 2&gt;/dev/null'</span></span>
+<span id="cb4-403"><a href="#cb4-403"></a></span>
+<span id="cb4-404"><a href="#cb4-404"></a><span class="co"># 4. Les routes locales (BSC/MSC) existent-elles ?</span></span>
+<span id="cb4-405"><a href="#cb4-405"></a><span class="fu">sudo</span> docker exec osmo-operator-1 sh <span class="at">-c</span> <span class="dt">\</span></span>
+<span id="cb4-406"><a href="#cb4-406"></a>  <span class="st">'echo "show cs7 instance 0 route" | telnet 127.0.0.1 4239 2&gt;/dev/null'</span></span>
+<span id="cb4-407"><a href="#cb4-407"></a></span>
+<span id="cb4-408"><a href="#cb4-408"></a><span class="co"># 5. Connectivité backbone</span></span>
+<span id="cb4-409"><a href="#cb4-409"></a><span class="fu">sudo</span> docker exec osmo-operator-1 ping <span class="at">-c1</span> 172.20.0.10</span>
+<span id="cb4-410"><a href="#cb4-410"></a></span>
+<span id="cb4-411"><a href="#cb4-411"></a><span class="co"># 6. Race condition → redémarrer l'opérateur</span></span>
+<span id="cb4-412"><a href="#cb4-412"></a><span class="fu">sudo</span> docker restart osmo-operator-1</span>
+<span id="cb4-413"><a href="#cb4-413"></a><span class="in">```</span></span>
+<span id="cb4-414"><a href="#cb4-414"></a></span>
+<span id="cb4-415"><a href="#cb4-415"></a>| Symptôme | Cause probable | Fix |</span>
+<span id="cb4-416"><a href="#cb4-416"></a>|----------|---------------|-----|</span>
+<span id="cb4-417"><a href="#cb4-417"></a>| Route 0.0.0/0 PROHIB | Inter-STP pas démarré ou IP incorrecte | Vérifier <span class="in">`INTER_STP_IP`</span> et backbone IP |</span>
+<span id="cb4-418"><a href="#cb4-418"></a>| Pas de routes dynamiques | MSC/BSC ne se connectent pas au STP | Vérifier que les ASP pointent sur <span class="in">`127.0.0.1`</span> |</span>
+<span id="cb4-419"><a href="#cb4-419"></a>| ASP DOWN sur inter-STP | Race condition Docker | <span class="in">`docker restart`</span> de l'opérateur |</span>
+<span id="cb4-420"><a href="#cb4-420"></a></span>
+<span id="cb4-421"><a href="#cb4-421"></a>---</span>
+<span id="cb4-422"><a href="#cb4-422"></a></span>
+<span id="cb4-423"><a href="#cb4-423"></a><span class="fu">## 10. Plan de numérotation</span></span>
+<span id="cb4-424"><a href="#cb4-424"></a></span>
+<span id="cb4-425"><a href="#cb4-425"></a>Convention par défaut (modifiable) :</span>
+<span id="cb4-426"><a href="#cb4-426"></a></span>
+<span id="cb4-427"><a href="#cb4-427"></a>| Numéro | Usage |</span>
+<span id="cb4-428"><a href="#cb4-428"></a>|--------|-------|</span>
+<span id="cb4-429"><a href="#cb4-429"></a>| <span class="in">`N0001`</span>…<span class="in">`N9999`</span> | Abonnés GSM opérateur N |</span>
+<span id="cb4-430"><a href="#cb4-430"></a>| <span class="in">`100`</span> | Linphone A (softphone local) |</span>
+<span id="cb4-431"><a href="#cb4-431"></a>| <span class="in">`200`</span> | Linphone B (softphone local) |</span>
+<span id="cb4-432"><a href="#cb4-432"></a>| <span class="in">`600`</span> | Echo test |</span>
+<span id="cb4-433"><a href="#cb4-433"></a>| <span class="in">`9XXXXX`</span> | Sortie inter-op depuis softphone (9 + numéro complet) |</span>
+<span id="cb4-434"><a href="#cb4-434"></a></span>
+<span id="cb4-435"><a href="#cb4-435"></a>Le premier chiffre d'un numéro NXXXX identifie l'opérateur. Le dialplan <span class="in">`[gsm_in]`</span> détecte automatiquement si la destination est locale ou inter-op.</span>
+<span id="cb4-436"><a href="#cb4-436"></a></span>
+<span id="cb4-437"><a href="#cb4-437"></a>---</span>
+<span id="cb4-438"><a href="#cb4-438"></a></span>
+<span id="cb4-439"><a href="#cb4-439"></a><span class="fu">## 11. RAN virtuel QEMU (PHY_MODE=qemu)</span></span>
+<span id="cb4-440"><a href="#cb4-440"></a></span>
+<span id="cb4-441"><a href="#cb4-441"></a>Le projet intègre <span class="co">[</span><span class="ot">bbaranoff/qemu</span><span class="co">](https://github.com/bbaranoff/qemu)</span> — un fork</span>
+<span id="cb4-442"><a href="#cb4-442"></a>de QEMU avec une machine <span class="in">`calypso`</span> qui émule le SoC GSM TI Calypso (ARM7TDMI +</span>
+<span id="cb4-443"><a href="#cb4-443"></a>DSP TMS320C54x). Cela permet d'exécuter le **vrai firmware** OsmocomBB</span>
+<span id="cb4-444"><a href="#cb4-444"></a><span class="in">`layer1.highram.elf`</span> au-dessus d'un baseband virtualisé, sans aucun hardware.</span>
+<span id="cb4-445"><a href="#cb4-445"></a></span>
+<span id="cb4-446"><a href="#cb4-446"></a><span class="fu">### 11.1 Architecture</span></span>
+<span id="cb4-447"><a href="#cb4-447"></a></span>
+<span id="cb4-448"><a href="#cb4-448"></a><span class="in">```mermaid</span></span>
+<span id="cb4-449"><a href="#cb4-449"></a><span class="in">flowchart LR</span></span>
+<span id="cb4-450"><a href="#cb4-450"></a><span class="in">    mobile["mobile (layer23)"] --&gt;|"L1CTL\n/tmp/osmocom_l2"| QEMU</span></span>
+<span id="cb4-451"><a href="#cb4-451"></a><span class="in">    subgraph QEMU["QEMU calypso"]</span></span>
+<span id="cb4-452"><a href="#cb4-452"></a><span class="in">        ARM["ARM7\nlayer1.highram.elf"]</span></span>
+<span id="cb4-453"><a href="#cb4-453"></a><span class="in">        DSP["DSP C54x\ncalypso_dsp.txt"]</span></span>
+<span id="cb4-454"><a href="#cb4-454"></a><span class="in">        BSP["BSP DMA\nUDP 6702"]</span></span>
+<span id="cb4-455"><a href="#cb4-455"></a><span class="in">        ARM &lt;--&gt;|"API RAM"| DSP</span></span>
+<span id="cb4-456"><a href="#cb4-456"></a><span class="in">        DSP --&gt; BSP</span></span>
+<span id="cb4-457"><a href="#cb4-457"></a><span class="in">    end</span></span>
+<span id="cb4-458"><a href="#cb4-458"></a><span class="in">    QEMU --&gt;|"CLK UDP 6700"| BRIDGE</span></span>
+<span id="cb4-459"><a href="#cb4-459"></a><span class="in">    BRIDGE["bridge.py"] &lt;--&gt;|"TRX 5700-5702"| BTS</span></span>
+<span id="cb4-460"><a href="#cb4-460"></a><span class="in">    BTS["osmo-bts-trx"] --&gt;|"Abis/IP"| BSC</span></span>
+<span id="cb4-461"><a href="#cb4-461"></a><span class="in">    BSC --&gt; CORE[Core PLMN]</span></span>
+<span id="cb4-462"><a href="#cb4-462"></a><span class="in">```</span></span>
+<span id="cb4-463"><a href="#cb4-463"></a></span>
+<span id="cb4-464"><a href="#cb4-464"></a><span class="ss">- </span>**ARM7** exécute le firmware osmocom-bb compilé dans le conteneur.</span>
+<span id="cb4-465"><a href="#cb4-465"></a><span class="ss">- </span>**DSP C54x** charge le ROM Calypso réel (<span class="in">`calypso_dsp.txt`</span>, dumpé d'un téléphone).</span>
+<span id="cb4-466"><a href="#cb4-466"></a><span class="ss">- </span>**`bridge.py`** (Python) relaie les bursts entre <span class="in">`osmo-bts-trx`</span> (UDP 5700-5702)</span>
+<span id="cb4-467"><a href="#cb4-467"></a>  et la BSP du DSP (UDP 6702). QEMU est maître d'horloge TDMA et envoie des</span>
+<span id="cb4-468"><a href="#cb4-468"></a>  ticks sur UDP 6700 ; bridge synthétise des <span class="in">`IND CLOCK`</span> à cadence wall-clock</span>
+<span id="cb4-469"><a href="#cb4-469"></a>  pour le BTS, en piochant le FN de QEMU.</span>
+<span id="cb4-470"><a href="#cb4-470"></a><span class="ss">- </span>**`mobile`** se connecte au socket L1CTL <span class="in">`/tmp/osmocom_l2`</span> publié par QEMU</span>
+<span id="cb4-471"><a href="#cb4-471"></a>  via la PTY série du firmware (sercomm DLCI 5).</span>
+<span id="cb4-472"><a href="#cb4-472"></a></span>
+<span id="cb4-473"><a href="#cb4-473"></a><span class="fu">### 11.2 Composants ajoutés au conteneur</span></span>
+<span id="cb4-474"><a href="#cb4-474"></a></span>
+<span id="cb4-475"><a href="#cb4-475"></a>| Composant | Path container | Source |</span>
+<span id="cb4-476"><a href="#cb4-476"></a>|-----------|---------------|--------|</span>
+<span id="cb4-477"><a href="#cb4-477"></a>| <span class="in">`qemu-system-arm`</span> (machine <span class="in">`calypso`</span>) | <span class="in">`/usr/local/bin/qemu-system-arm`</span> | bbaranoff/qemu |</span>
+<span id="cb4-478"><a href="#cb4-478"></a>| Firmware Calypso layer1 | <span class="in">`${GSM_ROOT}/firmware/board/compal_e88/layer1.highram.elf`</span> | osmocom-bb (build container) |</span>
+<span id="cb4-479"><a href="#cb4-479"></a>| ROM DSP | <span class="in">`${GSM_ROOT}/calypso_dsp.txt`</span> | bbaranoff/qemu (symlink) |</span>
+<span id="cb4-480"><a href="#cb4-480"></a>| Bridge BTS↔BSP | <span class="in">`${OQC_ROOT}/bridge.py`</span> | bbaranoff/qemu |</span>
+<span id="cb4-481"><a href="#cb4-481"></a>| <span class="in">`transceiver`</span> (BTS soft-SDR Calypso) | <span class="in">`/usr/local/bin/transceiver`</span> | osmocom-bb branche jolly/testing |</span>
+<span id="cb4-482"><a href="#cb4-482"></a>| <span class="in">`ccch_scan`</span>, <span class="in">`bcch_scan`</span>, <span class="in">`cell_log`</span> | <span class="in">`/usr/local/bin/`</span> | osmocom-bb branche fixeria/burst_ind |</span>
+<span id="cb4-483"><a href="#cb4-483"></a></span>
+<span id="cb4-484"><a href="#cb4-484"></a>Le Dockerfile installe le toolchain ARM (<span class="in">`gcc-arm-none-eabi`</span>) avant la build</span>
+<span id="cb4-485"><a href="#cb4-485"></a>osmocom-bb pour produire le <span class="in">`.elf`</span>. La build complète prend ~15-20 min selon</span>
+<span id="cb4-486"><a href="#cb4-486"></a>la machine.</span>
+<span id="cb4-487"><a href="#cb4-487"></a></span>
+<span id="cb4-488"><a href="#cb4-488"></a><span class="fu">### 11.3 Lancement</span></span>
+<span id="cb4-489"><a href="#cb4-489"></a></span>
+<span id="cb4-490"><a href="#cb4-490"></a><span class="in">```bash</span></span>
+<span id="cb4-491"><a href="#cb4-491"></a><span class="fu">sudo</span> ./tools/make-docker-image.sh</span>
+<span id="cb4-492"><a href="#cb4-492"></a><span class="fu">sudo</span> ./start.sh        <span class="co"># mode opérateur unique (single)</span></span>
+<span id="cb4-493"><a href="#cb4-493"></a><span class="ex">docker</span> exec <span class="at">-ti</span> osmo-operator-1 bash</span>
+<span id="cb4-494"><a href="#cb4-494"></a><span class="co"># dans le container :</span></span>
+<span id="cb4-495"><a href="#cb4-495"></a><span class="va">PHY_MODE</span><span class="op">=</span>qemu <span class="ex">/root/run.sh</span></span>
+<span id="cb4-496"><a href="#cb4-496"></a><span class="in">```</span></span>
+<span id="cb4-497"><a href="#cb4-497"></a></span>
+<span id="cb4-498"><a href="#cb4-498"></a><span class="in">`run.sh`</span> orchestre la séquence : <span class="in">`osmo-bts-trx`</span> → QEMU (PTY+monitor) →</span>
+<span id="cb4-499"><a href="#cb4-499"></a>attente du socket <span class="in">`/tmp/osmocom_l2`</span> → <span class="in">`bridge.py`</span> → attente des ticks QEMU</span>
+<span id="cb4-500"><a href="#cb4-500"></a>sur UDP 6700 → <span class="in">`mobile`</span>. Tout est lancé dans des fenêtres tmux distinctes.</span>
+<span id="cb4-501"><a href="#cb4-501"></a></span>
+<span id="cb4-502"><a href="#cb4-502"></a>| Variable | Défaut | Rôle |</span>
+<span id="cb4-503"><a href="#cb4-503"></a>|----------|--------|------|</span>
+<span id="cb4-504"><a href="#cb4-504"></a>| <span class="in">`QEMU_BIN`</span> | <span class="in">`${GSM_ROOT}/qemu/build/qemu-system-arm`</span> | Binaire QEMU |</span>
+<span id="cb4-505"><a href="#cb4-505"></a>| <span class="in">`QEMU_FW`</span> | <span class="in">`${GSM_ROOT}/firmware/board/compal_e88/layer1.highram.elf`</span> | Firmware ARM |</span>
+<span id="cb4-506"><a href="#cb4-506"></a>| <span class="in">`QEMU_DSP_ROM`</span> | <span class="in">`${GSM_ROOT}/calypso_dsp.txt`</span> | ROM DSP C54x |</span>
+<span id="cb4-507"><a href="#cb4-507"></a>| <span class="in">`QEMU_BRIDGE`</span> | <span class="in">`${OQC_ROOT}/bridge.py`</span> | Script bridge BTS↔BSP |</span>
+<span id="cb4-508"><a href="#cb4-508"></a>| <span class="in">`QEMU_L1CTL_SOCK`</span> | <span class="in">`/tmp/osmocom_l2`</span> | Socket L1CTL publié par QEMU |</span>
+<span id="cb4-509"><a href="#cb4-509"></a>| <span class="in">`QEMU_MON_SOCK`</span> | <span class="in">`/tmp/qemu-calypso-mon.sock`</span> | Monitor QEMU (HMP) |</span>
+<span id="cb4-510"><a href="#cb4-510"></a></span>
+<span id="cb4-511"><a href="#cb4-511"></a><span class="in">`PHY_MODE=qemu`</span> force <span class="in">`N_MS=1`</span> : le bridge utilise des ports UDP fixes (un seul</span>
+<span id="cb4-512"><a href="#cb4-512"></a>Calypso émulé par conteneur). Pour faire tourner plusieurs MS virtuels, lancer</span>
+<span id="cb4-513"><a href="#cb4-513"></a>plusieurs conteneurs (un par opérateur, chacun avec son bridge).</span>
+<span id="cb4-514"><a href="#cb4-514"></a></span>
+<span id="cb4-515"><a href="#cb4-515"></a><span class="fu">### 11.4 Diagnostic</span></span>
+<span id="cb4-516"><a href="#cb4-516"></a></span>
+<span id="cb4-517"><a href="#cb4-517"></a><span class="in">```bash</span></span>
+<span id="cb4-518"><a href="#cb4-518"></a><span class="co"># tmux : fenêtres qemu / bridge / bts / ue_g1</span></span>
+<span id="cb4-519"><a href="#cb4-519"></a><span class="ex">docker</span> exec <span class="at">-ti</span> osmo-operator-1 tmux <span class="at">-S</span> /tmp/osmocom_tmux attach <span class="at">-t</span> osmocom</span>
+<span id="cb4-520"><a href="#cb4-520"></a></span>
+<span id="cb4-521"><a href="#cb4-521"></a><span class="co"># Monitor QEMU (HMP)</span></span>
+<span id="cb4-522"><a href="#cb4-522"></a><span class="ex">docker</span> exec <span class="at">-ti</span> osmo-operator-1 socat <span class="at">-</span> unix-connect:/tmp/qemu-calypso-mon.sock</span>
+<span id="cb4-523"><a href="#cb4-523"></a></span>
+<span id="cb4-524"><a href="#cb4-524"></a><span class="co"># Logs</span></span>
+<span id="cb4-525"><a href="#cb4-525"></a><span class="ex">/var/log/osmocom/qemu.log</span>     <span class="co"># Émulation ARM/DSP, BSP, MVPD, IRQ</span></span>
+<span id="cb4-526"><a href="#cb4-526"></a><span class="ex">/var/log/osmocom/bridge.log</span>   <span class="co"># Ticks QEMU, IND CLOCK, DL/UL bursts</span></span>
+<span id="cb4-527"><a href="#cb4-527"></a><span class="ex">/var/log/osmocom/run.sh.log</span>   <span class="co"># Orchestration</span></span>
+<span id="cb4-528"><a href="#cb4-528"></a><span class="in">```</span></span>
+<span id="cb4-529"><a href="#cb4-529"></a></span>
+<span id="cb4-530"><a href="#cb4-530"></a>| Symptôme | Cause probable | Diagnostic |</span>
+<span id="cb4-531"><a href="#cb4-531"></a>|----------|---------------|------------|</span>
+<span id="cb4-532"><a href="#cb4-532"></a>| <span class="in">`bridge: timeout — vérifier que QEMU émet sur UDP 6700`</span> | QEMU n'a pas démarré le TPU/DSP | <span class="in">`grep TINT0 /var/log/osmocom/qemu.log`</span> |</span>
+<span id="cb4-533"><a href="#cb4-533"></a>| Mobile <span class="in">`FBSB result=255`</span> (no cell) | DSP ne détecte pas le FB — voir <span class="in">`qemu/SESSION_STATUS.md`</span> (bug IMR=0x0000 connu) | <span class="in">`grep "IMR change" /var/log/osmocom/qemu.log \| wc -l`</span> |</span>
+<span id="cb4-534"><a href="#cb4-534"></a>| <span class="in">`osmo-bts-trx: PC clock skew too high`</span> | bridge cesse d'envoyer <span class="in">`IND CLOCK`</span> | redémarrer bridge.py |</span>
+<span id="cb4-535"><a href="#cb4-535"></a>| Socket <span class="in">`/tmp/osmocom_l2`</span> jamais créé | Firmware ne boote pas | <span class="in">`head -50 /var/log/osmocom/qemu.log`</span> (chercher MVPD/PROM0) |</span>
+<span id="cb4-536"><a href="#cb4-536"></a></span>
+<span id="cb4-537"><a href="#cb4-537"></a>L'intégration QEMU est en développement actif côté DSP (voir</span>
+<span id="cb4-538"><a href="#cb4-538"></a><span class="in">`bbaranoff/qemu/CLAUDE.md`</span> pour le statut courant des bugs C54x).</span>
+<span id="cb4-539"><a href="#cb4-539"></a></span>
+<span id="cb4-540"><a href="#cb4-540"></a>---</span>
+<span id="cb4-541"><a href="#cb4-541"></a></span>
+<span id="cb4-542"><a href="#cb4-542"></a><span class="fu">## 12. Autres extensions</span></span>
+<span id="cb4-543"><a href="#cb4-543"></a></span>
+<span id="cb4-544"><a href="#cb4-544"></a>**srsRAN (LTE)** — coexistence 2G/4G avec eNodeB virtuel, HLR/HSS partagé.</span>
+<span id="cb4-545"><a href="#cb4-545"></a></span>
+<span id="cb4-546"><a href="#cb4-546"></a>**VoWiFi / IMS** — passerelle SIP via Asterisk pour l'accès WiFi, pont vers le core GSM.</span>
+<span id="cb4-547"><a href="#cb4-547"></a></span>
+<span id="cb4-548"><a href="#cb4-548"></a>**Monitoring** — Prometheus/Grafana pour métriques M3UA, dashboards MAP, visualisation SCCP.</span>
+<span id="cb4-549"><a href="#cb4-549"></a></span>
+<span id="cb4-550"><a href="#cb4-550"></a>---</span>
+<span id="cb4-551"><a href="#cb4-551"></a></span>
+<span id="cb4-552"><a href="#cb4-552"></a>*Projet osmo-nitb-for-calypso — plateforme pédagogique télécom multi-PLMN, entièrement conteneurisée, support N opérateurs.*</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</section>
+<section id="f-services-readme-md" class="level2">
+<h2 class="anchored" data-anchor-id="f-services-readme-md"><code>services/README.md</code></h2>
+<div class="file-meta">
+<p><span class="tag">.md</span> 20 lignes - 687B</p>
+</div>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>services/README.md</strong></pre>
+</div>
+<div class="sourceCode" id="cb5" data-filename="services/README.md"><pre class="sourceCode numberSource markdown numberLines code-with-copy"><code class="sourceCode markdown"><span id="cb5-1"><a href="#cb5-1"></a><span class="fu"># `services/` — unités systemd</span></span>
+<span id="cb5-2"><a href="#cb5-2"></a></span>
+<span id="cb5-3"><a href="#cb5-3"></a>Les unités du projet, rassemblées ici plutôt que dispersées entre la racine et</span>
+<span id="cb5-4"><a href="#cb5-4"></a><span class="in">`scripts/`</span>. Elles sont installées par le <span class="in">`Dockerfile`</span> (image) et par <span class="in">`build-iso.sh`</span></span>
+<span id="cb5-5"><a href="#cb5-5"></a>(support bootable) ; l'installation native ne les active pas.</span>
+<span id="cb5-6"><a href="#cb5-6"></a></span>
+<span id="cb5-7"><a href="#cb5-7"></a>| Unité | Rôle |</span>
+<span id="cb5-8"><a href="#cb5-8"></a>|---|---|</span>
+<span id="cb5-9"><a href="#cb5-9"></a>| <span class="in">`osmo-bts-trx.service`</span> | station de base, transceiver TRX |</span>
+<span id="cb5-10"><a href="#cb5-10"></a>| <span class="in">`osmo-egprs-web.service`</span> | console web d'exploitation |</span>
+<span id="cb5-11"><a href="#cb5-11"></a></span>
+<span id="cb5-12"><a href="#cb5-12"></a>Les unités sous <span class="in">`contrib/systemd/`</span> appartiennent à QEMU en amont et ne relèvent</span>
+<span id="cb5-13"><a href="#cb5-13"></a>pas de ce dossier.</span>
+<span id="cb5-14"><a href="#cb5-14"></a></span>
+<span id="cb5-15"><a href="#cb5-15"></a>Installer à la main :</span>
+<span id="cb5-16"><a href="#cb5-16"></a></span>
+<span id="cb5-17"><a href="#cb5-17"></a><span class="in">```bash</span></span>
+<span id="cb5-18"><a href="#cb5-18"></a><span class="fu">sudo</span> cp services/osmo-bts-trx.service /etc/systemd/system/</span>
+<span id="cb5-19"><a href="#cb5-19"></a><span class="fu">sudo</span> systemctl daemon-reload <span class="kw">&amp;&amp;</span> <span class="fu">sudo</span> systemctl enable <span class="at">--now</span> osmo-bts-trx</span>
+<span id="cb5-20"><a href="#cb5-20"></a><span class="in">```</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+
+
+</section>
+
+</main> <!-- /main -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var box = document.getElementById('sk-filter');
+  if (!box) return;
+  var rows = Array.from(document.querySelectorAll('.bundle-index tbody tr'));
+  var toc  = Array.from(document.querySelectorAll('#TOC a, nav[role=doc-toc] a'));
+  box.addEventListener('input', function () {
+    var q = box.value.trim().toLowerCase();
+    rows.forEach(function (r) {
+      r.style.display = (!q || r.textContent.toLowerCase().includes(q)) ? '' : 'none';
+    });
+    toc.forEach(function (a) {
+      var li = a.closest('li') || a;
+      li.style.display = (!q || a.textContent.toLowerCase().includes(q)) ? '' : 'none';
+    });
+  });
+});
+</script>
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const onCopySuccess = function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "Copied!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  }
+  const getTextToCopy = function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+    text: getTextToCopy
+  });
+  clipboard.on('success', onCopySuccess);
+  if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+    const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+      text: getTextToCopy,
+      container: window.document.getElementById('quarto-embedded-source-code-modal')
+    });
+    clipboardModal.on('success', onCopySuccess);
+  }
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp('/' + window.location.host + '/');
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+
+<script src="site_libs/quarto-html/zenscroll-min.js"></script>
+</body></html>
