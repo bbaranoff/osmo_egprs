@@ -56,6 +56,22 @@ ISO_NODE=""
 # qu'a compiler. Les trois depots, eux, restent entiers : c'est la regle de
 # cette image, pas une exception (voir Dockerfile.lite).
 ISO_LITE=0
+# ── VARIANTE DESKTOP ────────────────────────────────────────────────────────
+#   --desktop  →  osmo-operator-desktop.iso
+# La meme image, plus un bureau GNOME (ubuntu-desktop-minimal), wireshark en
+# fenetre et linphone-desktop. Elle existe pour ce qui ne se pilote pas au VTY :
+# lire une capture GSMTAP dans wireshark plutot qu en tshark, passer un appel
+# SIP a la main sur le coeur qu on vient de demarrer, ouvrir les outils Qt de
+# gr-gsm (grgsm_livemon). Le rootfs grossit d environ 2,5 Go : c est pourquoi
+# c est une VARIANTE, et non un ajout aux images existantes.
+ISO_DESKTOP=0
+# ── --all : TOUTES les images en une passe ──────────────────────────────────
+# Sans argument, le script construit deja les trois images historiques (hub,
+# noeud, noeud lite). --all y ajoute la desktop : c est la seule facon de tout
+# sortir d un coup, sans avoir a relancer une quatrieme fois a la main. Il ne
+# change rien au comportement par defaut - la desktop pese ~2,5 Go de plus et
+# n a pas a s imposer a qui ne l a pas demandee.
+ISO_ALL=0
 # Defaut : le hub du banc, en acces par pont. Le host-only VirtualBox
 # (192.168.56.1) reste possible, mais via --hub-ip : il n'existe sur aucun
 # segment quand les VM sont pontees.
@@ -85,6 +101,8 @@ for arg in "$@"; do case "$arg" in
     --subnet=*)     ISO_SUBNET="${arg#*=}" ;;
     --kb=*)         OSMO_ISO_KB="${arg#*=}" ;;
     --lite)         ISO_LITE=1 ;;
+    --desktop)      ISO_DESKTOP=1 ;;
+    --all)          ISO_ALL=1 ;;
 esac; done
 
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
@@ -138,32 +156,53 @@ echo -e "  ${GREEN}✓${NC} clavier de l'image : ${CYAN}${OSMO_ISO_KB}${NC}"
 # au demarrage (`start-direct.sh --node N`), qui reecrit les point codes. C'est
 # la raison pour laquelle on ne fabrique pas osmo-operator-1..9.
 #
-if [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0" ] && [ -z "$ISO_NODE" ] \
-   && [ "$ISO_LITE" = "0" ]; then
-    echo -e "${CYAN}${BOLD}══ Aucun role demande : construction des TROIS images ══${NC}"
-    echo -e "  1. ${CYAN}interstp.iso${NC}            le hub SS7 (PC 0.0.0)"
-    echo -e "  2. ${CYAN}osmo-operator.iso${NC}       un noeud - son numero se choisit au demarrage :"
+if [ "$ISO_ALL" = "1" ] || { [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0" ] \
+   && [ -z "$ISO_NODE" ] && [ "$ISO_LITE" = "0" ] && [ "$ISO_DESKTOP" = "0" ]; }; then
+    # --all ajoute la desktop aux trois images historiques. Sans lui (aucun
+    # role demande), on garde exactement les trois d'avant.
+    if [ "$ISO_ALL" = "1" ]; then _N="QUATRE"; else _N="TROIS"; fi
+    echo -e "${CYAN}${BOLD}══ Construction des ${_N} images ══${NC}"
+    echo -e "  1. ${CYAN}interstp.iso${NC}               le hub SS7 (PC 0.0.0)"
+    echo -e "  2. ${CYAN}osmo-operator.iso${NC}          un noeud - son numero se choisit au demarrage :"
     echo -e "     ${CYAN}./start-direct.sh --node N${NC}   (N de 1 a 9)"
-    echo -e "  3. ${CYAN}osmo-operator-lite.iso${NC}  le meme noeud, sans les ateliers de compilation"
+    echo -e "  3. ${CYAN}osmo-operator-lite.iso${NC}     le meme noeud, sans les ateliers de compilation"
+    [ "$ISO_ALL" = "1" ] && \
+    echo -e "  4. ${CYAN}osmo-operator-desktop.iso${NC}  le meme noeud, avec GNOME, wireshark et linphone"
     echo ""
+
+    # --all et --desktop RETIRES des arguments repasses aux passes filles.
+    # Les laisser ferait rentrer chaque passe dans ce meme bloc : une recursion
+    # sans fond, qui ne produirait jamais la moindre ISO.
+    SUB_ARGS=()
+    for _a in "$@"; do
+        case "$_a" in --all|--desktop) ;; *) SUB_ARGS+=("$_a") ;; esac
+    done
+    set -- "${SUB_ARGS[@]+"${SUB_ARGS[@]}"}"
+
     # L'ordre n'est pas cosmetique. Le hub d'abord : il ne depend ni de build.sh
-    # ni de l'image osmocom-run, un echec de son cote se voit en minutes. La lite
-    # en DERNIER : elle se greffe sur l'image osmocom-run que la passe operateur
-    # vient de construire, donc elle ne coute que l'elagage et l'assemblage.
+    # ni de l'image osmocom-run, un echec de son cote se voit en minutes. Les
+    # variantes du noeud en DERNIER : elles se greffent sur l'image osmocom-run
+    # que la passe operateur vient de construire, donc elles ne coutent que
+    # l'elagage (lite), l'ajout du bureau (desktop) et l'assemblage.
     "$0" --role=interstp "$@" || { echo -e "${RED}Echec de interstp.iso${NC}" >&2; exit 1; }
     "$0" --role=operator --output=osmo-operator.iso "$@" \
         || { echo -e "${RED}Echec de osmo-operator.iso${NC}" >&2; exit 1; }
-    # --no-cache RETIRE pour la passe lite, et lui seul. Il vaut pour la
-    # construction des images docker ; la lite ne construit rien, elle elague
-    # osmocom-run que la passe precedente vient de produire. Le lui repasser
-    # relancerait build.sh et build_run_image depuis zero : deux heures de
-    # compilation pour aboutir a la meme image, puis a la meme coupe.
-    LITE_ARGS=(); for _a in "$@"; do [ "$_a" = "--no-cache" ] || LITE_ARGS+=("$_a"); done
-    "$0" --role=operator --lite --output=osmo-operator-lite.iso "${LITE_ARGS[@]+"${LITE_ARGS[@]}"}" \
+    # --no-cache RETIRE pour les passes greffees, et lui seul. Il vaut pour la
+    # construction des images docker ; ces passes ne construisent rien, elles
+    # reprennent osmocom-run que la passe precedente vient de produire. Le leur
+    # repasser relancerait build.sh et build_run_image depuis zero : deux heures
+    # de compilation pour aboutir a la meme image, puis a la meme coupe.
+    GRAFT_ARGS=(); for _a in "$@"; do [ "$_a" = "--no-cache" ] || GRAFT_ARGS+=("$_a"); done
+    "$0" --role=operator --lite --output=osmo-operator-lite.iso "${GRAFT_ARGS[@]+"${GRAFT_ARGS[@]}"}" \
         || { echo -e "${RED}Echec de osmo-operator-lite.iso${NC}" >&2; exit 1; }
-    echo -e "${GREEN}${BOLD}═══ Les trois images sont pretes ═══${NC}"
-    ls -lh "$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" \
-           "$(pwd)/osmo-operator-lite.iso" 2>/dev/null | sed 's/^/  /'
+    _ISOS=("$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" "$(pwd)/osmo-operator-lite.iso")
+    if [ "$ISO_ALL" = "1" ]; then
+        "$0" --role=operator --desktop --output=osmo-operator-desktop.iso "${GRAFT_ARGS[@]+"${GRAFT_ARGS[@]}"}" \
+            || { echo -e "${RED}Echec de osmo-operator-desktop.iso${NC}" >&2; exit 1; }
+        _ISOS+=("$(pwd)/osmo-operator-desktop.iso")
+    fi
+    echo -e "${GREEN}${BOLD}═══ Les ${_N} images sont pretes ═══${NC}"
+    ls -lh "${_ISOS[@]}" 2>/dev/null | sed 's/^/  /'
     exit 0
 fi
 
@@ -175,6 +214,10 @@ case "${ISO_ROLE:-operator}" in
         # porte que osmo-stp et quatre bibliotheques. --lite n'y veut rien dire,
         # et l'accepter en silence produirait une "lite" identique a l'autre.
         [ "$ISO_LITE" = "1" ] && { echo "--lite ne s'applique pas au hub (--role=interstp)" >&2; exit 2; }
+        # Meme raison pour le bureau : le hub tourne sans ecran, en salle
+        # machine ou en VM sans console graphique. Un GNOME dessus, c'est 2,5 Go
+        # et une pile X de plus sur la seule image qui n'affiche jamais rien.
+        [ "$ISO_DESKTOP" = "1" ] && { echo "--desktop ne s'applique pas au hub (--role=interstp)" >&2; exit 2; }
         # Le hub dessert N noeuds : sans table WAN on ne sait pas combien.
         ISO_WAN=1 ;;
     operator|"")
@@ -182,13 +225,20 @@ case "${ISO_ROLE:-operator}" in
         if [ -n "$ISO_NODE" ]; then
             [[ "$ISO_NODE" =~ ^[1-9]$ ]] || { echo "--node : 1 a 9" >&2; exit 2; }
             if [ "$OUTPUT_SET" = "0" ]; then
-                if [ "$ISO_LITE" = "1" ]; then OUTPUT="osmo-operator-${ISO_NODE}-lite.iso"
-                else                           OUTPUT="osmo-operator-${ISO_NODE}.iso"; fi
+                _sfx=""
+                [ "$ISO_LITE" = "1" ]    && _sfx="${_sfx}-lite"
+                [ "$ISO_DESKTOP" = "1" ] && _sfx="${_sfx}-desktop"
+                OUTPUT="osmo-operator-${ISO_NODE}${_sfx}.iso"
             fi
             ISO_WAN_ID="${ISO_WAN_ID:-$ISO_NODE}"
             ISO_WAN=1
-        elif [ "$ISO_LITE" = "1" ]; then
-            [ "$OUTPUT_SET" = "1" ] || OUTPUT="osmo-operator-lite.iso"
+        elif [ "$ISO_LITE" = "1" ] || [ "$ISO_DESKTOP" = "1" ]; then
+            if [ "$OUTPUT_SET" = "0" ]; then
+                _sfx=""
+                [ "$ISO_LITE" = "1" ]    && _sfx="${_sfx}-lite"
+                [ "$ISO_DESKTOP" = "1" ] && _sfx="${_sfx}-desktop"
+                OUTPUT="osmo-operator${_sfx}.iso"
+            fi
         fi ;;
     *) echo "--role inconnu : $ISO_ROLE (operator|interstp)" >&2; exit 2 ;;
 esac
@@ -1120,7 +1170,8 @@ cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 # ISO_ROLE passe par l environnement : le script est en quotes simples, rien n y
 # est substitue a l ecriture - c est voulu (aucune surprise d expansion), donc la
 # seule facon de lui dire quelle image on construit est de le lui passer.
-chroot "$ROOTFS" env ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" bash -c '
+chroot "$ROOTFS" env ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" \
+                   ISO_DESKTOP="$ISO_DESKTOP" OSMO_ISO_KB="$OSMO_ISO_KB" bash -c '
 set -e; export DEBIAN_FRONTEND=noninteractive
 export DPKG_OPTIONS="--force-confold --force-confdef"
 
@@ -1291,6 +1342,77 @@ fi
 
 if [ -f /opt/osmo-egprs-web/package.json ]; then
     cd /opt/osmo-egprs-web && npm install --production 2>/dev/null || true
+fi
+
+# ── VARIANTE DESKTOP : bureau, wireshark en fenetre, linphone ──────────────
+# Place ICI, et pas ailleurs : APRES le gros apt-get install (les deps communes
+# sont deja la, apt ne les reresout pas), mais AVANT update-initramfs - le
+# bureau tire plymouth et des modules qui doivent entrer dans l initrd - et
+# avant le apt-get clean qui vide le cache.
+if [ "${ISO_DESKTOP:-0}" = "1" ]; then
+    echo "  [desktop] ubuntu-desktop-minimal + wireshark + linphone-desktop"
+
+    # AVEC les recommends, et c est tout le piege. ubuntu-desktop-minimal est un
+    # metapaquet dont presque TOUT est en Recommends. Installe avec le
+    # --no-install-recommends que le reste de ce chroot utilise, il tire
+    # gnome-shell et a peu pres rien autour : ni gdm3, ni session, ni terminal.
+    # On obtient un ecran noir au boot, pas un bureau - et le message
+    # d installation, lui, dit "done".
+    #
+    # linphone (sans suffixe) est un paquet de TRANSITION vide sur jammy ; le
+    # client graphique s appelle linphone-desktop. wireshark tire wireshark-qt.
+    apt-get install -y $APT_OPTS \
+        ubuntu-desktop-minimal wireshark linphone-desktop \
+        || echo "WARN: installation du bureau incomplete"
+
+    systemctl set-default graphical.target
+
+    # NetworkManager arrive avec le bureau et veut piloter les interfaces, alors
+    # que TOUTE la config reseau de cette image passe par systemd-networkd
+    # (20-dhcp.network, adresses privees du WAN, activation plus haut). Deux
+    # gestionnaires sur la meme interface, c est l adresse qui saute au milieu
+    # d une session M3UA. On masque NM : le bureau s en passe (il affiche juste
+    # un indicateur reseau inerte), le reseau reste a systemd-networkd.
+    systemctl mask NetworkManager NetworkManager-wait-online 2>/dev/null || true
+
+    # ── Autologin ──────────────────────────────────────────────────────────
+    # L utilisateur osmocom de cette image porte l UID 0 (usermod -o -u 0 plus
+    # haut), et GDM refuse toute session pour l uid 0. La regle n est pas dans
+    # gdm3.conf mais dans PAM :
+    #     auth required pam_succeed_if.so user != root quiet_success
+    # Sans la neutraliser, autologin ou pas, on retombe sur l ecran de connexion
+    # et AUCUN mot de passe ne passe - y compris le bon.
+    sed -i "/pam_succeed_if.so user != root quiet_success/s/^/#/" \
+        /etc/pam.d/gdm-password /etc/pam.d/gdm-autologin 2>/dev/null || true
+    mkdir -p /etc/gdm3
+    cat > /etc/gdm3/custom.conf <<GDM
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=osmocom
+# X11 impose : sous VirtualBox/QEMU, la session Wayland de GNOME 42 tombe sur
+# le pilote llvmpipe et rend un bureau inutilisable, quand elle demarre.
+WaylandEnable=false
+GDM
+
+    # L assistant de premier demarrage (langue, comptes en ligne, sondage) se
+    # rejoue a CHAQUE boot sur un live sans persistance : il faut le desarmer,
+    # sinon il est la premiere - et longtemps la seule - chose a l ecran.
+    rm -f /etc/xdg/autostart/gnome-initial-setup-first-login.desktop
+    for h in /root /home/osmocom; do
+        mkdir -p "$h/.config" && echo yes > "$h/.config/gnome-initial-setup-done"
+    done
+
+    # Verrouillage d ecran et mise en veille : desarmes. Une image de banc reste
+    # affichee pendant qu on regarde une capture ou un appel courir ; et sur un
+    # live, l ecran verrouille se rouvre avec un mot de passe que personne n a
+    # choisi. La disposition clavier suit celle demandee au build (--kb).
+    # printf et pas un heredoc : les valeurs gschema portent des apostrophes, et
+    # ce chroot tourne dans un bash -c en quotes simples - d ou les \047.
+    printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type=\047nothing\047\nsleep-inactive-battery-type=\047nothing\047\n\n[org.gnome.desktop.input-sources]\nsources=[(\047xkb\047,\047%s\047)]\n" \
+        "${OSMO_ISO_KB:-fr}" > /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+    glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
+
+    echo "  [desktop] GNOME pret : autologin osmocom, X11, NM masque"
 fi
 
 setcap cap_net_raw,cap_net_admin+eip $(which dumpcap) 2>/dev/null || true
@@ -2433,70 +2555,61 @@ cat > "$ISOROOT/boot/grub/grub.cfg" <<GRUB
 # ATTENTION - ce fichier est GENERE par build-iso.sh. Le modifier dans l'ISO ne
 # survit pas au build suivant.
 #
-# LE PIEGE DE "toram", ET POURQUOI CE MENU EST DANS CET ORDRE
-# -----------------------------------------------------------
-# "toram" tout court fait recopier a live-boot le MEDIUM ENTIER dans un tmpfs
-# (lib/live/boot/9990-toram-todisk.sh) : le squashfs, MAIS AUSSI l'initrd de
-# 82 Mo, le vmlinuz et efi.img. Et comme rsync n'est pas dans l'initrd, la
-# copie se fait par "cp -a", qui n'affiche RIEN. Avec "quiet" en plus, l'ecran
-# reste fige plusieurs minutes sans le moindre signe de vie - sous VirtualBox,
-# ou le lecteur optique est emule sur IDE, on croit a un plantage et on coupe.
-#
-# D'ou trois corrections, toutes visibles ci-dessous :
-#   1. l'entree par defaut ne copie plus rien : elle lit depuis le medium ;
-#   2. "toram=filesystem.squashfs" remplace "toram" : seul le squashfs est
-#      recopie, et le tmpfs est dimensionne sur ce fichier, pas sur le medium ;
-#   3. plus de "quiet" sur l'entree toram : les messages de live-boot restent
-#      a l'ecran, donc on VOIT que la copie avance.
-#
-# Sous VirtualBox, deux reglages font le reste : attacher l'ISO au controleur
-# SATA plutot qu'IDE, et cocher "Utiliser le cache E/S de l'hote" dessus.
+# Sous VirtualBox, deux reglages evitent des minutes d'attente sur l'entree
+# "en RAM" : attacher l'ISO au controleur SATA plutot qu'IDE, et cocher
+# "Utiliser le cache E/S de l'hote" dessus.
 
 set default=0
 set timeout=5
 
-menuentry "osmo_egprs - Live (lit depuis le medium - demarrage le plus rapide)" {
+# TROIS entrees, et le reste dans un sous-menu. Cinq lignes dont deux doublons
+# "verbose", c est un menu ou l on cherche - alors que le choix reel n en compte
+# que trois : lire depuis le medium, copier en RAM, ecrire sur le medium.
+menuentry "osmo_egprs" {
     linux  /boot/vmlinuz boot=live quiet
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs - Live verbose (lit depuis le medium)" {
-    linux  /boot/vmlinuz boot=live
-    initrd /boot/initrd.img
-}
 
-# Une seule entree toram, et sans "quiet" : avec la copie rendue visible, la
-# variante "verbose" d'avant devenait le meme ligne de commande, au mot pres.
-menuentry "osmo_egprs - Live en RAM (copie ${SQ_GB} Go au demarrage - RAM ${RAM_TORAM_GB} Go mini)" {
+# "toram" tout court ferait recopier a live-boot le MEDIUM ENTIER dans un tmpfs
+# (lib/live/boot/9990-toram-todisk.sh) : le squashfs, mais AUSSI l initrd de
+# 82 Mo, le vmlinuz et efi.img. Et comme rsync n est pas dans l initrd, la copie
+# se fait par "cp -a", qui n affiche RIEN - avec "quiet" en plus, l ecran reste
+# fige plusieurs minutes sans le moindre signe de vie, et on croit a un
+# plantage. D ou "toram=filesystem.squashfs" (seul le squashfs est copie, et le
+# tmpfs est dimensionne sur lui) et l absence de "quiet" ici : la copie se voit.
+menuentry "osmo_egprs - en RAM (copie ${SQ_GB} Go - ${RAM_TORAM_GB} Go de RAM mini)" {
     linux  /boot/vmlinuz boot=live toram=filesystem.squashfs
     initrd /boot/initrd.img
 }
 
-# ── Persistance ─────────────────────────────────────────────────────────────
-# Sans elle, la racine est un overlay tmpfs : tout ce qui s'ecrit vit en RAM et
-# meurt au reboot - configs SS7 posees a la main, base HLR, journaux compris.
-# C'est aussi ce qui rendait l'espace si vite compte : la pile ecrivait dans la
-# memoire, pas sur un disque.
+# Sans persistance, la racine est un overlay tmpfs : tout ce qui s ecrit vit en
+# RAM et meurt au reboot - configs SS7 posees a la main, base HLR, journaux.
+# PAS de toram ici, et c est le point : avec toram le systeme est recopie en RAM
+# et l overlay y reste, ce qui annulerait l interet.
 #
-# PAS de toram ici, et c'est le point : avec toram le systeme est recopie en RAM
-# et l'overlay y reste, ce qui annulerait l'interet. Sans lui, live-boot monte
-# l'union sur le volume de persistance et les ecritures atterrissent sur le
-# medium.
-#
-# Cote support, il faut un volume ETIQUETE "persistence" contenant un fichier
-# persistence.conf dont la seule ligne utile est "/ union" :
-#
+# Il faut un volume ETIQUETE "persistence" portant un persistence.conf dont la
+# seule ligne utile est "/ union" :
 #   sudo mkfs.ext4 -L persistence /dev/sdX3
 #   sudo mount /dev/sdX3 /mnt && echo "/ union" | sudo tee /mnt/persistence.conf
-#
 # En VM, un second disque suffit. Sans volume ainsi etiquete, cette entree
-# demarre exactement comme un live ordinaire : rien ne casse, rien n'est garde.
-menuentry "osmo_egprs - Live PERSISTANT (ecrit sur le medium, pas en RAM)" {
+# demarre comme un live ordinaire : rien ne casse, rien n est garde.
+menuentry "osmo_egprs - persistant (ecrit sur le medium)" {
     linux  /boot/vmlinuz boot=live persistence persistence-encryption=none quiet
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs - Live PERSISTANT verbose" {
-    linux  /boot/vmlinuz boot=live persistence persistence-encryption=none
-    initrd /boot/initrd.img
+
+# Les variantes verbose ne servent qu au diagnostic : elles sont les memes
+# lignes de commande sans "quiet". Elles restent atteignables, mais elles ne
+# tiennent plus la moitie du menu.
+submenu "Options (demarrage verbeux)" {
+    menuentry "osmo_egprs - verbose" {
+        linux  /boot/vmlinuz boot=live
+        initrd /boot/initrd.img
+    }
+    menuentry "osmo_egprs - persistant verbose" {
+        linux  /boot/vmlinuz boot=live persistence persistence-encryption=none
+        initrd /boot/initrd.img
+    }
 }
 GRUB
 echo -e "  ${GREEN}✓${NC} menu GRUB : defaut = lecture depuis le medium ; toram annonce ${CYAN}${RAM_TORAM_GB} Go${NC} de RAM"
