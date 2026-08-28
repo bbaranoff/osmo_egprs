@@ -70,44 +70,28 @@ jobs:
 
       # Le hub d'abord : il ne depend ni de build.sh ni de l'image osmocom-run,
       # donc un echec de son cote se voit en minutes plutot qu'en heures.
-      - name: Build interstp.iso
+      # --all : interstp + operator + operator-lite + operator-desktop en UNE
+      # passe. build-iso.sh greffe lite et desktop sur l'image osmocom-run que la
+      # passe operateur vient de produire, et retire --no-cache pour ces passes
+      # greffees : inutile de separer en plusieurs etapes. On rend le cache buildx
+      # avant - QUATRE ISO plus les images intermediaires, le disque du runner
+      # decide si le job passe.
+      - name: Build all ISOs (--all)
         run: |
           chmod +x build-iso.sh
-          NO_CACHE="--no-cache"
-          [ "${{ github.event.inputs.no_cache }}" = "false" ] && NO_CACHE=""
-          sudo ./build-iso.sh $NO_CACHE --kb=us --role=interstp --output=interstp.iso
-          ls -lh interstp.iso
-          df -h /
-
-      - name: Build osmo-operator.iso
-        run: |
-          NO_CACHE="--no-cache"
-          [ "${{ github.event.inputs.no_cache }}" = "false" ] && NO_CACHE=""
-          sudo ./build-iso.sh $NO_CACHE --kb=us --role=operator --output=osmo-operator.iso
-          ls -lh osmo-operator.iso
-          df -h /
-
-      # La lite en dernier : osmocom-run est deja construite, il ne reste que
-      # l'elagage (Dockerfile.lite) et l'assemblage du rootfs. On rend d'abord
-      # le cache de buildx : trois ISO plus les images intermediaires, c'est le
-      # disque du runner qui decide si le job passe.
-      - name: Build osmo-operator-lite.iso
-        if: github.event.inputs.lite != 'false'
-        run: |
           sudo docker builder prune -af || true
           df -h /
-          # Pas de --no-cache ici, volontairement : cette passe n'a rien a
-          # construire, elle elague osmocom-run que l'etape precedente vient de
-          # produire. Le forcer relancerait build.sh depuis zero.
-          sudo ./build-iso.sh --kb=us --role=operator --lite \
-               --output=osmo-operator-lite.iso
-          ls -lh osmo-operator-lite.iso
+          NO_CACHE="--no-cache"
+          [ "${{ github.event.inputs.no_cache }}" = "false" ] && NO_CACHE=""
+          sudo ./build-iso.sh $NO_CACHE --kb=us --all
+          ls -lh interstp.iso osmo-operator.iso osmo-operator-lite.iso osmo-operator-desktop.iso 2>/dev/null
           df -h /
 
       - name: Checksums
         run: |
           ISOS="interstp.iso osmo-operator.iso"
           [ -f osmo-operator-lite.iso ] && ISOS="$ISOS osmo-operator-lite.iso"
+          [ -f osmo-operator-desktop.iso ] && ISOS="$ISOS osmo-operator-desktop.iso"
           sha256sum $ISOS > SHA256SUMS
           md5sum    $ISOS > MD5SUMS
           cat SHA256SUMS
@@ -119,7 +103,7 @@ jobs:
       - name: Split ISOs over 2 GiB
         run: |
           LIMIT=$((2 * 1024 * 1024 * 1024))
-          for iso in interstp.iso osmo-operator.iso osmo-operator-lite.iso; do
+          for iso in interstp.iso osmo-operator.iso osmo-operator-lite.iso osmo-operator-desktop.iso; do
             [ -f "$iso" ] || continue
             size=$(stat -c%s "$iso")
             if [ "$size" -gt "$LIMIT" ]; then
@@ -132,7 +116,7 @@ jobs:
             fi
           done
           touch PARTS.sha256
-          ls -lh interstp.iso* osmo-operator.iso* osmo-operator-lite.iso* 2>/dev/null
+          ls -lh interstp.iso* osmo-operator.iso* osmo-operator-lite.iso* osmo-operator-desktop.iso* 2>/dev/null
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -142,6 +126,7 @@ jobs:
             interstp.iso*
             osmo-operator.iso*
             osmo-operator-lite.iso*
+            osmo-operator-desktop.iso*
             SHA256SUMS
             MD5SUMS
           retention-days: 14
@@ -163,6 +148,7 @@ jobs:
             | `interstp.iso` | Le hub SS7 du WAN : PC `0.0.0`, aucun operateur. Il ne fait que router du M3UA entre les noeuds. |
             | `osmo-operator.iso` | Un noeud : coeur GSM complet (BSC / MSC / HLR / SGSN / GGSN). **Une seule image pour les 9 noeuds** — le numero se choisit au demarrage. |
             | `osmo-operator-lite.iso` | Le meme noeud, sans les ateliers de compilation de `/opt/GSM` (gnuradio, gr-gsm, libosmo*, objets de qemu). Ce qui tourne est identique : memes binaires, memes configs, meme emulation Calypso. Les depots gardent leur `.git`, donc `osmo-update` y fonctionne aussi. |
+            | `osmo-operator-desktop.iso` | Le meme noeud avec un bureau GNOME (wireshark en fenetre, linphone-desktop) et le fond d'ecran GSM LAB. ~2,5 Go de plus : pour ce qui ne se pilote pas au VTY. |
 
             ### Demarrer
 
@@ -208,6 +194,7 @@ jobs:
             interstp.iso*
             osmo-operator.iso*
             osmo-operator-lite.iso*
+            osmo-operator-desktop.iso*
             SHA256SUMS
             MD5SUMS
             PARTS.sha256
