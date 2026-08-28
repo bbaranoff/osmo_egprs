@@ -530,7 +530,6 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 # premier par build-iso.sh l.964 et update.sh l.329.
 RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
 
-
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \

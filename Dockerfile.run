@@ -137,7 +137,7 @@ RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo_egprs && git pull
 # (start.sh l.492-497 refait le pull et le `ninja` au demarrage du conteneur,
 #  mais PAS calypso-ipc-device : ce RUN est le seul endroit qui les garde
 #  synchronises. Ne pas le decouper en plusieurs RUN.)
-RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qemu-src & git pull && \
+RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qemu-src && git pull && \
     (cd build && ninja) && \
     make -C tools/calypso-ipc-device clean && \
     make -C tools/calypso-ipc-device -j"$(nproc)"
