@@ -89,20 +89,22 @@ RUN chmod +x /etc/osmocom/*.sh
 #   - OSMO_DISCLAIMER_SHOWN   : une seule fois par session, pas a chaque sous-shell.
 # Les `bash -c "..."` de start.sh (lancement des piles) sont NON-interactifs :
 # bash n'y lit pas .bashrc, le disclaimer ne pollue donc pas le defilement des
-# [ OK ]. Heredoc en quotes ('DISC') : le texte part VERBATIM dans l'image,
-# $(hostname) n'est evalue qu'a l'ouverture du shell, pas au build.
-RUN cat > /etc/osmo-disclaimer.sh <<'DISC' && \
-    printf '%s\n' '' \
-      '### osmo-disclaimer ###' \
-      '[ -z "${OSMO_DISCLAIMER_SHOWN:-}" ] && [ -t 1 ] && . /etc/osmo-disclaimer.sh' \
-      '### end osmo-disclaimer ###' >> /root/.bashrc
-export OSMO_DISCLAIMER_SHOWN=1
-printf "\n  \033[1;33mDisclaimer\033[0m - banc d'essai GSM/SS7 Osmocom (conteneur %s).\n" "$(hostname)"
-printf "  A n'utiliser que sur un reseau radio \033[1mISOLE\033[0m (cage/attenuateur) ou\n"
-printf "  sur une bande sous licence : emettre sur le spectre public est illegal.\n"
-printf "  \033[1;33mDemarrer la pile radio :\033[0m cd /opt/GSM/osmo_egprs && ./start-direct.sh --force\n"
-printf "  \033[0;36mSuivre :\033[0m tmux attach -t calypso   \033[0;36m(Ctrl-b puis d pour se detacher)\033[0m\n\n"
-DISC
+# [ OK ]. Le fichier n'est pas interpole au build : $(hostname) n'est evalue
+# qu'a l'ouverture du shell, il nomme donc le conteneur courant.
+# Le texte lui-meme vit dans scripts/osmo-disclaimer.sh (deja depose en
+# /etc/osmocom/ par la COPY plus haut) : PAS de heredoc ici. Le builder docker
+# classique (`Step N/M`, sans BuildKit) ne connait pas les heredocs — il joignait
+# les lignes de continuation et lancait le RUN sans le corps :
+#   /bin/bash: warning: here-document at line 1 delimited by end-of-file
+# laissant /etc/osmo-disclaimer.sh VIDE et le disclaimer muet. Un fichier du
+# depot + un symlink marchent avec les deux builders.
+# Le `grep -q` garde l'ajout idempotent si l'image de base a deja pose le bloc.
+RUN ln -sf /etc/osmocom/osmo-disclaimer.sh /etc/osmo-disclaimer.sh && \
+    { grep -q '### osmo-disclaimer ###' /root/.bashrc || \
+      printf '%s\n' '' \
+        '### osmo-disclaimer ###' \
+        '[ -z "${OSMO_DISCLAIMER_SHOWN:-}" ] && [ -t 1 ] && . /etc/osmo-disclaimer.sh' \
+        '### end osmo-disclaimer ###' >> /root/.bashrc; }
 
 # ── Mise a jour des arbres git ────────────────────────────────────────────────
 # [refactor] start.sh l.323 et l.326 lancent
