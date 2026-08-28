@@ -34,16 +34,14 @@ FROM osmocom-nitb AS osmocom-run
 # ⚠️ Le depot versionne ces fichiers en 644 (cf. start-nitb.sh l.50-55) : le bit
 # +x se pose APRES les COPY, dans le RUN plus bas — une COPY posterieure au
 # chmod reposerait le mode 644 et annulerait le chmod.
-COPY scripts/* /scripts/
-COPY scripts/. /etc/osmocom/
-COPY scripts/run.sh /root/run.sh
+COPY scripts/* /etc/osmocom/
+COPY scripts/entrypoint.sh /scripts/
 
 # ── Configs Osmocom (templates avec placeholders __XXX__) ─────────────────────
 # Toutes les configs sont copiées ; les valeurs réelles sont injectées
 # au démarrage via start.sh (apply_config_templates) et montées en volume.
 COPY configs/*.conf /etc/asterisk/
-COPY configs/*.cfg /etc/osmocom/
-COPY configs/sms-routing.conf /etc/osmocom/
+COPY configs/*.cfg configs/sms-routing.conf /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 COPY configs/asound.conf /etc/
 
@@ -79,10 +77,7 @@ ENV PONT_PY=/opt/GSM/osmo_egprs/pont/pont.py
 # trois copies divergentes. Idem /root/osmo-start.sh, chemin de memoire
 # musculaire que rien ne reference dans le depot : un symlink plutot qu'une
 # deuxieme copie qui divergerait.
-RUN chmod +x /root/run.sh /scripts/*.sh /etc/osmocom/*.sh && \
-    ln -sf /root/run.sh /etc/osmocom/run.sh && \
-    ln -sf /root/run.sh /scripts/run.sh && \
-    ln -sf /etc/osmocom/osmo-start.sh /root/osmo-start.sh
+RUN chmod +x /etc/osmocom/*.sh
 
 # ── Mise a jour des arbres git ────────────────────────────────────────────────
 # [refactor] start.sh l.323 et l.326 lancent
