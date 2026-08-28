@@ -9,7 +9,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
 
-VERSION="${OSMO_ISO_VERSION:-release-0.1}"
+VERSION="${OSMO_ISO_VERSION:-main}"
 OUTPUT="osmo_egprs-${VERSION}.iso"
 # Repertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
 # space left on device" car le rootfs est volumineux). Overridable via OSMO_ISO_WORK.
