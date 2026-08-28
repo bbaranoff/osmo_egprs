@@ -1978,21 +1978,20 @@ start_bridge_mode() {
             echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (prefixe ${WAN_PREFIX})${NC}"
         fi
 
-        # ── LES PILES NE SONT PLUS LANCEES AUTOMATIQUEMENT ──────────────────
-        # Les conteneurs s'arretent au COEUR (no-process) : STP, HLR, MSC, BSC,
-        # MGW, GGSN, SGSN, PCU sont debout, mais ni PHY, ni mobile, ni Asterisk,
-        # ni SMSC. La pile radio se lance A LA MAIN, conteneur par conteneur.
+        # ── LANCEMENT DE LA PILE RADIO ──────────────────────────────────────
+        # Les conteneurs se sont arretes au COEUR (no-process) : STP, HLR, MSC,
+        # BSC, MGW, GGSN, SGSN, PCU sont debout, mais ni PHY, ni mobile, ni
+        # Asterisk, ni SMSC. start.sh enchaine maintenant start-direct.sh sur
+        # chaque conteneur pour monter la pile radio - la sortie [ OK ] defile
+        # dans le terminal courant, on voit ce qui se passe.
         #
-        # POURQUOI. Le lancement automatique enchainait un --stop puis un
-        # demarrage complet dans chaque conteneur, en tache de fond : quand une
-        # pile ne montait pas, le journal restait dans le conteneur pendant que
-        # le terminal annoncait la suite. A la main, on voit ce qui se passe,
-        # tout de suite, et on peut s'arreter au premier operateur avant de
-        # lancer le second.
+        # LE COMPORTEMENT DEPEND DU NOMBRE DE CONTENEURS (voir plus bas) :
+        #   - un seul   : on lance PUIS on s'attache au tmux "calypso" ;
+        #   - plusieurs : on lance chacun en NO-ATTACH, les [ OK ] defilent.
         #
-        # Les commandes ci-dessous ne sont pas indicatives : ce sont EXACTEMENT
-        # celles que start.sh executait - meme identite de noeud, meme hub,
-        # meme table WAN. Les recopier telles quelles donne la meme pile.
+        # Les commandes executees ne sont pas indicatives : ce sont EXACTEMENT
+        # celles que start.sh imprimait auparavant a recopier a la main - meme
+        # identite de noeud, meme hub, meme table WAN.
 
         # Les arguments de noeud d'un conteneur : sa place dans le plan WAN.
         _node_args() {                # $1=indice du conteneur
@@ -2014,28 +2013,57 @@ start_bridge_mode() {
         }
 
         echo ""
-        echo -e "  ${BOLD}Le coeur tourne. La pile radio se lance a la main :${NC}"
-        echo ""
-        # UNE SEULE LIGNE par conteneur, sans antislash de continuation.
-        # Une commande coupee sur cinq lignes se recopie mal, et surtout le
-        # "\\${NC}" de fin de ligne ne rend pas ce qu'on croit : les deux
-        # antislashs s'apparient avant que echo -e ne voie la sequence de
-        # couleur, qui ressort alors en toutes lettres - "\033[0m" imprime au
-        # bout de chaque ligne. Une ligne, un copier-coller, rien a echapper.
-        local _c _ct _na _cmd
-        for _c in $(seq 1 "$n_operators"); do
-            _ct="$(op_container "$_c")"; _na="$(_node_args "$_c")"
-            _cmd="cd /opt/GSM/osmo_egprs && NO_MENU=1"
+
+        # La commande start-direct.sh d'un conteneur : identite de noeud + hub
+        # + table WAN. Rien d'indicatif ici, ce sont EXACTEMENT les arguments
+        # que start.sh executait quand il imprimait les lignes a recopier.
+        _hcmd() {                      # $1=indice du conteneur -> imprime la commande
+            local _na; _na="$(_node_args "$1")"
+            local _cmd="cd /opt/GSM/osmo_egprs && NO_MENU=1"
             _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
             _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
             _cmd="$_cmd ./start-direct.sh ${_na} --force"
-            echo -e "    ${CYAN}docker exec -ti ${_ct} bash -c \"${_cmd}\"${NC}"
+            printf '%s' "$_cmd"
+        }
+
+        local _c _ct _cmd
+        if [ "$n_operators" -eq 1 ]; then
+            # ── UN SEUL CONTENEUR : ON LANCE PUIS ON S'ATTACHE ──────────────
+            # start.sh lance lui-meme la pile radio, dans le terminal courant :
+            # les [ OK ] de start-direct.sh puis de run.sh defilent sous les
+            # yeux, et une fois le coeur monte on S'ATTACHE a la session tmux
+            # "calypso" du conteneur - on reste dedans, on regarde la pile
+            # vivre. Ctrl-b puis d pour se detacher sans rien arreter.
+            _ct="$(op_container 1)"; _cmd="$(_hcmd 1)"
+            echo -e "  ${BOLD}Lancement de la pile radio sur ${_ct} (terminal courant)...${NC}"
             echo ""
-        done
-        echo -e "  ${BOLD}Puis, pour suivre :${NC}  ${CYAN}docker exec -ti <conteneur> tmux attach -t calypso${NC}"
-        echo -e "  ${CYAN}Ctrl-b puis d${NC} pour se detacher sans rien arreter."
-        echo ""
+            docker exec -ti "$_ct" bash -c "$_cmd"
+            echo ""
+            echo -e "  ${BOLD}Attache a la session tmux ${CYAN}calypso${NC}${BOLD} de ${_ct}${NC}  ${CYAN}(Ctrl-b puis d pour se detacher)${NC}"
+            echo ""
+            docker exec -ti "$_ct" tmux attach -t calypso
+        else
+            # ── PLUSIEURS CONTENEURS : NO-ATTACH, MAIS LES [ OK ] DEFILENT ───
+            # On ne peut pas s'attacher a N sessions tmux dans un seul terminal.
+            # On lance donc chaque start-direct.sh a LA SUITE, sans s'attacher a
+            # aucun tmux (docker exec -t, pas -ti) : sa sortie [ OK ] defile
+            # dans le shell courant, conteneur apres conteneur. Chaque pile
+            # reste debout dans sa propre session "calypso" ; on s'y attache a
+            # la demande, une fois tout monte.
+            echo -e "  ${BOLD}${n_operators} conteneurs : lancement en no-attach - les ${GREEN}[ OK ]${NC}${BOLD} defilent ci-dessous.${NC}"
+            echo ""
+            for _c in $(seq 1 "$n_operators"); do
+                _ct="$(op_container "$_c")"; _cmd="$(_hcmd "$_c")"
+                echo -e "  ${GREEN}────── ${_ct} ──────────────────────────────────${NC}"
+                docker exec -t "$_ct" bash -c "$_cmd"
+                echo ""
+            done
+            echo -e "  ${BOLD}Toutes les piles tournent.${NC} Pour en suivre une :"
+            echo -e "    ${CYAN}docker exec -ti <conteneur> tmux attach -t calypso${NC}"
+            echo -e "  ${CYAN}Ctrl-b puis d${NC} pour se detacher sans rien arreter."
+            echo ""
+        fi
     fi
 }
 
