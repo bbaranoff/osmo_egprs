@@ -658,6 +658,99 @@ else
     fi
 fi
 
+# ── target/firmware : un LIEN vers /opt/GSM/firmware, pas un repertoire ──────
+# [2026-08-28] Constat fait en ouvrant le squashfs d'une ISO construite :
+#
+#   /opt/GSM/firmware/board/compal_e88/          150 fichiers, layer1.highram.elf compris
+#   /opt/GSM/qemu-src/target/firmware/board/compal_e88/    VIDE
+#
+# L'arbre qemu-src part entier (voir plus haut), mais son target/firmware n'est
+# qu'une coquille : les binaires du Calypso ne sont pas construits la, ils le
+# sont dans /opt/GSM/firmware, qui est le vrai arbre osmocom-bb. Sur l'ISO,
+# "run.sh --check-paths" tombait donc sur
+#
+#   [FAIL] FIRMWARE_ELF (/opt/GSM/qemu-src/target/firmware/board/compal_e88/layer1.highram.elf)
+#
+# et le MS ne demarrait pas - alors que le fichier existait, a trois
+# repertoires de la. Le lien est la reparation que l'on faisait A LA MAIN sur
+# chaque ISO ; elle a sa place ici, une fois, pour toutes les suivantes.
+#
+# Un LIEN et pas une copie : les deux arbres resteraient a resynchroniser a
+# chaque recompilation du firmware, et les 150 fichiers de compal_e88 pesent
+# leur poids dans une image qui tient en RAM.
+#
+# Le lien est ABSOLU (/opt/GSM/firmware) et non relatif : il est ecrit dans le
+# rootfs de construction, mais il ne sera suivi qu'une fois ce rootfs devenu la
+# racine du systeme live. Un chemin passant par $ROOTFS ne voudrait plus rien
+# dire une fois l'ISO demarree.
+if [ -d "$QSRC" ]; then
+    FW_REAL="$ROOTFS/opt/GSM/firmware"
+    FW_ELF="board/compal_e88/layer1.highram.elf"
+    if [ -e "$FW_REAL/$FW_ELF" ]; then
+        # On n'efface que ce qu'on remplace : si target/firmware etait un arbre
+        # REELLEMENT construit (le cas d'une image ou le firmware a ete compile
+        # sur place), l'ecraser par un lien detruirait le seul exemplaire.
+        # Le test porte donc sur le fichier que run.sh reclame, pas sur la
+        # simple existence du repertoire.
+        if [ -L "$QSRC/target/firmware" ]; then
+            echo -e "  ${GREEN}✓${NC} target/firmware : lien deja en place"
+        elif [ -e "$QSRC/target/firmware/$FW_ELF" ]; then
+            echo -e "  ${GREEN}✓${NC} target/firmware : arbre construit sur place, laisse intact"
+        else
+            rm -rf "$QSRC/target/firmware"
+            mkdir -p "$QSRC/target"
+            ln -sfn /opt/GSM/firmware "$QSRC/target/firmware"
+            echo -e "  ${GREEN}✓${NC} target/firmware -> ${CYAN}/opt/GSM/firmware${NC} (coquille vide remplacee ; FIRMWARE_ELF resolu)"
+        fi
+    else
+        echo -e "  ${YELLOW}!${NC} /opt/GSM/firmware/${FW_ELF} absent du rootfs - FIRMWARE_ELF restera non resolu" >&2
+    fi
+fi
+
+# ── Datadir QEMU : le lien que reclame la RELOCALISATION ────────────────────
+# [2026-08-28] Diagnostique en direct sur un banc lite (192.168.1.7), ou la
+# sequence mourait sur :
+#
+#   [FAIL] Emulator serial PTY (QEMU (pid ...) s'est arrete avant d'allouer son PTY)
+#   qemu-system-arm: could not read keymap file: 'en-us'
+#
+# Le bloc "Keymaps QEMU" plus bas copie bien les keymaps - dans
+# /usr/local/share/qemu/keymaps. Or QEMU ne les y cherche JAMAIS, et le fichier
+# etait present en trois exemplaires sur la machine pendant que QEMU jurait ne
+# pas le trouver.
+#
+# La raison tient a get_relocated_path() : QEMU ne prend PAS son
+# CONFIG_QEMU_FIRMWAREPATH tel quel. Il en deduit un chemin RELATIF a son
+# bindir de compilation, puis l'applique au repertoire ou le binaire se trouve
+# REELLEMENT. Ici :
+#
+#   compile avec   prefix=/opt/GSM/qemu-install   (donc bin/ et share/qemu/ y sont)
+#   execute depuis /opt/GSM/qemu-src/build/qemu-system-arm   (run.sh -> QEMU_BIN)
+#   QEMU cherche   /opt/GSM/qemu-src/share/qemu   <- n'existait pas
+#
+# Le prefix compile n'est alors plus jamais consulte. Mesure faite sur le banc,
+# meme binaire, meme machine :
+#
+#   sans lien : "could not read keymap file: 'en-us'"   rc=1  (QEMU meurt)
+#   avec lien : aucune erreur                           rc=124 (tue par timeout,
+#                                                        donc il tournait)
+#
+# Le lien <exec_dir>/../share/qemu est le SEUL qui repare : l'autre candidat de
+# QEMU, <exec_dir>/pc-bios, a ete teste sur le banc et laisse l'erreur intacte.
+QINST="$ROOTFS/opt/GSM/qemu-install/share/qemu"
+if [ -d "$QSRC" ] && [ -d "$QINST/keymaps" ]; then
+    if [ -e "$QSRC/share/qemu/keymaps/en-us" ]; then
+        echo -e "  ${GREEN}✓${NC} datadir QEMU : ${CYAN}/opt/GSM/qemu-src/share/qemu${NC} deja resolu"
+    else
+        mkdir -p "$QSRC/share"
+        rm -rf "$QSRC/share/qemu"
+        ln -sfn /opt/GSM/qemu-install/share/qemu "$QSRC/share/qemu"
+        echo -e "  ${GREEN}✓${NC} datadir QEMU : ${CYAN}/opt/GSM/qemu-src/share/qemu${NC} -> /opt/GSM/qemu-install/share/qemu (keymap 'en-us' resolu)"
+    fi
+elif [ -d "$QSRC" ] && [ "$ISO_ROLE" != "interstp" ]; then
+    echo -e "  ${YELLOW}!${NC} /opt/GSM/qemu-install/share/qemu/keymaps absent - QEMU mourra sur 'could not read keymap file'" >&2
+fi
+
 # Le binaire vient peut-etre DEJA de l'image : "docker cp $CID:/usr/local/bin/."
 # (plus haut) copie /usr/local/bin/qemu-system-arm dans le rootfs, et c'est
 # exactement celui que le conteneur utilise pour emuler le Calypso. Exiger en
@@ -2277,8 +2370,46 @@ INITRD=$(ls "$ROOTFS"/boot/initrd.img-*|sort -V|tail -1)
 [ -z "$VMLINUZ" ]||[ -z "$INITRD" ] && { echo -e "${RED}Kernel absent${NC}"; exit 1; }
 echo -e "  Kernel: ${CYAN}$(basename "$VMLINUZ")${NC}"
 
+# ── Compression du squashfs : zstd, et non xz ────────────────────────────────
+# Le noyau embarque est compile avec CONFIG_SQUASHFS_DECOMP_SINGLE=y : UN SEUL
+# flux de decompression, serialise par un mutex. Ajouter des vCPU a la VM n'y
+# change donc rien - c'est le seul chiffre qui compte quand l'ISO est lue a la
+# demande, et c'est celui qu'on regarde le moins.
+#
+# Mesure faite sur ce depot, meme contenu (360 Mo de /usr/bin de l'ISO lite),
+# decompression a UN thread :
+#
+#     -comp xz -Xbcj x86    92,0 Mo    3,82 s
+#     -comp zstd -level 19 106,9 Mo    0,41 s
+#
+# 16 % d'ISO en plus contre 9x en vitesse de lecture. Sur une image qui vit en
+# machine virtuelle, dont chaque fichier ouvert au demarrage coute une
+# decompression de bloc de 1 Mo, l'arbitrage se tranche tout seul.
+#
+# Le repli sur xz n'est pas de la prudence decorative : mksquashfs n'a le zstd
+# que depuis la 4.4, et il n'est compile que si la libzstd etait la. On SONDE
+# donc l'outil au lieu de lire son numero de version - une compression d'essai
+# repond juste, une comparaison de versions non.
+_squash_zstd_ok() {
+    local t rc
+    t="$(mktemp -d)" || return 1
+    : > "$t/probe"
+    mksquashfs "$t" "$t.sqfs" -comp zstd -no-progress -noappend >/dev/null 2>&1
+    rc=$?
+    rm -rf "$t" "$t.sqfs"
+    return $rc
+}
+
+if _squash_zstd_ok; then
+    SQUASH_COMP=(-comp zstd -Xcompression-level 19)
+    echo -e "  Compression: ${CYAN}zstd -19${NC} (lecture ~9x plus rapide que xz a un thread)"
+else
+    SQUASH_COMP=(-comp xz -Xbcj x86)
+    echo -e "  Compression: ${YELLOW}xz${NC} (mksquashfs sans zstd - ISO plus petite, mais lente a lire)"
+fi
+
 mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
-    -comp xz -Xbcj x86 -b 1M \
+    "${SQUASH_COMP[@]}" -b 1M \
     -e 'boot/vmlinuz-*' -e 'boot/initrd*' \
     -e 'var/cache/apt' -e 'var/lib/apt/lists' \
     -no-progress
@@ -2287,23 +2418,56 @@ echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs
 cp "$VMLINUZ" "$ISOROOT/boot/vmlinuz"
 cp "$INITRD"  "$ISOROOT/boot/initrd.img"
 
-cat > "$ISOROOT/boot/grub/grub.cfg" <<'GRUB'
+# ── Menu GRUB ────────────────────────────────────────────────────────────────
+# Les chiffres de RAM annonces sont CALCULES sur le squashfs qui vient d'etre
+# ecrit, pas recopies d'un ancien build. Les libelles en dur ("RAM ~6 Go")
+# etaient faux des que l'image maigrissait, et une consigne fausse coute plus
+# cher que pas de consigne : on dimensionne la VM sur elle.
+SQ_MB=$(( $(stat -Lc%s "$ISOROOT/live/filesystem.squashfs") / 1048576 ))
+# toram recopie le squashfs dans un tmpfs, puis le systeme tourne par-dessus :
+# la taille du fichier, plus 2 Go pour le reste, arrondi au Go superieur.
+RAM_TORAM_GB=$(( (SQ_MB + 2048 + 1023) / 1024 ))
+SQ_GB=$(awk -v m="$SQ_MB" 'BEGIN{printf "%.1f", m/1024}')
+
+cat > "$ISOROOT/boot/grub/grub.cfg" <<GRUB
+# ATTENTION - ce fichier est GENERE par build-iso.sh. Le modifier dans l'ISO ne
+# survit pas au build suivant.
+#
+# LE PIEGE DE "toram", ET POURQUOI CE MENU EST DANS CET ORDRE
+# -----------------------------------------------------------
+# "toram" tout court fait recopier a live-boot le MEDIUM ENTIER dans un tmpfs
+# (lib/live/boot/9990-toram-todisk.sh) : le squashfs, MAIS AUSSI l'initrd de
+# 82 Mo, le vmlinuz et efi.img. Et comme rsync n'est pas dans l'initrd, la
+# copie se fait par "cp -a", qui n'affiche RIEN. Avec "quiet" en plus, l'ecran
+# reste fige plusieurs minutes sans le moindre signe de vie - sous VirtualBox,
+# ou le lecteur optique est emule sur IDE, on croit a un plantage et on coupe.
+#
+# D'ou trois corrections, toutes visibles ci-dessous :
+#   1. l'entree par defaut ne copie plus rien : elle lit depuis le medium ;
+#   2. "toram=filesystem.squashfs" remplace "toram" : seul le squashfs est
+#      recopie, et le tmpfs est dimensionne sur ce fichier, pas sur le medium ;
+#   3. plus de "quiet" sur l'entree toram : les messages de live-boot restent
+#      a l'ecran, donc on VOIT que la copie avance.
+#
+# Sous VirtualBox, deux reglages font le reste : attacher l'ISO au controleur
+# SATA plutot qu'IDE, et cocher "Utiliser le cache E/S de l'hote" dessus.
+
 set default=0
 set timeout=5
-menuentry "osmo_egprs - Live (toram - RAM ~6 Go)" {
-    linux  /boot/vmlinuz boot=live toram quiet
-    initrd /boot/initrd.img
-}
-menuentry "osmo_egprs - Live USB sans toram (RAM ~3 Go, lit depuis le medium)" {
+
+menuentry "osmo_egprs - Live (lit depuis le medium - demarrage le plus rapide)" {
     linux  /boot/vmlinuz boot=live quiet
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs - Live verbose (toram - RAM ~6 Go)" {
-    linux  /boot/vmlinuz boot=live toram
+menuentry "osmo_egprs - Live verbose (lit depuis le medium)" {
+    linux  /boot/vmlinuz boot=live
     initrd /boot/initrd.img
 }
-menuentry "osmo_egprs - Copy to RAM (toram - RAM ~6 Go)" {
-    linux  /boot/vmlinuz boot=live toram copytoram quiet
+
+# Une seule entree toram, et sans "quiet" : avec la copie rendue visible, la
+# variante "verbose" d'avant devenait le meme ligne de commande, au mot pres.
+menuentry "osmo_egprs - Live en RAM (copie ${SQ_GB} Go au demarrage - RAM ${RAM_TORAM_GB} Go mini)" {
+    linux  /boot/vmlinuz boot=live toram=filesystem.squashfs
     initrd /boot/initrd.img
 }
 
@@ -2335,6 +2499,7 @@ menuentry "osmo_egprs - Live PERSISTANT verbose" {
     initrd /boot/initrd.img
 }
 GRUB
+echo -e "  ${GREEN}✓${NC} menu GRUB : defaut = lecture depuis le medium ; toram annonce ${CYAN}${RAM_TORAM_GB} Go${NC} de RAM"
 
 # Wrapper: inject -iso-level 3 (multi-extent, lifts the 4 GiB single-file cap)
 # into grub-mkrescue's internal `xorriso -as mkisofs` call.

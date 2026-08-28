@@ -63,6 +63,29 @@ RUN set -eux; \
     # qemu-src : l'arbre entier, sauf build/. Le binaire est mis de cote AVANT
     # la copie, et --exclude=./build empeche le tar de le recouvrir ensuite.
     cp -a qemu-src/build/qemu-system-arm  /keep/qemu-src/build/ 2>/dev/null || true; \
+    # [2026-08-28] qemu-bundle SUIT le binaire, et ce n'est pas un detail de
+    # confort : c'est par LUI que QEMU trouve ses donnees quand il est lance
+    # depuis un arbre de compilation. QEMU 8 n'utilise pas le prefix compile
+    # tel quel - il le RELOCALISE par rapport a l'endroit ou le binaire se
+    # trouve reellement, et dans un arbre de build cette relocalisation passe
+    # par build/qemu-bundle/, qui rejoue l'arborescence d'installation.
+    #
+    # En le supprimant avec les 1,5 Go d'objets, l'image lite laissait un
+    # qemu-system-arm incapable de lire son propre keymap :
+    #
+    #     qemu-system-arm: could not read keymap file: 'en-us'
+    #
+    # QEMU mourait AVANT d'allouer ses PTY, et start-direct.sh s'arretait sur
+    #     [FAIL] Emulator serial PTY (... s'est arrete avant d'allouer son PTY)
+    # c'est-a-dire une image, et une ISO, sans MS. Le fichier existait pourtant
+    # en trois exemplaires sur la machine - a un chemin que QEMU ne consulte
+    # jamais. Diagnostique sur banc le 2026-08-28 : sans qemu-bundle rc=1 et
+    # QEMU meurt, avec lui il tourne.
+    #
+    # Ce que ca coute : 146 Ko, 175 entrees dont 140 liens symboliques. C'est
+    # la difference entre l'image complete, ou le Calypso demarre, et la lite,
+    # ou il ne demarrait pas.
+    cp -a qemu-src/build/qemu-bundle      /keep/qemu-src/build/ 2>/dev/null || true; \
     tar -C qemu-src --exclude=./build -cf - . | tar -C /keep/qemu-src -xf -; \
     cp -a osmocom-bb/src/host/osmocon/osmocon \
           /keep/osmocom-bb/src/host/osmocon/ 2>/dev/null || true; \
