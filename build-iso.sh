@@ -658,7 +658,7 @@ echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (/etc/osmoc
 
 # ── qemu-src : arbre ELAGUE + binaire installe ──────────────────────────────
 # Deux choses distinctes, et l'ISO a besoin des DEUX :
-#   - l'arbre qemu-src (run.sh, run_modules/, environnement/, target/firmware) :
+#   - l'arbre qemu-src (run.sh, run_modules/, environnement/) :
 #     c'est LUI le mode qemu de start-direct.sh. Il reste dans l'image, prive de
 #     .git et de build/ (voir plus bas).
 #   - le binaire qemu-system-arm, installe dans /usr/local/bin, et relie depuis
@@ -708,53 +708,28 @@ else
     fi
 fi
 
-# ── target/firmware : un LIEN vers /opt/GSM/firmware, pas un repertoire ──────
-# [2026-08-28] Constat fait en ouvrant le squashfs d'une ISO construite :
-#
-#   /opt/GSM/firmware/board/compal_e88/          150 fichiers, layer1.highram.elf compris
-#   /opt/GSM/qemu-src/target/firmware/board/compal_e88/    VIDE
-#
-# L'arbre qemu-src part entier (voir plus haut), mais son target/firmware n'est
-# qu'une coquille : les binaires du Calypso ne sont pas construits la, ils le
-# sont dans /opt/GSM/firmware, qui est le vrai arbre osmocom-bb. Sur l'ISO,
-# "run.sh --check-paths" tombait donc sur
+# ── Firmware Calypso : /opt/GSM/firmware, et rien d'autre ───────────────────
+# [2026-08-28] Il y avait ici un bloc qui remplacait $QSRC/target/firmware par
+# un lien vers /opt/GSM/firmware. Il reparait une coquille vide laissee dans
+# l'arbre qemu-src, sur laquelle la premiere branche de
+# environnement/paths.env tombait, d'ou :
 #
 #   [FAIL] FIRMWARE_ELF (/opt/GSM/qemu-src/target/firmware/board/compal_e88/layer1.highram.elf)
 #
-# et le MS ne demarrait pas - alors que le fichier existait, a trois
-# repertoires de la. Le lien est la reparation que l'on faisait A LA MAIN sur
-# chaque ISO ; elle a sa place ici, une fois, pour toutes les suivantes.
+# La cause a ete traitee a sa source : paths.env (et local.env) du depot qemu
+# ne connaissent plus qu'un seul chemin, $GSM_ROOT/firmware. Il n'y a donc plus
+# de coquille a reparer, et poser le lien reintroduirait justement le deuxieme
+# arbre qu'on vient de supprimer. Constate sur le banc 192.168.1.7 : ce lien
+# n'existait meme pas sur l'ISO gravee, et le run chargeait deja
+# /opt/GSM/firmware/board/compal_e88/layer1.highram.elf sans lui.
 #
-# Un LIEN et pas une copie : les deux arbres resteraient a resynchroniser a
-# chaque recompilation du firmware, et les 150 fichiers de compal_e88 pesent
-# leur poids dans une image qui tient en RAM.
-#
-# Le lien est ABSOLU (/opt/GSM/firmware) et non relatif : il est ecrit dans le
-# rootfs de construction, mais il ne sera suivi qu'une fois ce rootfs devenu la
-# racine du systeme live. Un chemin passant par $ROOTFS ne voudrait plus rien
-# dire une fois l'ISO demarree.
-if [ -d "$QSRC" ]; then
-    FW_REAL="$ROOTFS/opt/GSM/firmware"
-    FW_ELF="board/compal_e88/layer1.highram.elf"
-    if [ -e "$FW_REAL/$FW_ELF" ]; then
-        # On n'efface que ce qu'on remplace : si target/firmware etait un arbre
-        # REELLEMENT construit (le cas d'une image ou le firmware a ete compile
-        # sur place), l'ecraser par un lien detruirait le seul exemplaire.
-        # Le test porte donc sur le fichier que run.sh reclame, pas sur la
-        # simple existence du repertoire.
-        if [ -L "$QSRC/target/firmware" ]; then
-            echo -e "  ${GREEN}✓${NC} target/firmware : lien deja en place"
-        elif [ -e "$QSRC/target/firmware/$FW_ELF" ]; then
-            echo -e "  ${GREEN}✓${NC} target/firmware : arbre construit sur place, laisse intact"
-        else
-            rm -rf "$QSRC/target/firmware"
-            mkdir -p "$QSRC/target"
-            ln -sfn /opt/GSM/firmware "$QSRC/target/firmware"
-            echo -e "  ${GREEN}✓${NC} target/firmware -> ${CYAN}/opt/GSM/firmware${NC} (coquille vide remplacee ; FIRMWARE_ELF resolu)"
-        fi
-    else
-        echo -e "  ${YELLOW}!${NC} /opt/GSM/firmware/${FW_ELF} absent du rootfs - FIRMWARE_ELF restera non resolu" >&2
-    fi
+# Reste ce qui a de la valeur : verifier que le firmware EST dans le rootfs.
+# Sans lui, l'ISO demarre et le MS ne part pas.
+FW_ELF="board/compal_e88/layer1.highram.elf"
+if [ -e "$ROOTFS/opt/GSM/firmware/$FW_ELF" ]; then
+    echo -e "  ${GREEN}✓${NC} firmware : ${CYAN}/opt/GSM/firmware/${FW_ELF}${NC} (source unique ; FIRMWARE_ELF resolu)"
+else
+    echo -e "  ${YELLOW}!${NC} /opt/GSM/firmware/${FW_ELF} absent du rootfs - FIRMWARE_ELF restera non resolu" >&2
 fi
 
 # ── Datadir QEMU : le lien que reclame la RELOCALISATION ────────────────────
