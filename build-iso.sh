@@ -9,7 +9,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
 
-VERSION="${OSMO_ISO_VERSION:-v2}"
+VERSION="${OSMO_ISO_VERSION:-release-0.1}"
 OUTPUT="osmo_egprs-${VERSION}.iso"
 # Repertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
 # space left on device" car le rootfs est volumineux). Overridable via OSMO_ISO_WORK.
@@ -609,7 +609,8 @@ echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (/etc/osmoc
 # ── qemu-src : arbre ELAGUE + binaire installe ──────────────────────────────
 # Deux choses distinctes, et l'ISO a besoin des DEUX :
 #   - l'arbre qemu-src (run.sh, run_modules/, environnement/, target/firmware) :
-#     c'est LUI le mode qemu de start-direct.sh. Il reste dans l'image, prive de
+#     c'est LUI le mode 
+qemu de start-direct.sh. Il reste dans l'image, prive de
 #     .git et de build/ (voir plus bas).
 #   - le binaire qemu-system-arm, installe dans /usr/local/bin, et relie depuis
 #     l'arbre sous le nom que paths.env cherche (build/qemu-system-arm).
