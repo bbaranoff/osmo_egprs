@@ -2209,7 +2209,11 @@ cat > "$ROOTFS/etc/profile.d/01-osmo-disclaimer.sh" <<KBSCRIPT
 [ "\$(id -u)" -ne 0 ] && return 0
 [ -n "\${OSMO_DISCLAIMER_SHOWN:-}" ] && return 0
 export OSMO_DISCLAIMER_SHOWN=1
-echo -e "  \033[1;33mDisclaimer:\033[0m aucun service Osmocom n'est lance automatiquement."
+echo ""
+echo -e "  \033[1;33mDisclaimer\033[0m - banc d'essai GSM/SS7 Osmocom."
+echo -e "  A n'utiliser que sur un reseau radio \033[1mISOLE\033[0m (cage/attenuateur) ou"
+echo -e "  sur une bande sous licence : emettre sur le spectre public est illegal."
+echo -e "  Aucun service Osmocom n'est lance automatiquement sur cette ISO."
 echo -e "  \033[1;33m${OSMO_START_HINT}\033[0m"
 echo -e "  \033[0;36m${OSMO_START_HINT2}\033[0m"
 echo -e "  clavier : \033[1;32m\$(awk -F\\" '/^XKBLAYOUT/{print \$2}' /etc/default/keyboard 2>/dev/null)\033[0m  \033[0;36m(changer : osmo-keyboard)\033[0m"
