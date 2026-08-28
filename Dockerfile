@@ -426,6 +426,7 @@ RUN set -eux; \
 RUN cd /opt/GSM \
     && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
     && cd /opt/GSM/qemu-src \
+    && git checkout RELEASE-0.1 \
     && python3 -m venv /root/.venv-qemu \
     && . /root/.venv-qemu/bin/activate \
     && pip install --no-cache-dir tomli \
@@ -528,7 +529,8 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 # et surtout PAS la ou Dockerfile.run va faire son `git pull`. Deux arbres, deux
 # HEAD, un seul utilise. /opt/GSM/osmo_egprs est le chemin nominal, teste en
 # premier par build-iso.sh l.964 et update.sh l.329.
-RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs
+RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs \
+      && cd osmo_egprs && git checkout RELEASE-0.1
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
