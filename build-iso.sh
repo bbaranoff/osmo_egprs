@@ -283,7 +283,10 @@ trap cleanup EXIT
 # ── Paquets hote requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
 # Installes ici plutot que dans le workflow CI : `sudo ./build-iso.sh` suffit
 # sur une machine Debian/Ubuntu vierge, sans etape "Install host tools" externe.
-ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git isolinux"
+# shim-signed / grub-efi-amd64-signed / dosfstools : la chaine Secure Boot.
+# Voir "Etape 9" plus bas - sans eux l'ISO ne demarre pas sur une machine dont
+# le Secure Boot est actif, et le firmware ne dit qu'une erreur de certificat.
+ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools debootstrap git isolinux shim-signed grub-efi-amd64-signed"
 if command -v apt-get &>/dev/null; then
     echo -e "${GREEN}[0/9] Installation des paquets hote (apt)...${NC}"
     export DEBIAN_FRONTEND=noninteractive
@@ -295,7 +298,7 @@ if command -v apt-get &>/dev/null; then
     # isolinux est optionnel (isohybrid) : on n'echoue pas s'il manque.
     apt-get install -y $HOST_APT_FAST --no-install-recommends $ISO_HOST_PKGS \
         || apt-get install -y $HOST_APT_FAST --no-install-recommends \
-           squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools debootstrap git
+           squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools debootstrap git
 else
     echo -e "${YELLOW}apt-get absent : verification seule des outils hote.${NC}"
 fi
@@ -1415,6 +1418,31 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     apt-get install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop snapd \
         || echo "WARN: installation du bureau incomplete"
+
+    # ── L INSTALLEUR : CALAMARES, ET POURQUOI PAS UBIQUITY ─────────────────
+    # Ubiquity est l installeur d Ubuntu et il est dans jammy (22.04.15). Il ne
+    # peut pas servir ici : il lit l etat du systeme live par CASPER, alors que
+    # cette image demarre avec LIVE-BOOT, celui de Debian (voir la liste PKGS
+    # plus haut : live-boot, live-boot-initramfs-tools, pas casper). Ubiquity ne
+    # trouverait ni le squashfs ni le point de montage du medium, et sortirait
+    # avant la premiere question - sans dire que la cause est l initramfs.
+    #
+    # Calamares ne suppose rien : on lui DIT ou est le squashfs. Sa
+    # configuration vit dans le depot (installer/calamares/), elle est copiee
+    # dans le rootfs HORS de ce chroot - ces fichiers sont pleins
+    # d apostrophes, et ce script-ci est en quotes simples.
+    #
+    # Les dependances ne sont pas facultatives, chacune couvre une etape :
+    #   squashfs-tools  unpackfs, qui deverse le systeme sur le disque
+    #   dosfstools      la partition EFI, formatee en FAT
+    #   efibootmgr      l entree de demarrage UEFI
+    #   os-prober       les autres systemes, pour le menu GRUB
+    #   qml-module-*    le diaporama pendant la copie
+    apt-get install -y $APT_OPTS \
+        calamares squashfs-tools dosfstools efibootmgr os-prober \
+        qml-module-qtquick2 qml-module-qtquick-layouts \
+        qml-module-qtquick-window2 qml-module-qtquick-controls \
+        || echo "WARN: calamares incomplet - installeur indisponible"
 
     # ── CHROMIUM : LE SNAP, PAS LE DEB ─────────────────────────────────────
     # Sur jammy, "apt install chromium-browser" (comme "apt install firefox")
@@ -2683,6 +2711,469 @@ dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 echo -e "  \033[1;32mClavier : ${KB_LAYOUT}\033[0m   (sans persistance, revient au reboot)"
 KBCMD
 chmod +x "$ROOTFS/usr/local/bin/osmo-keyboard"
+# ══════════════════════════════════════════════════════════════════════════════
+# Etape 8d : comptes, session, installeur - TOUT CE QUI PORTE DES APOSTROPHES
+# ══════════════════════════════════════════════════════════════════════════════
+# Ecrit ICI et pas dans le chroot de l etape 8 : ce chroot est un bash -c en
+# QUOTES SIMPLES. Une apostrophe de plus et tout ce qui suit change de sens -
+# et l erreur ne se voit qu au build suivant, sur une ligne sans rapport. Les
+# configurations Calamares, les sudoers et les unites systemd en sont pleins.
+# On ecrit donc dans "$ROOTFS" directement, avec le quoting normal du script.
+echo -e "${GREEN}[8d/9] Comptes, session et installeur...${NC}"
+
+# ── LE MODELE DE COMPTES ────────────────────────────────────────────────────
+# root est le compte de TRAVAIL : le banc se pilote en root (start-direct.sh,
+# les VTY, tcpdump, les netns), et tout le depot le suppose. La session s ouvre
+# donc sur root, et les terminaux qu on y ouvre sont root sans rien demander.
+#
+# osmocom est un SECOND compte, non privilegie, sudoer - le bac a sable pour ce
+# qui n a pas besoin des pleins pouvoirs : un navigateur, une session de bureau
+# ordinaire. On y va EXPLICITEMENT (se deconnecter, le choisir dans GDM, ou
+# "su - osmocom"), jamais par defaut.
+#
+# CE QUE CE N EST PLUS. Ce compte a longtemps ete un ALIAS D UID 0
+# (usermod -o -u 0 osmocom) : un compte qui portait un nom d utilisateur
+# ordinaire et les pleins pouvoirs, ce qui est le pire des deux mondes - on
+# croit travailler sans privileges et on est root. C etait aussi la raison pour
+# laquelle Chromium refusait de demarrer avec son bac a sable. Ici, osmocom est
+# un vrai compte non privilegie, avec son propre UID.
+chroot "$ROOTFS" bash -c "
+set -u
+id -u osmocom >/dev/null 2>&1 || useradd -m -s /bin/bash -c 'Compte osmocom (non privilegie)' osmocom
+echo 'osmocom:osmo' | chpasswd
+echo 'root:osmo'    | chpasswd
+passwd -u root >/dev/null 2>&1 || true
+for g in sudo adm dialout audio video plugdev netdev cdrom; do
+    getent group \$g >/dev/null && usermod -aG \$g osmocom
+done
+" 2>/dev/null || echo -e "  ${YELLOW}!${NC} creation des comptes incomplete"
+echo -e "  ${GREEN}✓${NC} comptes : ${CYAN}root${NC} (travail, mdp osmo) et ${CYAN}osmocom${NC} (non privilegie, sudoer, mdp osmo)"
+
+# ── LA CONSOLE OUVRE SUR ROOT ───────────────────────────────────────────────
+# Sur la cle live il n y a personne a authentifier : demander un mot de passe
+# sur tty1 ne protege rien (qui tient le medium tient la machine) et empeche
+# juste de travailler. --noclear garde a l ecran les messages du demarrage,
+# qui sont souvent la seule trace d un module qui a echoue.
+install -d "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
+cat > "$ROOTFS/etc/systemd/system/getty@tty1.service.d/10-autologin-root.conf" <<'GETTY'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
+GETTY
+install -d "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service.d"
+cat > "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service.d/10-autologin-root.conf" <<'GETTYS'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,57600,38400,9600 %I $TERM
+GETTYS
+echo -e "  ${GREEN}✓${NC} tty1 et console serie : ouverture automatique sur ${CYAN}root${NC}"
+
+# ── LE BUREAU AUSSI ─────────────────────────────────────────────────────────
+# L etape 8 pose deja AutomaticLogin=root dans /etc/gdm3/custom.conf. On le
+# reecrit ici sans condition : cette etape tourne meme quand ISO_DESKTOP vaut 0
+# (le fichier est alors sans effet, GDM n est pas installe), et surtout elle
+# garantit que le reglage est le meme des deux cotes - la cle live et le
+# systeme installe, ou c est shellprocess-osmo.conf qui l ecrit.
+if [ -d "$ROOTFS/etc/gdm3" ] || [ "${ISO_DESKTOP:-0}" = "1" ]; then
+    install -d "$ROOTFS/etc/gdm3"
+    cat > "$ROOTFS/etc/gdm3/custom.conf" <<'GDMCONF'
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=root
+# X11 impose : sous VirtualBox/QEMU, la session Wayland de GNOME 42 tombe sur
+# le pilote llvmpipe et rend un bureau inutilisable, quand elle demarre.
+WaylandEnable=false
+GDMCONF
+    sed -i "/pam_succeed_if.so user != root quiet_success/s/^/#/" \
+        "$ROOTFS/etc/pam.d/gdm-password" "$ROOTFS/etc/pam.d/gdm-autologin" 2>/dev/null || true
+    install -d "$ROOTFS/root/.config" "$ROOTFS/home/osmocom/.config"
+    echo yes > "$ROOTFS/root/.config/gnome-initial-setup-done"
+    echo yes > "$ROOTFS/home/osmocom/.config/gnome-initial-setup-done"
+    chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} session graphique : ouverture automatique sur ${CYAN}root${NC} (osmocom au choix, apres deconnexion)"
+fi
+
+# ── L INSTALLEUR ────────────────────────────────────────────────────────────
+# La configuration vit dans le depot (installer/calamares/) plutot qu en
+# heredocs ici : elle est relisible, versionnee, et validable hors build
+# (c est du YAML, "python3 -c import yaml" suffit a la verifier).
+_CAL_SRC="$DIR/installer/calamares"
+if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -d "$_CAL_SRC" ]; then
+    install -d "$ROOTFS/etc/calamares"
+    cp -a "$_CAL_SRC/settings.conf" "$ROOTFS/etc/calamares/"
+    cp -a "$_CAL_SRC/modules"       "$ROOTFS/etc/calamares/"
+    cp -a "$_CAL_SRC/branding"      "$ROOTFS/etc/calamares/"
+
+    # Les images de l habillage : on reprend le fond d ecran deja fige au build
+    # plutot que d ajouter des binaires au depot. Calamares les met a l echelle.
+    _WPI="$DIR/configs/gsm-lab-wallpaper.png"
+    if [ -f "$_WPI" ]; then
+        cp "$_WPI" "$ROOTFS/etc/calamares/branding/osmo/welcome.png"
+        cp "$_WPI" "$ROOTFS/etc/calamares/branding/osmo/logo.png"
+    else
+        # Sans image, Calamares journalise une erreur par ecran. On retire les
+        # trois cles plutot que de laisser pointer vers des fichiers absents.
+        sed -i '/^images:/,/^slideshow:/{/productLogo\|productIcon\|productWelcome/d}' \
+            "$ROOTFS/etc/calamares/branding/osmo/branding.desc"
+    fi
+
+    # ── LE LANCEUR ──────────────────────────────────────────────────────────
+    # pkexec et non sudo : l installeur est lance depuis le bureau, ou il n y a
+    # pas de terminal pour taper un mot de passe. La session tourne deja en
+    # root, mais osmocom doit pouvoir lancer l installeur aussi - et c est la
+    # que pkexec sert vraiment.
+    cat > "$ROOTFS/usr/local/bin/osmo-install" <<'INSTALLER'
+#!/bin/bash
+# Lance l installeur du systeme. Sur la cle live uniquement.
+set -u
+if [ ! -r /etc/calamares/settings.conf ]; then
+    echo "Calamares n est pas installe sur cette image (ISO_DESKTOP=0 ?)." >&2
+    exit 1
+fi
+# Deja installe : /run/live/medium n existe que quand on a demarre sur le medium.
+if [ ! -d /run/live/medium ]; then
+    echo "Ce systeme ne tourne pas depuis une cle live - rien a installer." >&2
+    exit 1
+fi
+if [ "$(id -u)" -ne 0 ]; then
+    exec pkexec --disable-internal-agent /usr/bin/calamares -d "$@"
+fi
+exec /usr/bin/calamares -d "$@"
+INSTALLER
+    chmod +x "$ROOTFS/usr/local/bin/osmo-install"
+
+    cat > "$ROOTFS/usr/share/applications/osmo-install.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Installer osmo_egprs
+Name[fr]=Installer osmo_egprs
+Comment=Installer le banc GSM/EGPRS sur le disque
+Comment[fr]=Installer le banc GSM/EGPRS sur le disque
+Exec=/usr/local/bin/osmo-install
+Icon=drive-harddisk
+Terminal=false
+Categories=System;
+Keywords=install;installer;calamares;
+DESKTOP
+
+    # Sur le bureau de root, ou la session s ouvre : l icone est la premiere
+    # chose qu on cherche sur une cle live, et c est celle qu on ne trouve
+    # jamais quand elle n est que dans le menu des applications.
+    for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
+        install -d "$_h/Bureau" "$_h/Desktop"
+        cp "$ROOTFS/usr/share/applications/osmo-install.desktop" "$_h/Bureau/"  2>/dev/null || true
+        cp "$ROOTFS/usr/share/applications/osmo-install.desktop" "$_h/Desktop/" 2>/dev/null || true
+        chmod +x "$_h/Bureau/osmo-install.desktop" "$_h/Desktop/osmo-install.desktop" 2>/dev/null || true
+    done
+    chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
+
+    echo -e "  ${GREEN}✓${NC} installeur ${CYAN}Calamares${NC} : /usr/local/bin/osmo-install (+ icone sur le bureau)"
+elif [ "${ISO_DESKTOP:-0}" = "1" ]; then
+    echo -e "  ${YELLOW}!${NC} $_CAL_SRC absent - pas d installeur dans cette image"
+fi
+
+# ── L ERREUR DE SYNTAXE DE LA COPIE EN RAM ──────────────────────────────────
+# L entree "en RAM" du menu passe "toram=filesystem.squashfs" : live-boot ne
+# recopie alors QUE le squashfs, pas le medium entier. Le calcul de la taille du
+# tmpfs est celui-ci, dans lib/live/boot/9990-toram-todisk.sh :
+#
+#     size=$( expr $(ls -la ${MODULETORAMFILE} | awk '{print $5}') / 1024 + 5000 )
+#
+# C est le SEUL expr de tout ce chemin, donc la seule chose qui puisse repondre
+# "expr: syntax error" pendant la copie. Il suffit que le ls de l initramfs
+# (busybox, pas coreutils) ne rende pas la taille en 5e champ - ou ne rende
+# rien - pour qu expr recoive "expr / 1024 + 5000" et le dise.
+#
+# L erreur ne BLOQUE pas : size reste vide, le tmpfs est monte sans -o size et
+# prend son defaut (la moitie de la RAM), ce qui suffit le plus souvent. D ou un
+# banc qui demarre quand meme, avec un message rouge au passage - le genre de
+# message qu on finit par ignorer, et qui masque le jour ou il compte.
+#
+# On remplace expr par l arithmetique du shell, avec le champ VALIDE avant
+# usage et un repli explicite. "ls -lan" plutot que "ls -la" : le -n evite la
+# resolution des noms d utilisateur, qui dans un initramfs sans /etc/passwd
+# complet peut elargir la colonne et decaler les champs - c est le candidat le
+# plus credible. Le patch precede update-initramfs, sinon il ne part pas dans
+# l image ; d ou la regeneration explicite juste apres.
+_LB_TORAM="$ROOTFS/lib/live/boot/9990-toram-todisk.sh"
+if [ -f "$_LB_TORAM" ] && grep -q 'expr \$(ls -la \${MODULETORAMFILE}' "$_LB_TORAM"; then
+    python3 - "$_LB_TORAM" <<'PYLB'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = "\t\t\tsize=$( expr $(ls -la ${MODULETORAMFILE} | awk '{print $5}') / 1024 + 5000 )\n"
+new = ("\t\t\t_lbsz=$(ls -lan \"${MODULETORAMFILE}\" 2>/dev/null | awk '{print $5}')\n"
+       "\t\t\tcase \"${_lbsz}\" in ''|*[!0-9]*) _lbsz=0 ;; esac\n"
+       "\t\t\tsize=$(( _lbsz / 1024 + 5000 ))\n")
+sys.exit(0 if (open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1)) and old in s) else 0)
+PYLB
+    if grep -q '_lbsz' "$_LB_TORAM"; then
+        _LB_K=$(ls "$ROOTFS"/boot/vmlinuz-* 2>/dev/null | sort -V | tail -1 | sed "s|.*/vmlinuz-||")
+        [ -n "$_LB_K" ] && chroot "$ROOTFS" update-initramfs -u -k "$_LB_K" >/dev/null 2>&1
+        echo -e "  ${GREEN}✓${NC} live-boot : calcul de taille ${CYAN}toram${NC} fiabilise (plus d appel a expr)"
+    else
+        echo -e "  ${YELLOW}!${NC} live-boot : la ligne attendue n a pas ete trouvee - non modifie"
+    fi
+else
+    echo -e "  ${GREEN}·${NC} live-boot : rien a corriger (absent, ou deja corrige)"
+fi
+
+# ── sssd : le service qui echoue au demarrage pour rien ─────────────────────
+# ubuntu-desktop-minimal tire sssd (par gnome-online-accounts / realmd). Sur une
+# machine qui n est dans AUCUN domaine - ce qui est le cas d un banc - sssd n a
+# pas de fournisseur configure : il sort en erreur a chaque demarrage,
+#     sssd.service: Failed with result exit-code
+# et systemd le compte comme un service en echec. Rien ne casse : aucune session
+# ne depend de lui ici. Mais "systemctl --failed" en garde la trace, et sur une
+# machine ou l on diagnostique justement des pannes, un service rouge en
+# permanence est un bruit qui coute cher - on finit par ne plus regarder la
+# liste, et c est la qu on rate le vrai.
+#
+# On MASQUE plutot que de desinstaller : purger sssd emporterait des paquets du
+# bureau par dependance inverse. Reversible en une commande, et la commande est
+# ecrite ci-dessous pour qui voudrait joindre un domaine.
+#     systemctl unmask sssd && systemctl enable --now sssd
+for _s in sssd sssd-autofs sssd-nss sssd-pac sssd-pam sssd-ssh sssd-sudo; do
+    chroot "$ROOTFS" systemctl mask "$_s" >/dev/null 2>&1 || true
+done
+echo -e "  ${GREEN}✓${NC} sssd masque (aucun domaine sur un banc) - ${CYAN}systemctl unmask sssd${NC} pour le rendre"
+
+# ── CHROMIUM : LE BAC A SABLE EST LA REGLE, PAS L OPTION ────────────────────
+# La session de cette image s ouvre en ROOT. Or Chromium refuse de demarrer en
+# root avec son bac a sable actif :
+#     Running as root without --no-sandbox is not supported
+# La reponse habituelle - ajouter --no-sandbox - donne un navigateur SANS AUCUN
+# confinement, lance par le compte le plus privilegie de la machine, sur un banc
+# qui manipule des captures et des interfaces reseau. C est precisement ce qu il
+# ne faut pas.
+#
+# Ce lanceur inverse la charge : le bac a sable est le comportement par defaut,
+# depuis le CLI comme depuis le bureau, que l on soit root ou osmocom. La seule
+# facon de s en passer est de le DEMANDER, en ecrivant --no-sandbox soi-meme.
+#
+# COMMENT. En root, on ne peut pas confiner Chromium sur place : sa protection
+# par espaces de noms exige un UID non nul. On rebascule donc sur osmocom - le
+# compte non privilegie de l image - avec runuser, ce qui rend le bac a sable
+# utilisable. Sous osmocom (ou tout autre compte non root), Chromium se confine
+# tout seul : on le lance tel quel.
+#
+# TROIS DETAILS SANS LESQUELS RIEN NE S AFFICHE :
+#   - le serveur X appartient a root ; osmocom doit y etre autorise, d ou le
+#     xhost +SI:localuser (autorisation nominative, pas un xhost + qui ouvrirait
+#     l affichage a tout le monde) ;
+#   - XAUTHORITY et DISPLAY/WAYLAND_DISPLAY doivent traverser runuser ;
+#   - le profil doit etre dans un repertoire ou osmocom peut ecrire, jamais
+#     /root/.config, sinon Chromium sort sur une erreur de permissions.
+#
+# Le lanceur est en /usr/local/bin, qui precede /snap/bin et /usr/bin dans le
+# PATH par defaut : "chromium" et "chromium-browser" tapes a la main passent
+# donc ici, et le .desktop du bureau est reecrit pour l utiliser aussi.
+cat > "$ROOTFS/usr/local/bin/chromium" <<'CHROMIUM'
+#!/bin/bash
+# Chromium confine par defaut. Voir build-iso.sh, etape 8d.
+set -u
+
+REAL=""
+for c in /snap/bin/chromium /usr/bin/chromium /usr/bin/chromium-browser; do
+    [ -x "$c" ] && { REAL="$c"; break; }
+done
+[ -n "$REAL" ] || { echo "chromium introuvable (le snap n est peut-etre pas encore installe)" >&2; exit 127; }
+
+# Choix EXPLICITE de l appelant : on ne discute pas, on transmet tel quel.
+for a in "$@"; do
+    case "$a" in
+        --no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox)
+            exec "$REAL" "$@" ;;
+    esac
+done
+
+SANDBOX_USER="${OSMO_BROWSER_USER:-osmocom}"
+PROFILE_ROOT=/var/lib/osmo-chromium
+
+if [ "$(id -u)" -ne 0 ]; then
+    # Deja non privilegie : Chromium se confine lui-meme, rien a faire.
+    exec "$REAL" --user-data-dir="${HOME}/.config/osmo-chromium" "$@"
+fi
+
+id -u "$SANDBOX_USER" >/dev/null 2>&1 || {
+    echo "Compte $SANDBOX_USER absent : impossible de confiner Chromium." >&2
+    echo "Relancez avec --no-sandbox si vous acceptez de vous en passer." >&2
+    exit 1
+}
+
+install -d -o "$SANDBOX_USER" -g "$SANDBOX_USER" -m 0700 "$PROFILE_ROOT/$SANDBOX_USER"
+
+# Autorisation NOMINATIVE sur l affichage - pas un "xhost +".
+[ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1 && \
+    xhost "+SI:localuser:$SANDBOX_USER" >/dev/null 2>&1 || true
+
+exec runuser -u "$SANDBOX_USER" -- env \
+    DISPLAY="${DISPLAY:-}" \
+    WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
+    XAUTHORITY="${XAUTHORITY:-/root/.Xauthority}" \
+    XDG_RUNTIME_DIR="/run/user/$(id -u "$SANDBOX_USER")" \
+    "$REAL" --user-data-dir="$PROFILE_ROOT/$SANDBOX_USER" "$@"
+CHROMIUM
+chmod +x "$ROOTFS/usr/local/bin/chromium"
+ln -sf chromium "$ROOTFS/usr/local/bin/chromium-browser"
+
+# XDG_RUNTIME_DIR d osmocom doit exister avant qu il ouvre quoi que ce soit :
+# systemd le cree a l ouverture de session, or ici osmocom n en ouvre aucune.
+install -d "$ROOTFS/etc/systemd/system"
+cat > "$ROOTFS/etc/systemd/system/osmo-browser-runtime.service" <<'BRUNTIME'
+[Unit]
+Description=Repertoire d execution pour le Chromium confine (osmocom)
+After=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'u=$(id -u osmocom 2>/dev/null) || exit 0; install -d -o osmocom -g osmocom -m 0700 /run/user/$u /var/lib/osmo-chromium/osmocom'
+
+[Install]
+WantedBy=multi-user.target
+BRUNTIME
+chroot "$ROOTFS" systemctl enable osmo-browser-runtime >/dev/null 2>&1 || true
+
+# ── UN SEUL NOM DANS LE MENU : "Chromium" ───────────────────────────────────
+# Le paquet et le snap posent des entrees nommees "chromium-browser" et
+# "Chromium Web Browser", dont l Exec pointe directement sur le binaire - donc
+# HORS du lanceur, donc sans bac a sable quand la session est root. Une icone
+# qui contourne la regle est pire que pas d icone : on croit le confinement
+# actif partout.
+#
+# On efface donc toutes ces entrees et on en ecrit UNE, qui appelle le lanceur.
+# "chromium-browser" reste disponible en ligne de commande (lien symbolique
+# vers le meme lanceur, pose plus haut) : les scripts qui l appellent par ce nom
+# continuent de marcher, et ils sont confines eux aussi.
+rm -f "$ROOTFS/usr/share/applications/chromium-browser.desktop" \
+      "$ROOTFS/usr/share/applications/chromium.desktop" \
+      "$ROOTFS/var/lib/snapd/desktop/applications/chromium_chromium.desktop" \
+      "$ROOTFS/var/lib/snapd/desktop/applications/chromium_chromium-browser.desktop" 2>/dev/null || true
+cat > "$ROOTFS/usr/share/applications/chromium.desktop" <<'CHRDESK'
+[Desktop Entry]
+Type=Application
+Name=Chromium
+GenericName=Navigateur web
+Comment=Navigateur web, confine dans son bac a sable
+Exec=/usr/local/bin/chromium %U
+Icon=chromium
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=Chromium
+
+[Desktop Action new-window]
+Name=Nouvelle fenetre
+Exec=/usr/local/bin/chromium
+
+[Desktop Action new-private-window]
+Name=Nouvelle fenetre de navigation privee
+Exec=/usr/local/bin/chromium --incognito
+CHRDESK
+
+# Le snap repose ses propres .desktop a chaque installation ou mise a jour.
+# Une unite les reecrit apres coup, sinon l entree hors bac a sable revient au
+# premier "snap refresh" sans que rien ne le signale.
+cat > "$ROOTFS/etc/systemd/system/osmo-chromium-desktop.service" <<'CHRFIX'
+[Unit]
+Description=Une seule entree Chromium dans le menu, et elle passe par le bac a sable
+After=snapd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'rm -f /var/lib/snapd/desktop/applications/chromium_*.desktop /usr/share/applications/chromium-browser.desktop 2>/dev/null; exit 0'
+
+[Install]
+WantedBy=multi-user.target
+CHRFIX
+chroot "$ROOTFS" systemctl enable osmo-chromium-desktop >/dev/null 2>&1 || true
+
+# L alias de shell, pour les sessions interactives des deux comptes : taper
+# "chromium-browser" ou "chromium" mene au lanceur meme si le PATH a ete
+# reordonne par un profil.
+cat > "$ROOTFS/etc/profile.d/98-osmo-chromium.sh" <<'CHRALIAS'
+# Chromium confine : voir /usr/local/bin/chromium. --no-sandbox reste possible,
+# il faut juste l ecrire.
+alias chromium=/usr/local/bin/chromium
+alias chromium-browser=/usr/local/bin/chromium
+CHRALIAS
+echo -e "  ${GREEN}✓${NC} Chromium : confine par defaut (root -> ${CYAN}osmocom${NC}) ; ${CYAN}--no-sandbox${NC} pour passer outre"
+
+
+# ── LA BANNIERE DES TERMINAUX ───────────────────────────────────────────────
+# Ce que quelqu un cherche en ouvrant un terminal sur ce banc, c est la commande
+# qui le demarre. Elle est dans le README, dans l aide de start-direct.sh, et
+# nulle part la ou on la cherche. On la met donc sous les yeux, avec la meme
+# animation SMS que l ouverture de session - c est la signature de l image, et
+# elle dit en une seconde que la pile est bien celle-la.
+#
+# TROIS GARDES, ET AUCUNE N EST DECORATIVE :
+#   $- == *i*   shell INTERACTIF seulement. Sans cette garde, la banniere part
+#               aussi dans les shells non interactifs - et scp, rsync et git
+#               over ssh lisent ce flux comme leur protocole : ils echouent sur
+#               un "protocol error", loin de leur vraie cause.
+#   [ -t 1 ]    un terminal, pas un fichier. Les sequences de curseur dans un
+#               journal le rendent illisible.
+#   OSMO_BANNER un shell dans un shell (tmux, un sudo -i, un make qui ouvre un
+#               bash) ne la rejoue pas : une fois par terminal suffit.
+cat > "$ROOTFS/usr/local/bin/osmo-banner" <<'BANNER'
+#!/bin/bash
+# Banniere d ouverture de terminal : animation SMS puis la commande du banc.
+# Reprise telle quelle de update.sh, qui la joue a l ouverture de session.
+set -u
+[ -t 1 ] || exit 0
+
+printf '\033[?25l'
+trap 'printf "\033[?25h"' EXIT
+
+ph='\033[1;33m☎\033[0m'
+bars=('\033[2m▁▁▁\033[0m' '\033[1;32m▃\033[0m\033[2m▁▁\033[0m' '\033[1;32m▃▅\033[0m\033[2m▁\033[0m' '\033[1;32m▃▅▇\033[0m')
+for b in "${bars[@]}"; do
+    printf '\r  %b %b  \033[36mscanning ARFCN...\033[0m   ' "$ph" "$b"
+    sleep 0.12
+done
+for ((p=0; p<=20; p++)); do
+    printf '\r\033[K  %b %*s\033[1;36m✉\033[0m%*s %b' "$ph" "$p" '' "$((20-p))" '' "$ph"
+    sleep 0.04
+done
+printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered - MT end-to-end Message : Bastien phone home\033[0m\n' "$ph" '' "$ph"
+
+printf '\n'
+printf '  \033[1;36mPour demarrer le banc :\033[0m\n'
+printf '      \033[1;32mcd /opt/GSM/osmo_egprs && ./start-direct.sh\033[0m\n\n'
+printf '  \033[2mcompte courant : \033[0m%s\033[2m   ·   osmocom (non privilegie, sudoer) : \033[0msu - osmocom\n' "$(id -un)"
+printf '  \033[2mChromium est confine par defaut ; --no-sandbox pour passer outre.\033[0m\n'
+if [ -d /run/live/medium ]; then
+    printf '  \033[2mSysteme live : \033[0mosmo-install\033[2m pour l installer sur le disque.\033[0m\n'
+fi
+printf '\n'
+BANNER
+chmod +x "$ROOTFS/usr/local/bin/osmo-banner"
+
+# Pose dans le .bashrc des DEUX comptes, et dans /etc/skel pour ceux que
+# l installeur creera. On APPEND, sans jamais reecrire le fichier : le .bashrc
+# d Ubuntu porte l invite, les couleurs et les alias, et l ecraser se paie a
+# chaque ouverture de terminal ensuite.
+for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom" "$ROOTFS/etc/skel"; do
+    install -d "$_h"
+    [ -f "$_h/.bashrc" ] || cp "$ROOTFS/etc/skel/.bashrc" "$_h/.bashrc" 2>/dev/null || : > "$_h/.bashrc"
+    grep -q 'osmo-banner' "$_h/.bashrc" 2>/dev/null || cat >> "$_h/.bashrc" <<'BASHRC'
+
+# ── Banniere osmo_egprs ─────────────────────────────────────────────────────
+# Interactif ET terminal ET pas deja jouee : voir /usr/local/bin/osmo-banner.
+# Retirer ces trois lignes suffit a s en debarrasser.
+if [[ $- == *i* ]] && [ -t 1 ] && [ -z "${OSMO_BANNER:-}" ] && [ -x /usr/local/bin/osmo-banner ]; then
+    export OSMO_BANNER=1
+    /usr/local/bin/osmo-banner
+fi
+BASHRC
+done
+chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} banniere de terminal : animation + ${CYAN}cd /opt/GSM/osmo_egprs && ./start-direct.sh${NC}"
+
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 
 echo -e "  ${GREEN}✓${NC} config terminee"
@@ -2818,6 +3309,190 @@ submenu "Options (demarrage verbeux)" {
 GRUB
 echo -e "  ${GREEN}✓${NC} menu GRUB : defaut = lecture depuis le medium ; toram annonce ${CYAN}${RAM_TORAM_GB} Go${NC} de RAM"
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SECURE BOOT - pourquoi cette etape ne peut pas rester grub-mkrescue
+# ══════════════════════════════════════════════════════════════════════════════
+# grub-mkrescue CONSTRUIT son BOOTX64.EFI a la volee, a partir des modules de
+# l'hote. Ce binaire n'est signe par personne. Sur une machine dont le Secure
+# Boot est actif, le firmware refuse de le charger et n'affiche qu'une erreur de
+# certificat - "Verification failed: (0x1A) Security Violation", ou pire un
+# ecran qui retombe au menu de boot sans un mot. L'ISO etait donc inutilisable
+# partout ou l'on ne peut pas desactiver Secure Boot dans le firmware, ce qui
+# est le cas de la plupart des machines d'entreprise et de beaucoup de portables
+# recents.
+#
+# LA CHAINE DE CONFIANCE, et pourquoi chaque maillon est celui-la :
+#
+#   firmware --(cle Microsoft)--> shimx64.efi.signed   paquet shim-signed
+#            --(cle Canonical)--> gcdx64.efi.signed    paquet grub-efi-amd64-signed
+#            --(cle Canonical)--> vmlinuz              linux-image-generic (deja signe)
+#
+# shim est le SEUL maillon signe par Microsoft, dont la cle est dans a peu pres
+# tous les firmwares du marche. Il porte la cle Canonical et valide ce qu'il
+# charge ensuite. On ne le fabrique pas : on copie celui du paquet.
+#
+# gcdx64 ET NON grubx64 - c'est le detail qui coute une soiree. Les deux sont
+# signes par Canonical, mais leur PREFIXE compile differe :
+#     grubx64.efi.signed  -> prefixe /EFI/ubuntu, cherche sa configuration sur
+#                            la partition EFI ; sur une ISO elle n'y est pas, et
+#                            GRUB tombe sur son invite "grub>" sans un message.
+#     gcdx64.efi.signed   -> prefixe /boot/grub RELATIF AU MEDIUM DE BOOT, la
+#                            variante faite pour l'optique. Il trouve donc
+#                            $ISOROOT/boot/grub/grub.cfg, celui qu'on vient
+#                            d'ecrire, sans stub ni duplication.
+# On garde tout de meme un stub en /EFI/ubuntu/grub.cfg sur l'ESP : il ne sert
+# que si le repli sur grubx64 s'est declenche, et il ne coute que 60 octets.
+#
+# CE QUE CETTE ETAPE NE FAIT PAS : signer quoi que ce soit. Aucune cle privee
+# n'est manipulee, rien n'est a enroler par l'utilisateur (pas de MokManager a
+# la premiere ouverture). On assemble des binaires deja signes par Microsoft et
+# Canonical - c'est exactement ce que fait une ISO Ubuntu officielle.
+#
+# LE BIOS N'EST PAS ABANDONNE. L'image El Torito i386-pc est construite ici par
+# grub-mkimage au format i386-pc-eltorito (celui qui embarque deja cdboot.img),
+# et la MBR hybride par --grub2-mbr : une machine sans UEFI demarre comme avant.
+#
+# REPLI. Si un maillon manque sur l'hote (paquet non installe, architecture
+# autre), on retombe sur grub-mkrescue - l'ISO d'avant, qui demarre partout SAUF
+# en Secure Boot. On le DIT, en clair : une ISO non signee qui se presente comme
+# signee, c'est une panne au premier deploiement.
+
+SB_SHIM=""
+for c in /usr/lib/shim/shimx64.efi.signed \
+         /usr/lib/shim/shimx64.efi.signed.latest \
+         /usr/lib/shim/shimx64.efi; do
+    [ -f "$c" ] && { SB_SHIM="$c"; break; }
+done
+# gcdx64 d'abord (prefixe /boot/grub, fait pour l'optique), grubx64 en repli.
+SB_GRUB="" ; SB_GRUB_KIND=""
+for c in /usr/lib/grub/x86_64-efi-signed/gcdx64.efi.signed:gcd \
+         /usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed:grub; do
+    [ -f "${c%:*}" ] && { SB_GRUB="${c%:*}"; SB_GRUB_KIND="${c##*:}"; break; }
+done
+SB_MM=""
+for c in /usr/lib/shim/mmx64.efi.signed /usr/lib/shim/mmx64.efi; do
+    [ -f "$c" ] && { SB_MM="$c"; break; }
+done
+
+# Le noyau doit l'etre aussi : shim valide GRUB, GRUB valide le noyau. Un
+# vmlinuz non signe s'arrete sur "you need to load the kernel first" ou sur un
+# refus de shim_lock, APRES le menu - donc la ou l'on ne soupconne plus l'ISO.
+# Les noyaux Ubuntu "generic" le sont ; un noyau maison, non. On regarde la
+# signature plutot que de faire confiance au nom du paquet.
+SB_KERNEL_SIGNED=0
+if command -v sbverify &>/dev/null; then
+    sbverify --list "$ISOROOT/boot/vmlinuz" &>/dev/null && SB_KERNEL_SIGNED=1
+elif grep -qa '~Module signature appended~\|sbat\|Canonical Ltd\. Secure Boot' "$ISOROOT/boot/vmlinuz" 2>/dev/null; then
+    SB_KERNEL_SIGNED=1
+fi
+
+SECURE_BOOT_OK=0
+if [ -n "$SB_SHIM" ] && [ -n "$SB_GRUB" ] && command -v mmd &>/dev/null; then
+    echo -e "${GREEN}[9/9] ISO Secure Boot (shim + grub signes)...${NC}"
+    echo -e "  shim : ${CYAN}${SB_SHIM}${NC}"
+    echo -e "  grub : ${CYAN}${SB_GRUB}${NC} (${SB_GRUB_KIND})"
+
+    # ── La partition systeme EFI ────────────────────────────────────────────
+    # FAT16, et un PLANCHER DE 16 Mo. Le contenu ne pese que ~4 Mo (shim ~1 Mo,
+    # grub signe ~2,3 Mo, MokManager ~0,9 Mo), mais FAT16 exige au moins 4085
+    # clusters : mkfs.vfat refuse en dessous, avec
+    #     mkfs.vfat: Attempting to create a too small or a too large filesystem
+    # et l'etape entiere retombait alors en silence sur le repli non signe.
+    # 16 Mo a 2 Ko par cluster (-s 4) font 8192 clusters - au large, et 16 Mo
+    # sur une ISO de plusieurs Go ne se voient pas.
+    SB_ESP="$WORK/efi.img"
+    SB_KB=$(( ( $(stat -Lc%s "$SB_SHIM") + $(stat -Lc%s "$SB_GRUB") \
+              + $( [ -n "$SB_MM" ] && stat -Lc%s "$SB_MM" || echo 0 ) ) / 1024 + 2048 ))
+    [ "$SB_KB" -lt 16384 ] && SB_KB=16384
+    rm -f "$SB_ESP"
+    mkfs.vfat -F 16 -s 4 -n OSMOEFI -C "$SB_ESP" "$SB_KB" >/dev/null
+
+    mmd   -i "$SB_ESP" ::/EFI ::/EFI/BOOT ::/EFI/ubuntu
+    mcopy -i "$SB_ESP" "$SB_SHIM" ::/EFI/BOOT/BOOTX64.EFI
+    mcopy -i "$SB_ESP" "$SB_GRUB" ::/EFI/BOOT/grubx64.efi
+    [ -n "$SB_MM" ] && mcopy -i "$SB_ESP" "$SB_MM" ::/EFI/BOOT/mmx64.efi
+
+    # Stub : utile seulement si le repli grubx64 (prefixe /EFI/ubuntu) a joue.
+    printf 'search --set=root --file /boot/grub/grub.cfg\nset prefix=($root)/boot/grub\nconfigfile /boot/grub/grub.cfg\n' \
+        > "$WORK/esp-grub.cfg"
+    mcopy -i "$SB_ESP" "$WORK/esp-grub.cfg" ::/EFI/ubuntu/grub.cfg
+    mcopy -i "$SB_ESP" "$WORK/esp-grub.cfg" ::/EFI/BOOT/grub.cfg
+
+    # ── LE MEME ARBRE, AUSSI DANS L'ISO9660 ─────────────────────────────────
+    # L'ESP appendue suffit a demarrer depuis un DVD ou une cle ecrite en mode
+    # image (dd, Rufus en mode DD). Elle ne suffit PAS a la methode la plus
+    # repandue sous Windows : formater la cle en FAT et y COPIER le contenu de
+    # l'ISO. Cette copie ne voit que l'ISO9660, ou /EFI/BOOT n'existerait pas -
+    # la cle ne demarre alors pas en UEFI, sans que rien n'explique pourquoi.
+    # C'est exactement ce que xorriso previent :
+    #     WARNING : EFI boot equipment is provided but no directory /EFI/BOOT
+    #     WARNING : will emerge in the ISO filesystem.
+    # Quelques Mo dupliques ; les ISO Ubuntu font de meme.
+    mkdir -p "$ISOROOT/EFI/BOOT"
+    cp "$SB_SHIM" "$ISOROOT/EFI/BOOT/BOOTX64.EFI"
+    cp "$SB_GRUB" "$ISOROOT/EFI/BOOT/grubx64.efi"
+    [ -n "$SB_MM" ] && cp "$SB_MM" "$ISOROOT/EFI/BOOT/mmx64.efi"
+    cp "$WORK/esp-grub.cfg" "$ISOROOT/EFI/BOOT/grub.cfg"
+    mkdir -p "$ISOROOT/EFI/ubuntu"
+    cp "$WORK/esp-grub.cfg" "$ISOROOT/EFI/ubuntu/grub.cfg"
+
+    # ── L'amorce BIOS, construite ici puisqu'on n'appelle plus grub-mkrescue ──
+    # i386-pc-eltorito embarque deja cdboot.img : cette image est directement
+    # utilisable comme -eltorito-boot, pas de concatenation a faire.
+    SB_BIOS="$WORK/eltorito.img"
+    grub-mkimage -O i386-pc-eltorito -p /boot/grub -o "$SB_BIOS" \
+        biosdisk iso9660 part_msdos part_gpt fat ext2 normal linux configfile \
+        search search_label search_fs_uuid search_fs_file loopback gzio \
+        all_video gfxterm videotest videoinfo test echo ls minicmd sleep \
+        halt reboot chain 2>/dev/null
+
+    if [ -s "$SB_BIOS" ]; then
+        # -eltorito-alt-boot separe les deux entrees du catalogue : la premiere
+        # (BIOS) et la seconde (UEFI). "--interval:appended_partition_2" designe
+        # la partition qu'on ajoute juste apres, sans la copier deux fois dans
+        # l'image.
+        xorriso -as mkisofs -iso-level 3 \
+            -volid "$LABEL" \
+            -full-iso9660-filenames \
+            -eltorito-boot boot/grub/eltorito.img \
+                -no-emul-boot -boot-load-size 4 -boot-info-table \
+                --eltorito-catalog boot/grub/boot.cat \
+                --grub2-boot-info \
+                --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
+            -eltorito-alt-boot \
+                -e --interval:appended_partition_2:all:: \
+                -no-emul-boot \
+            -append_partition 2 0xef "$SB_ESP" \
+            -appended_part_as_gpt \
+            -o "$OUTPUT" \
+            -graft-points "$ISOROOT" "/boot/grub/eltorito.img=$SB_BIOS" \
+            && SECURE_BOOT_OK=1
+    fi
+
+    if [ "$SECURE_BOOT_OK" = "1" ]; then
+        if [ "$SB_KERNEL_SIGNED" = "1" ]; then
+            echo -e "  ${GREEN}✓${NC} ISO signee Secure Boot : shim -> grub -> noyau, chaine complete"
+        else
+            echo -e "  ${YELLOW}⚠${NC}  shim et grub sont signes, mais la signature du NOYAU n'a pas"
+            echo -e "     pu etre confirmee ($ISOROOT/boot/vmlinuz). Si le boot s'arrete APRES"
+            echo -e "     le menu GRUB, c'est la : installez sbsigntool pour le verifier, ou"
+            echo -e "     utilisez un noyau linux-image-generic non recompile."
+        fi
+    else
+        echo -e "  ${YELLOW}⚠${NC}  assemblage Secure Boot echoue - repli sur grub-mkrescue"
+    fi
+else
+    echo -e "${YELLOW}[9/9] Secure Boot indisponible sur cet hote :${NC}"
+    [ -z "$SB_SHIM" ] && echo -e "     shim absent  -> apt install ${CYAN}shim-signed${NC}"
+    [ -z "$SB_GRUB" ] && echo -e "     grub signe absent -> apt install ${CYAN}grub-efi-amd64-signed${NC}"
+    command -v mmd &>/dev/null || echo -e "     mtools absent -> apt install ${CYAN}mtools dosfstools${NC}"
+fi
+
+if [ "$SECURE_BOOT_OK" != "1" ]; then
+# Repli : l'ancienne recette, mot pour mot. Elle produit une ISO qui demarre en
+# BIOS et en UEFI sans Secure Boot - c'est ce qu'on avait avant, et c'est mieux
+# que pas d'ISO du tout.
+#
 # Wrapper: inject -iso-level 3 (multi-extent, lifts the 4 GiB single-file cap)
 # into grub-mkrescue's internal `xorriso -as mkisofs` call.
 XORRISO_WRAP="$WORK/xorriso-iso-level3"
@@ -2831,14 +3506,18 @@ exec xorriso "$@"
 EOF
 chmod +x "$XORRISO_WRAP"
 
-grub-mkrescue --xorriso="$XORRISO_WRAP" -o "$OUTPUT" "$ISOROOT" \
-    --product-name "osmo_egprs $VERSION" -- -volid "$LABEL"
+    grub-mkrescue --xorriso="$XORRISO_WRAP" -o "$OUTPUT" "$ISOROOT" \
+        --product-name "osmo_egprs $VERSION" -- -volid "$LABEL"
     if command -v isohybrid &>/dev/null; then
-    isohybrid --uefi "$OUTPUT"
+        isohybrid --uefi "$OUTPUT"
+    fi
+    echo -e "  ${YELLOW}!${NC} ISO NON signee : elle ne demarrera pas si Secure Boot est actif."
+    echo -e "    Desactivez-le dans le firmware, ou construisez sur un hote qui a"
+    echo -e "    ${CYAN}shim-signed${NC} et ${CYAN}grub-efi-amd64-signed${NC}."
 fi
 
 if [ ! -f "$OUTPUT" ]; then
-    echo -e "${RED}grub-mkrescue a echoue - ISO non creee${NC}"
+    echo -e "${RED}Creation de l'ISO echouee - rien n'a ete ecrit${NC}"
     exit 1
 fi
 
