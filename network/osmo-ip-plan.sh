@@ -96,6 +96,38 @@ uplink_dev() {
     printf '%s' "$d"
 }
 
+# ── CE QUE LES CONFIGS EXIGENT, PAS CE QU'ON SUPPOSE ────────────────────────
+# Le plan prive (192.168.<noeud+1>.x) est une convention ; ce qui compte, c'est
+# l'adresse que chaque demon va REELLEMENT essayer de lier. Elle est ecrite dans
+# /etc/osmocom, et elle peut venir d'un autre generateur que le notre :
+# qemu-src/run_modules/08-gabarits.sh passe op_private_ip() a
+# apply_config_templates, donc 192.168.2.10, quand la recette native de l'ISO
+# passe 127.0.0.2. Deux verites, et le demon suit la sienne :
+#     osmo-ggsn : « gtp bind-ip 192.168.2.10 » -> bind sur une adresse absente
+#     osmo-sgsn : « listen 192.168.2.10 23000 » -> idem
+# On EXTRAIT donc les adresses des fichiers au lieu de les recalculer : la
+# machine finit par porter ce que ses configs demandent, quel que soit celui
+# qui les a ecrites.
+#
+# ATTENTION A CE QU ON NE PREND PAS : « ip dns 0/1 » (serveurs annonces a
+# l'abonne), « remote-ip », « ggsn 0 remote-ip » designent des adresses
+# DISTANTES. Les poser localement ferait repondre la machine a la place du pair.
+addrs_des_configs() {
+    local d="${OSMOCOM_CFG:-/etc/osmocom}"
+    [ -d "$d" ] || return 0
+    {
+        sed -n 's/^[[:space:]]*gtp[[:space:]]\+bind-ip[[:space:]]\+\([0-9.]*\).*/\1/p'  "$d"/osmo-ggsn.cfg 2>/dev/null
+        sed -n 's/^[[:space:]]*gtp[[:space:]]\+local-ip[[:space:]]\+\([0-9.]*\).*/\1/p' "$d"/osmo-sgsn.cfg 2>/dev/null
+        sed -n 's/^[[:space:]]*listen[[:space:]]\+\([0-9.]*\)[[:space:]]\+[0-9]*.*/\1/p' "$d"/osmo-sgsn.cfg 2>/dev/null
+        sed -n 's/^[[:space:]]*local-addr[[:space:]]\+\([0-9.]*\).*/\1/p'                 "$d"/osmo-upf.cfg  2>/dev/null
+    } | sort -u | while read -r a; do
+        case "$a" in
+            ''|0.0.0.0|127.*) continue ;;      # deja la, ou « toutes les cartes »
+        esac
+        printf '%s\n' "$a"
+    done
+}
+
 RUNTIME="$(detect_runtime_env)"
 NODE="$(resolve_node)"
 PRIV_BASE=$(( NODE + 1 ))
@@ -127,17 +159,40 @@ for a in "$PRIV_GW" "$PRIV_IP" "$LOOPBACK_FALLBACK"; do
     done < <(ip -o -4 addr show 2>/dev/null | awk -v a="$a" '$4 ~ "^"a"/" {print $2}')
 done
 
+# L'union du plan du noeud et de ce que les configs reclament. Les doublons
+# tombent au tri ; « ip addr add » d'une adresse deja posee est sans effet.
+BESOINS="$(printf '%s\n%s\n%s\n' "$PRIV_GW" "$PRIV_IP" "$(addrs_des_configs)" | sed '/^$/d' | sort -u)"
+
 if [ -n "$DEV" ]; then
-    ip addr add "${PRIV_GW}/32" dev "$DEV" 2>/dev/null || true
-    ip addr add "${PRIV_IP}/32" dev "$DEV" 2>/dev/null || true
-    echo "osmo-ip-plan : ${PRIV_GW}/32 et ${PRIV_IP}/32 sur ${DEV} (carte qui fournit Internet)"
+    _pose=""
+    for a in $BESOINS; do
+        # Deja portee par une carte quelconque : on n'y touche pas. Reposer une
+        # adresse ailleurs ferait deux interfaces sur la meme /32.
+        if ip -o -4 addr show 2>/dev/null | awk '{print $4}' | grep -qx "${a}/32\|${a}/[0-9]*"; then
+            continue
+        fi
+        ip -o -4 addr show 2>/dev/null | awk -F'[ /]+' '{print $4}' | grep -qx "$a" && continue
+        ip addr add "${a}/32" dev "$DEV" 2>/dev/null && _pose="$_pose $a"
+    done
+    if [ -n "$_pose" ]; then
+        echo "osmo-ip-plan :${_pose} pose(s) en /32 sur ${DEV} (carte qui fournit Internet)"
+    else
+        echo "osmo-ip-plan : rien a poser, tout est deja la (${DEV})"
+    fi
 else
     # ── REPLI : la boucle locale ────────────────────────────────────────────
     # Aucune carte ne mene nulle part. Poser 192.168.x sur une interface au
     # hasard donnerait une adresse presente et injoignable - le pire des deux
     # mondes, parce que tout a l'air en place. Une adresse de boucle, elle, est
     # honnete : locale, joignable, et elle ne pretend rien.
+    # Sur lo, une adresse absente empeche un demon de demarrer tout autant que
+    # sur une carte : on y pose donc AUSSI ce que les configs reclament, plutot
+    # que le seul repli. Le banc tourne alors en autarcie, complet.
     ip addr add "${LOOPBACK_FALLBACK}/32" dev lo 2>/dev/null || true
-    echo "osmo-ip-plan : aucune carte ne fournit Internet - repli ${LOOPBACK_FALLBACK}/32 sur lo"
+    for a in $BESOINS; do
+        ip -o -4 addr show 2>/dev/null | awk -F'[ /]+' '{print $4}' | grep -qx "$a" && continue
+        ip addr add "${a}/32" dev lo 2>/dev/null || true
+    done
+    echo "osmo-ip-plan : aucune carte ne fournit Internet - ${LOOPBACK_FALLBACK}/32 + $(echo $BESOINS) sur lo"
 fi
 exit 0

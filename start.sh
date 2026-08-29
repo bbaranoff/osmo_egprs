@@ -145,9 +145,40 @@ HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 # hub. Le decalage d'un rang laisse le .1 au LAN et commence les operateurs a
 # 192.168.2.0/24.
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
-op_private_ip()   { echo "192.168.$(($1 + 1)).10"; }
-op_private_gw()   { echo "192.168.$(($1 + 1)).1"; }
-op_private_net()  { echo "192.168.$(($1 + 1)).0/24"; }
+# ── L'INDEX DU SEGMENT PRIVE : LE NOEUD OU L'OPERATEUR, SELON L'HOTE ────────
+# 192.168.<index+1>.x, et tout le desaccord tenait a « index ».
+#
+#   DOCKER   un hote porte N conteneurs operateurs, chacun dans son netns. Ce
+#            qui les distingue est le NUMERO D'OPERATEUR ; le noeud, lui, est
+#            commun a tous les conteneurs de la machine. index = operateur.
+#   VM/NATIF la machine EST le noeud et ne porte qu'un operateur. Ce qui la
+#            distingue de ses voisines est le NUMERO DE NOEUD. index = noeud.
+#
+# Sans cette distinction, qemu-src/run_modules/08-gabarits.sh appelait
+# op_private_ip($OPERATOR_ID) et ecrivait 192.168.2.10 dans osmo-ggsn.cfg sur
+# TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
+# 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se
+# voyait ; sur le noeud 2, le GGSN se liait a l'adresse du noeud 1.
+# La bascule est ici, une fois, et les deux jumelles (start.sh, lib/gabarits.sh)
+# en heritent.
+_osmo_priv_index() {
+    local op="${1:-1}"
+    # Meme detection que start-direct.sh : le couple /.dockerenv +
+    # /etc/docker-entrypoint-cmd identifie un conteneur DE CE DEPOT ; le cgroup
+    # sert de repli pour un conteneur quelconque.
+    if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
+        printf '%s' "$op"; return
+    fi
+    local n="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
+    [ -n "$n" ] || n="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' \
+                        "${ROLE_FILE:-/etc/osmo-role}" 2>/dev/null)"
+    [ -n "$n" ] || n="$(sed -n 's/^PLAN_NODE=//p' "${OSMOCOM_CFG:-/etc/osmocom}/radio-plan.env" 2>/dev/null | tail -1)"
+    case "$n" in [1-9]) ;; *) n=1 ;; esac
+    printf '%s' "$n"
+}
+op_private_ip()   { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).10"; }
+op_private_gw()   { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).1"; }
+op_private_net()  { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).0/24"; }
 op_container()    { echo "osmo-operator-$1"; }
 op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }

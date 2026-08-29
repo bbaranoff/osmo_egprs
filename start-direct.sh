@@ -1770,6 +1770,32 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
 fi
 
 # --- 8. lancement : exec run.sh -----------------------------------------------
+# ── LES ADRESSES QUE LES CONFIGS RECLAMENT DOIVENT EXISTER ──────────────────
+# Un demon qui se lie a une adresse absente ne demarre pas, et il le dit dans
+# SON journal, pas dans le notre :
+#     osmo-ggsn : « gtp bind-ip 192.168.2.10 » -> adresse introuvable localement
+#     osmo-sgsn : « listen 192.168.2.10 23000 » -> idem
+# Ces adresses viennent du generateur de gabarits (op_private_ip), pas du
+# reseau : rien ne les pose. Elles etaient figees dans 20-dhcp.network cote ISO,
+# donc absentes de toute machine montee autrement - et la panne se lisait comme
+# un defaut de coeur paquet.
+#
+# osmo-ip-plan.sh les EXTRAIT des configs plutot que de les recalculer (le plan
+# peut venir d'un autre generateur que le notre), choisit la carte qui fournit
+# reellement Internet, et retombe sur la boucle locale quand aucune ne mene
+# nulle part. Il ne fait rien dans un conteneur : la, c'est docker qui adresse.
+if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
+    IPPLAN="$HERE/network/osmo-ip-plan.sh"
+    if [ -r "$IPPLAN" ]; then
+        say_begin "Adresses privees du noeud"
+        _ipout="$(OSMOCOM_CFG="${OSMOCOM_CFG:-/etc/osmocom}" \
+                  OSMO_WAN_NODE="${NODE_ID:-${OSMO_WAN_NODE:-}}" \
+                  bash "$IPPLAN" --apply 2>&1)" || true
+        say_end " OK " "$C_OK" "Adresses privees du noeud" \
+            "$(printf '%s' "$_ipout" | tail -1 | sed 's/^osmo-ip-plan : //')"
+    fi
+fi
+
 say_begin "Transmission a run.sh"
 if [ $DRY -eq 1 ]; then
     say_end " -- " "$C_DIM" "Transmission a run.sh" "dry-run"

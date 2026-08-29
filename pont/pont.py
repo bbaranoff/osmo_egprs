@@ -478,6 +478,10 @@ class Stats:
         s.n_tch_ul_court=0               # slots montants tronques (doit rester 0)
         s.n_tch_ul_drop=0                # trames voix jetees : file pleine
         s.n_tch_ul_vole=0                # voix cedee a une FACCH (normatif)
+        # Trames REELLEMENT ecrasees dans l'anneau avant qu'on les lise. A
+        # distinguer de n_tch_ul_drop, qui compte ce que la file d'aval refuse :
+        # ici c'est perdu en AMONT, et aucune file n'y peut rien.
+        s.n_tch_ul_perdu=0
         s.n_tch_burst=0                  # bursts TCH montants reellement emis
         s.n_tap_dl=0;    s.n_tap_ul=0     # trames L2 mirroitees vers l'analyseur
     def log(s, msg): print("[pont] %s" % msg, flush=True)
@@ -1069,8 +1073,30 @@ def tch_ul_loop():
             w, n = struct.unpack("<II", hdr)
             if not w or not n:
                 time.sleep(0.02); continue
-            if last == 0 or (w - last) > n:      # retard > 1 tour : on saute
-                last = max(0, w - 1)
+            # ── LE RATTRAPAGE JETAIT CE QU'IL POUVAIT ENCORE LIRE ───────────
+            # Deux situations distinctes etaient traitees par la meme ligne, et
+            # la seconde y perdait 15 trames sur 16.
+            #
+            #   PREMIER TOUR (last == 0) : l'anneau vit dans /dev/shm, il
+            #     SURVIT a un redemarrage du pont. Ce qu'il contient appartient
+            #     a la session precedente. Rejouer meme une seule de ces trames
+            #     injecte 20 ms de voix d'un appel deja fini. On se cale donc
+            #     sur w : rien d'ancien.
+            #
+            #   DEPASSEMENT ((w - last) > n) : on a pris du retard et les plus
+            #     vieilles trames ont ete ECRASEES. Mais les n dernieres, elles,
+            #     sont toujours la. « last = w - 1 » n'en gardait qu'UNE et
+            #     jetait les 15 autres - 300 ms de voix parfaitement lisibles,
+            #     a chaque hoquet du thread. C'est ce qui restait du son
+            #     robotise apres l'ajout de la file : la file absorbe la gigue
+            #     EN AVAL, elle ne peut rien pour ce que la lecture a deja
+            #     jete EN AMONT.
+            #     On repart donc de la plus ancienne trame ENCORE VALIDE.
+            if last == 0:
+                last = w                          # session precedente : on ignore
+            elif (w - last) > n:
+                ST.n_tch_ul_perdu += (w - last) - n
+                last = w - n                      # tout ce qui reste lisible
             while last < w:
                 last += 1
                 sl = os.pread(fd, TCH_UL_SLOT, 8 + ((last - 1) % n) * TCH_UL_SLOT)
@@ -2574,9 +2600,9 @@ def th_stats():
                + " | AIRREC dl=%dtr/%dbu ul=%dtr/%dbu"
                  % (_AR_DL.n_frames, _AR_DL.n_bursts,
                     _AR_UL.n_frames, _AR_UL.n_bursts)
-               + " | TCHUL bursts=%d file_v=%d file_f=%d drop=%d vol=%d"
+               + " | TCHUL bursts=%d file_v=%d file_f=%d drop=%d vol=%d perdu=%d"
                  % (ST.n_tch_burst, len(_tch_q_voice), len(_tch_q_facch),
-                    ST.n_tch_ul_drop, ST.n_tch_ul_vole))
+                    ST.n_tch_ul_drop, ST.n_tch_ul_vole, ST.n_tch_ul_perdu))
         # Detail par base de bloc (GSM 05.02) : montre d'ou vient le crc_fail.
         # 2=BCCH  6/12/16=CCCH  22/26/32/36=SDCCH  42/46=SACCH.
         if ST.n_by_base:
