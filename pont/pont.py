@@ -464,6 +464,8 @@ class Stats:
         # Blocs dedies ecartes parce que le dedie est sur un AUTRE slot. A
         # comparer a n_dl_crc_fail : c'est la part de bruit qu'on ne paie plus.
         s.n_dl_ded_skip=0
+        # Bursts de remplissage (dummy burst de C0) ecartes avant tout decodage.
+        s.n_dl_dummy=0
         s.n_ul_sent=0;   s.n_ul_out_of_window=0; s.n_rach=0
         s.n_tch_dl=0;    s.n_tch_ul=0;           s.n_tch_crc=0
         s.n_a5_dl=0;     s.n_a5_ul=0
@@ -1371,6 +1373,42 @@ def _dcch_active_ss(tn, plan):
         return None
     return ss % plan.n_sub
 
+# ── LE DUMMY BURST : NE PAS LE COMPTER COMME UN ECHEC ───────────────────────
+# osmo-bts-trx remplit TOUS les timeslots de C0 avec le dummy burst
+# (src/osmo-bts-trx/scheduler_trx.c:198 « Initialize all timeslots on C0/TRX0
+# with dummy burst »), pour que la porteuse balise garde une puissance
+# constante. Un slot dedie INACTIF emet donc en permanence ce motif fige de la
+# TS 05.02 5.2.6 -- qui ne porte aucune donnee et ne peut, par construction,
+# passer aucun CRC.
+#
+# On les envoyait quand meme dans xcch_decode_4, et chaque bloc comptait comme
+# un crc_fail. Mesure : notre SDCCH TS1/0 affichait 161 decodages sur 676
+# tentatives, soit 76 pour cent d'echec -- alors que les 515 blocs manquants
+# n'etaient pas des blocs, c'etait du remplissage. Le compteur accusait la
+# radio pour un silence normatif, et gr-gsm a d'ailleurs un bloc entier pour ca
+# (dummy_burst_filter).
+#
+# La sequence est REPRISE de la source d'osmo-bts, pas retapee : deux copies
+# d'une constante de 148 bits finissent toujours par diverger sur un chiffre.
+# Tolerance : le motif arrive tel quel du TRXD (bits durs), donc une egalite
+# stricte suffirait ; on laisse quelques bits d'ecart pour rester juste si un
+# jour la source devient bruitee.
+_DUMMY_BURST = (0,0,0,1,1,1,1,1,0,1,1,0,1,1,1,0,1,1,0,0,0,0,0,1,0,1,0,0,1,0,0,1,1,1,0,0,0,0,0,1,0,0,1,0,0,0,1,0,0,0,0,0,0,0,1,1,1,1,1,0,0,0,1,1,1,0,0,0,1,0,1,1,1,0,0,0,1,0,1,1,1,0,0,0,1,0,1,0,1,1,1,0,1,0,0,1,0,1,0,0,0,1,1,0,0,1,1,0,0,1,1,1,0,0,1,1,1,1,0,1,0,0,1,1,1,1,1,0,0,0,1,0,0,1,0,1,1,1,1,1,0,1,0,1,0,0,0,0)
+_DUMMY_TOL = int(os.environ.get("PONT_DUMMY_TOL", "8"))
+
+def _is_dummy(burst148):
+    """Vrai si ce burst est le dummy burst normatif (remplissage de C0)."""
+    if len(burst148) < 148:
+        return False
+    n = 0
+    for i in range(148):
+        # burst148 : 0x01 = bit 1, tout le reste = bit 0 (domaine DL brut).
+        if (1 if burst148[i] == 0x01 else 0) != _DUMMY_BURST[i]:
+            n += 1
+            if n > _DUMMY_TOL:
+                return False
+    return True
+
 def _acc_dl(tn, phys, fn, burst148):
     k = _block_key(tn, phys, fn)
     if k is None:
@@ -1412,6 +1450,12 @@ def _acc_dl(tn, phys, fn, burst148):
     # A5 : seulement le canal DEDIE. Les bases dependent de la combinaison —
     # sur un SDCCH/8, {22,26,32,36,42,46} designe du VIDE et laissait tout le
     # dedie en clair (donc indecodable des que le reseau chiffre).
+    # Remplissage de C0 : rien a decoder, et surtout rien a compter comme echec.
+    # Test AVANT l'A5 : le dummy n'est jamais chiffre, et le passer au keystream
+    # le rendrait meconnaissable.
+    if _is_dummy(burst148):
+        ST.n_dl_dummy += 1
+        return
     if base51 in plan.ded_bases:
         burst148 = a5_apply(burst148, fn, False)
     d = _DL_ACC.setdefault(k, {"fn0": k[1], "b": []})
@@ -2517,6 +2561,7 @@ def th_stats():
         ST.log("STATS dl_bursts=%d dl_dec=%d crc_fail=%d | ul_sent=%d hors_fenetre=%d rach=%d | FN=%u"
                % (ST.n_dl_bursts, ST.n_dl_decoded, ST.n_dl_crc_fail,
                   ST.n_ul_sent, ST.n_ul_out_of_window, ST.n_rach, now_fn())
+               + " | dummy=%d dedie_hors=%d" % (ST.n_dl_dummy, ST.n_dl_ded_skip)
                + " | TCH dl=%d ul=%d crc=%d" % (ST.n_tch_dl, ST.n_tch_ul, ST.n_tch_crc)
                + " | A5 dl=%d ul=%d" % (ST.n_a5_dl, ST.n_a5_ul)
                + " | FACCH dl=%d ul=%d gap=%d" % (ST.n_facch_dl, ST.n_facch_ul, ST.n_tch_gap)
