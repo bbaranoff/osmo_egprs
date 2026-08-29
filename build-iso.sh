@@ -1334,7 +1334,6 @@ PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate
       console-setup keyboard-configuration locales
       psmisc
       python3 python3-venv python3-scapy
-      avahi-daemon libnss-mdns
       tshark wireshark-common"
 
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
@@ -1690,61 +1689,6 @@ cat > "$ROOTFS/etc/hosts" <<'EOF'
 127.0.0.1 localhost osmo-egprs
 ::1       localhost
 EOF
-
-# ── Nom mDNS : l'ISO repond a gsm.local ────────────────────────────────────
-# L'adresse de l'ISO est en DHCP (20-dhcp.network ci-dessous) : elle change au
-# gre du bail, et tout ce qui la nomme en dur - un ssh, le tableau de bord, une
-# capture pointee sur le hub - se perime en silence. mDNS donne un nom stable
-# qui suit l'adresse, sans serveur DNS ni entree a maintenir sur le poste.
-#
-# LE NOM mDNS N'EST PAS LE HOSTNAME. avahi publie `host-name` de sa propre
-# configuration, independamment de /etc/hostname : la machine reste
-# `osmo-egprs` pour la banniere de login, hostnamectl et le dashboard, et
-# repond EN PLUS a gsm.local. Renommer l'hote aurait touche les trois.
-#
-# Deux images, deux noms : si l'operateur et le hub inter-STP publiaient tous
-# deux `gsm`, avahi detecterait la collision et renommerait l'un en `gsm-2`
-# - un nom qui depend de l'ordre de demarrage, donc inutilisable.
-# ── Le nom mDNS PORTE LE NUMERO DU NOEUD ────────────────────────────────────
-# "gsm.local" etait le meme sur toutes les images. Des que deux noeuds sont sur
-# le meme LAN, avahi ne peut plus les departager : il en renomme un d office en
-# "gsm-2.local" - un nom que personne n a choisi, qui change selon l ordre
-# d allumage, et qui n a aucun rapport avec le numero de noeud. Le nom suit donc
-# le noeud : gsm_node_1.local, gsm_node_2.local...
-# Le hub, lui, est unique par construction et garde son nom propre.
-ISO_MDNS_NAME="${ISO_MDNS_NAME:-$([ "$ISO_ROLE" = "interstp" ] && echo gsm-hub || echo "gsm_node_${ISO_NODE:-1}")}"
-mkdir -p "$ROOTFS/etc/avahi"
-cat > "$ROOTFS/etc/avahi/avahi-daemon.conf" <<AVAHI
-[server]
-host-name=$ISO_MDNS_NAME
-domain-name=local
-use-ipv4=yes
-# IPv6 coupe : le lab est en v4 (voir 20-dhcp.network et les /32 heritees du
-# plan docker). Publier un AAAA link-local ferait tenter la v6 d'abord a tout
-# client qui la prefere, pour un aller simple vers un timeout.
-use-ipv6=no
-
-[publish]
-publish-addresses=yes
-publish-hinfo=no
-publish-workstation=no
-
-[reflector]
-
-[rlimits]
-AVAHI
-
-# systemd-resolved porte son propre resolveur mDNS et prendrait le 5353 :
-# avahi-daemon echouerait alors au demarrage, et gsm.local ne repondrait pas.
-# On tranche explicitement - avahi possede le mDNS, resolved fait l'unicast.
-mkdir -p "$ROOTFS/etc/systemd/resolved.conf.d"
-cat > "$ROOTFS/etc/systemd/resolved.conf.d/10-no-mdns.conf" <<'EOF'
-[Resolve]
-MulticastDNS=no
-EOF
-
-chroot "$ROOTFS" systemctl enable avahi-daemon 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} mDNS : ${CYAN}${ISO_MDNS_NAME}.local${NC} (avahi-daemon ; hostname inchange)"
 
 mkdir -p "$ROOTFS/etc/systemd/network"
 cat > "$ROOTFS/etc/systemd/network/20-dhcp.network" <<'EOF'
