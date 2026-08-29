@@ -208,7 +208,7 @@ def main(argv=None):
     p.add_argument("command", nargs="+")
 
     args, extra = ap.parse_known_args(argv)
-    # "map sri-sm --pc 1.11.61 msisdn=600101" : argparse laisse les positionnels
+    # "map sri-sm --pc 1.11.61 msisdn=100101" : argparse laisse les positionnels
     # qui suivent une option de cote. On les recupere plutot que de les perdre.
     leftovers = [x for x in extra if "=" in x and not x.startswith("-")]
     unknown = [x for x in extra if x not in leftovers]

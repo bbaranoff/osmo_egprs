@@ -463,9 +463,9 @@ do_hint() {
     echo -e "  ${BOLD}Demarrer :${NC} ${CYAN}$0 start${NC}"
     echo ""
     echo -e "  ${BOLD}Dans chaque VM (autologin root) :${NC}"
-    echo -e "    ${CYAN}/opt/osmo_egprs/start-direct.sh${NC}"
+    echo -e "    ${CYAN}/opt/GSM/osmo_egprs/start-direct.sh${NC}"
     echo -e "    → la table WAN figee dans l'ISO est appliquee toute seule (WAN_AUTO=1)."
-    echo -e "    → sans ISO --wan : ${CYAN}/opt/osmo_egprs/start-direct.sh --wan${NC}"
+    echo -e "    → sans ISO --wan : ${CYAN}/opt/GSM/osmo_egprs/start-direct.sh --wan${NC}"
     echo ""
     echo -e "  ${BOLD}Appeler d'un noeud a l'autre :${NC}"
     local a b
@@ -473,7 +473,7 @@ do_hint() {
     echo -e "    depuis un MS du noeud ${a} : ${CYAN}${WAN_IND[$b]}10001${NC} → MS 10001 du noeud ${b}"
     echo -e "    SMS : meme numerotation (${CYAN}${WAN_IND[$b]}10001${NC})"
     echo ""
-    echo -e "  ${BOLD}Diagnostic dans une VM :${NC} ${CYAN}/opt/osmo_egprs/checks/wan_ss7_check.sh${NC}"
+    echo -e "  ${BOLD}Diagnostic dans une VM :${NC} ${CYAN}/opt/GSM/osmo_egprs/checks/wan_ss7_check.sh${NC}"
     echo ""
 }
 

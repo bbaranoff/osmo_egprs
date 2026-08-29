@@ -139,16 +139,17 @@ wan_nodes_validate() {
         [[ "${WAN_IP[$id]}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { _wan_err "noeud $id : '${WAN_IP[$id]}' n'est pas une IPv4"; rc=1; }
         # ── L'INDICATIF NE DOIT PAS MORDRE SUR LE PLAN DE NUMEROTATION LOCAL ──
-        # Les MSISDN du depot valent 600000 + op×100 + ms (600101, 600201...) :
-        # six chiffres qui commencent tous par "600". Un indicatif "60"
-        # produirait donc "exten => _60." dans [gsm_in], qui avalerait 600101
-        # - l'abonne local deviendrait injoignable et l'appel partirait sur le
-        # WAN. Un indicatif d'UN chiffre a le meme defaut, en pire.
-        # Les defauts 11/22/.../99 passent tous cette regle.
+        # Les MSISDN du depot valent <noeud>00<op><ms> (100101, 200101...) :
+        # six chiffres dont les deux premiers sont "<noeud>0". Un indicatif
+        # "10" produirait donc "exten => _10." dans [gsm_in], qui avalerait
+        # 100101 - l'abonne local deviendrait injoignable et l'appel partirait
+        # sur le WAN. Un indicatif d'UN chiffre a le meme defaut, en pire.
+        # Les defauts 11/22/.../99 passent tous cette regle ; c'est la regle
+        # "^[1-9]0" ci-dessous qui ecarte 10, 20, ... 90.
         if ! [[ "${WAN_IND[$id]}" =~ ^[0-9]{2,4}$ ]]; then
             _wan_err "noeud $id : indicatif '${WAN_IND[$id]}' - 2 a 4 chiffres (1 chiffre entrerait en conflit avec les MSISDN locaux)"; rc=1
         elif [[ "${WAN_IND[$id]}" =~ ^[1-9]0 ]]; then
-            _wan_err "noeud $id : indicatif '${WAN_IND[$id]}' commence comme un MSISDN local (op×10000+ms → 10001, 20001...) - il capterait les appels locaux ; prenez ${WAN_IND[$id]:0:1}${WAN_IND[$id]:0:1} par exemple"; rc=1
+            _wan_err "noeud $id : indicatif '${WAN_IND[$id]}' commence comme un MSISDN local (<noeud>00<op><ms> → 100101, 200101...) - il capterait les appels locaux ; prenez ${WAN_IND[$id]:0:1}${WAN_IND[$id]:0:1} par exemple"; rc=1
         fi
     done
     # Indicatifs : uniques ET aucun prefixe d'un autre. Un indicatif 3 qui

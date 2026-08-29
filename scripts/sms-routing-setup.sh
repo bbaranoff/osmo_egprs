@@ -7,7 +7,7 @@
 #   sms_routing_summary   <n_ops>         [op1_nms op2_nms ...]
 #
 # Formules COMMUNES (identiques a run.sh, hlr-feed-subscribers.sh) :
-#   MSISDN  = 600000 + op_id * 100 + ms_idx   (600101, 600102, 600201...)
+#   MSISDN  = <noeud>00<op_id><ms_idx>       (100101, 100102, 100201...)
 #   IMSI    = MCC(3) + MNC(2) + printf('%04d%06d', op_id, ms_idx)
 #   KI      = 00 11 22 33 44 55 66 77 88 99 aa bb cc dd <ms_hex> <op_hex>
 #
@@ -36,7 +36,16 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _sms_op_backbone_ip() { echo "172.20.0.$((10 + $1))"; }
-_sms_op_msisdn()      { echo $(( 600000 + $1 * 100 + $2 )); }   # op_id ms_idx
+# MSISDN = <noeud>00<operateur><rang sur 2 chiffres> : le premier chiffre est
+# l'adresse du noeud, c'est lui qui route. Le noeud vient du plan radio ecrit
+# par generate_configs.sh, de l'environnement, ou vaut 1.
+_sms_node_id() {
+    local n="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
+    [ -n "$n" ] || n="$(sed -n 's/^PLAN_NODE=//p' /etc/osmocom/radio-plan.env 2>/dev/null | tail -1)"
+    case "$n" in [1-9]) ;; *) n=1 ;; esac
+    printf '%s' "$n"
+}
+_sms_op_msisdn()      { echo $(( $(_sms_node_id) * 100000 + $1 * 100 + $2 )); }   # op_id ms_idx
 _sms_op_ms_imsi()     {                                   # mcc mnc op_id ms_idx
     local mcc=$1 mnc=$2 op=$3 ms=$4
     printf '%s%s%04d%06d' "$mcc" "$mnc" "$op" "$ms"
@@ -91,7 +100,7 @@ sms_routing_generate() {
 # MS par operateur : $(for i in $(seq 1 "$n_ops"); do printf 'Op%s=%s ' "$i" "${nms[$i]}"; done)
 #
 # Routage MSISDN :
-#   MSISDN = 600000 + op_id × 100 + ms_idx
+#   MSISDN = <noeud> × 100000 + op_id × 100 + ms_idx
 #   Regle longest-prefix match (prefixe le plus long l'emporte)
 #
 # ═══════════════════════════════════════════════════════════════════════════════

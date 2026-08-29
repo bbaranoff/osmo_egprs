@@ -11,7 +11,7 @@
 #
 #   Terminal A :  ./navigation/ss7-console.py serve --pc 1.11.61
 #   Terminal B :  ./navigation/ss7-console.py map sri-sm --pc 1.11.61 \
-#                     msisdn=600101 sc_addr=600999
+#                     msisdn=100101 sc_addr=600999
 
 import threading
 import time

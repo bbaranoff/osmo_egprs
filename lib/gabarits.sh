@@ -89,14 +89,19 @@ EOF
 }
 generate_extensions_interop_out() {
     local op_id=$1 n_operators=$2 remote_op
+    # Le prefixe porte le NOEUD : MSISDN = <noeud>00<operateur><rang>. Fige a
+    # "600", le motif ne matchait plus rien des que le numero commencait par le
+    # numero de noeud - les appels inter-operateurs sortaient en Congestion
+    # sans qu'aucune ligne ne dise que c'est le motif qui n'accroche pas.
+    local _pfx; _pfx="$(osmo_msisdn_pfx "$(osmo_node_id)")"
     printf '[interop_out]\n\n'
-    # Un seul motif : les MSISDN font six chiffres, 600<operateur><rang>. Les
+    # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>. Les
     # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
     # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
     for remote_op in $(seq 1 "$n_operators"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
-exten => _600${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
+exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
  same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
  same => n,Congestion()
  same => n,Hangup()
@@ -126,11 +131,10 @@ _generate_sms_routing_conf_fallback() {
     for i in $(seq 1 "$n_operators"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
     printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        # Prefixe a CINQ chiffres : la maquette numerote les abonnes i0001,
-        # i0002... (MS#1 = 10001, MS#2 = 10002). Sans lui, aucun prefixe ne
-        # couvrait ces numeros et le relais rejetait tout SMS local avec
-        # "No route for destination". Constate le 2026-07-29.
-        for ms in 1 2; do printf '%s = %s\n' "$(( 600000 + i * 100 + ms ))" "$i"; done   # MSISDN exacts 600000+op*100+ms (600101,600102,...)
+        # Les MSISDN EXACTS, pas un prefixe : un prefixe trop court avalait
+        # les numeros voisins, un prefixe absent laissait le relais rejeter
+        # tout SMS local avec "No route for destination" (2026-07-29).
+        for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done   # MSISDN exacts <noeud>00<op><ms> (100101, 100102, 200101...)
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }

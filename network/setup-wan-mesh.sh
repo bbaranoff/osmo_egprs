@@ -590,16 +590,16 @@ for i in "${OP_IDS[@]}"; do
             # produisait un _<indicatif>2XXXX vers un operateur que ce noeud-la
             # n'a pas - l'appel sortait et se perdait au lieu d'etre refuse ici.
             # Le numero compose : <indicatif du noeud> + le MSISDN a SIX chiffres.
-            # Pour joindre l'operateur 1 du noeud 1 depuis ici : 11 600101.
-            # Le motif etait _<indicatif><operateur>XXXX, c'est-a-dire l'ancien
-            # plan a cinq chiffres ou le premier chiffre du numero ETAIT
-            # l'operateur. Depuis le passage a 600<op><rang>, plus rien ne
-            # matchait : l'appel tombait dans le fourre-tout, Asterisk repondait
-            # "successful" a l'envoi SMS et le message n'allait nulle part.
-            # Un seul motif suffit maintenant, la longueur etant fixe.
+            # Pour joindre l'operateur 1 du noeud 1 depuis ici : 11 100101.
+            # Le MSISDN commence par le numero du noeud DISTANT (<noeud>00<op>
+            # <rang>) : c'est "${r}00${j}" et non un "600" commun. Fige a 600,
+            # le motif n'accrochait plus aucun numero du pair - l'appel tombait
+            # dans le fourre-tout, Asterisk repondait "successful" a l'envoi SMS
+            # et le message n'allait nulle part.
+            # Un seul motif suffit, la longueur etant fixe.
             for j in $(seq 1 "$(node_nops "$r")"); do
                 cat <<EOF
-exten => _${rind}600${j}XX,1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → ${WAN_IP[$r]} ===)
+exten => _${rind}${r}00${j}XX,1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → ${WAN_IP[$r]} ===)
  same => n,Dial(PJSIP/\${EXTEN:${off}}@wan_n${r}_op${j},,rT)
  same => n,NoOp(WAN \${DIALSTATUS})
  same => n,Congestion()
@@ -639,11 +639,11 @@ exten => _X.,1,NoOp(=== WAN OUT: indicatif inconnu \${EXTEN} ===)
 [wan_in]
 EOF
         # L'indicatif a ete retire par le noeud appelant : ce qui arrive ici est
-        # le MSISDN nu, six chiffres, 600<operateur><rang>. Meme correction que
-        # pour le sortant - le motif attendait l'ancien format a cinq chiffres.
+        # le MSISDN nu, six chiffres. Ce sont NOS numeros, donc ils commencent
+        # par NOTRE numero de noeud : <WAN_NODE_ID>00<operateur><rang>.
         for j in "${OP_IDS[@]}"; do
                 cat <<EOF
-exten => _600${j}XX,1,NoOp(=== WAN IN → GSM Op${j}: \${EXTEN} ===)
+exten => _${WAN_NODE_ID}00${j}XX,1,NoOp(=== WAN IN → GSM Op${j}: \${EXTEN} ===)
  same => n,Set(CALLERID(all)=<\${CALLERID(num)}>)
  same => n,Gosub(sub-annuaire,\${CALLERID(num)},1)
  same => n,Gosub(sub-record,s,1(\${EXTEN}))
@@ -750,17 +750,17 @@ for i in "${OP_IDS[@]}"; do
             done
         done
         echo ""
-        # La cle de routage est le PREFIXE compose : <indicatif>600<operateur>.
-        # Elle valait <indicatif><operateur>, c'est-a-dire l'ancien plan a cinq
-        # chiffres ou le numero commencait par le chiffre de l'operateur. Depuis
-        # 600<op><rang>, un SMS vers 11600101 ne matchait plus aucune route : le
-        # relais rendait un succes et le message n'allait nulle part.
+        # La cle de routage est le PREFIXE compose :
+        # <indicatif><noeud distant>00<operateur>. Le "600" fixe qu'elle portait
+        # ne correspondait plus a aucun numero depuis que le MSISDN commence par
+        # le noeud : un SMS vers 11100101 ne matchait aucune route, le relais
+        # rendait un succes et le message n'allait nulle part.
         # strip retire l'indicatif seul, ce qui laisse le MSISDN entier.
-        echo "# <indicatif>600<op> → noeud distant ; strip = chiffres d'indicatif a retirer."
+        echo "# <indicatif><noeud>00<op> → noeud distant ; strip = chiffres d'indicatif a retirer."
         echo "[routes]"
         for r in "${REMOTES[@]}"; do
             for j in $(seq 1 "$(node_nops "$r")"); do
-                printf '%s600%s = w%s%s strip=%s\n' "${WAN_IND[$r]}" "$j" "$r" "$j" "${#WAN_IND[$r]}"
+                printf '%s%s00%s = w%s%s strip=%s\n' "${WAN_IND[$r]}" "$r" "$j" "$r" "$j" "${#WAN_IND[$r]}"
             done
         done
         echo "$SMS_END"
@@ -809,10 +809,10 @@ fi
 echo ""
 echo -e "${GREEN}${BOLD}WAN mesh applique.${NC}"
 echo ""
-# Le resume annoncait "<indicatif>10001", l'ancien plan a cinq chiffres. Il
-# faut composer l'indicatif du noeud SUIVI DU MSISDN entier, six chiffres :
-# 600<operateur><rang>. Un exemple faux dans le resume final vaut une heure
-# perdue a essayer un numero qui ne matche aucun motif.
+# Il faut composer l'indicatif du noeud SUIVI DU MSISDN entier, six chiffres :
+# <noeud>00<operateur><rang>. Un exemple faux dans le resume final vaut une
+# heure perdue a essayer un numero qui ne matche aucun motif - le resume a deja
+# annonce "<indicatif>10001" puis "<indicatif>600101", deux plans revolus.
 # LOCAL_IND et REMOTES gardent le contexte du DERNIER operateur boucle plus
 # haut ; on repose donc le notre avant d'afficher, sinon la ligne annonce un
 # indicatif qui n'est pas celui de ce noeud.
@@ -820,7 +820,7 @@ mesh_set_context "${OP_IDS[0]}"
 echo -e "  ${BOLD}Depuis ce noeud (${WAN_NODE_ID}, indicatif ${LOCAL_IND}) :${NC}"
 for r in "${REMOTES[@]}"; do
     for j in $(seq 1 "$(node_nops "$r")"); do
-        echo -e "    ${CYAN}${WAN_IND[$r]}${NC}600${j}01  → MS 600${j}01 (op${j}) du noeud ${r} (${WAN_IP[$r]})"
+        echo -e "    ${CYAN}${WAN_IND[$r]}${NC}${r}00${j}01  → MS ${r}00${j}01 (op${j}) du noeud ${r} (${WAN_IP[$r]})"
     done
 done
 echo ""

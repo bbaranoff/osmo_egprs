@@ -72,10 +72,10 @@ set -u
 
 # ── Bibliotheque commune (detection docker/natif, inventaire, VTY) ────────────
 # Chemin RELATIF a CE fichier : le depot vit en /home/.../osmo_egprs pendant le
-# developpement et en /opt/osmo_egprs sur l'ISO ; un chemin absolu casserait
+# developpement et en /opt/GSM/osmo_egprs sur l'ISO ; un chemin absolu casserait
 # l'un des deux.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _c in "$_here/_mode.sh" /opt/osmo_egprs/checks/_mode.sh; do
+for _c in "$_here/_mode.sh" /opt/GSM/osmo_egprs/checks/_mode.sh; do
     [ -r "$_c" ] && { . "$_c"; break; }
 done
 command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }

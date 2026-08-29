@@ -82,7 +82,10 @@ _hlrf_vty() {
 # L'abonne est-il DANS la base ? osmo-hlr repond "% No subscriber ..." quand
 # il ne l'est pas ; on exige en plus de retrouver l'IMSI dans la fiche, pour ne
 # pas prendre un message d'erreur inattendu pour un succes.
-# MSISDN = 600000 + operateur * 100 + rang, les deux lus dans l'IMSI.
+# MSISDN = <noeud>00<operateur><rang>. L'operateur et le rang se lisent dans
+# l'IMSI ; le noeud, lui, n'y est PAS - l'IMSI reste MCC MNC <op> <ms>, sans
+# quoi le Ki et l'authentification changeraient de plan avec lui. Il vient donc
+# du plan radio ecrit par generate_configs.sh, de l'environnement, ou vaut 1.
 _hlrf_msisdn() {                       # $1 = IMSI a 15 chiffres
     local imsi="$1" op ms
     case "$imsi" in
@@ -92,7 +95,10 @@ _hlrf_msisdn() {                       # $1 = IMSI a 15 chiffres
     op="${imsi:5:4}"; ms="${imsi:9:6}"
     op="${op#"${op%%[!0]*}"}"; : "${op:=1}"      # zeros de tete
     ms="${ms#"${ms%%[!0]*}"}"; : "${ms:=1}"
-    echo $(( 600000 + op * 100 + ms ))
+    local node="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
+    [ -n "$node" ] || node="$(sed -n 's/^PLAN_NODE=//p' /etc/osmocom/radio-plan.env 2>/dev/null | tail -1)"
+    case "$node" in [1-9]) ;; *) node=1 ;; esac
+    echo $(( node * 100000 + op * 100 + ms ))
 }
 
 _hlrf_present() {
@@ -153,7 +159,7 @@ mod_hlr_feed_start() {
     # ── Le numero d'appel : UN SEUL plan pour tout le banc ──────────────────
     # Trois endroits provisionnent ce HLR. start.sh, run_modules/21-abonnes-hlr.sh
     # et scripts/sms-routing-setup.sh calculent tous
-    #       MSISDN = 600000 + operateur * 100 + rang du mobile
+    #       MSISDN = <noeud> * 100000 + operateur * 100 + rang du mobile
     # soit 10001, 10002 pour l'operateur 1, 20001, 20002 pour le 2. C'est ce
     # plan que le dialplan reconnait (motif <operateur>XXXX dans
     # configs/extensions.conf) et que le routage SMS attend.
