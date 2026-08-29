@@ -535,7 +535,14 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 # et surtout PAS la ou Dockerfile.run va faire son `git pull`. Deux arbres, deux
 # HEAD, un seul utilise. /opt/GSM/osmo_egprs est le chemin nominal, teste en
 # premier par build-iso.sh l.964 et update.sh l.329.
-RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && cd /opt/GSM/osmo_egprs && git checkout RELEASE-0.1
+# ⚠️ `git checkout RELEASE-0.1` TOUT COURT NE MARCHE PAS ICI : le depot porte
+# AUSSI un tag nomme RELEASE-0.1 (457ff2e, la pointe de main). Git resout
+# refs/tags/ AVANT le DWIM vers refs/remotes/origin/, donc on atterrissait sur
+# le TAG en HEAD detache — pas sur la branche (2ca6e24) — et le `git pull` de
+# Dockerfile.run l.125 mourait sur « You are not currently on a branch ».
+# `-B <branche> origin/<branche>` est explicite : jamais ambigu, et pose le
+# suivi amont dont le pull a besoin.
+RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && cd /opt/GSM/osmo_egprs && git checkout -B RELEASE-0.1 origin/RELEASE-0.1
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
