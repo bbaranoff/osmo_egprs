@@ -1189,19 +1189,46 @@ ConditionPathExists=!/var/lib/osmo-snaps/.installe
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Poser ~1 Go de snaps prend des MINUTES sur un medium optique ou une cle lente.
+# Le delai par defaut de systemd (90 s) tuait l'unite en pleine installation, et
+# ne laissait derriere lui qu'un "chromium introuvable" sans rapport apparent.
+TimeoutStartSec=infinity
 # Hors ligne d'abord (les .snap embarques), le magasin ensuite : un banc sans
 # Internet doit quand meme avoir son navigateur.
-# audio-record n'est PAS connectee d'office par snapd : sans elle le bac a
-# sable refuse le micro et getUserMedia rend NotFoundError, sans qu'une seule
-# ligne ne parle de confinement.
+#
+# L'ORDRE COMPTE. Un snap ne s'installe pas avant sa base : "snap install
+# chromium.snap" sans core24 pose sort sur
+#     cannot install snap "chromium": snap "core24" is required
+# Le fichier "ordre", ecrit au build, porte la sequence exacte (snapd, la base,
+# puis les fournisseurs de contenu, puis chromium).
+#
+# LES INTERFACES DE CONTENU decident si le navigateur DEMARRE, pas seulement
+# s'il est joli : chromium 15x passe par gpu-2404 (mesa-2404) et gnome-46-2404
+# via sa command-chain. Sans ces slots connectes, le lanceur du snap s'arrete
+# avant meme d'ouvrir une fenetre. audio-record, elle, n'est jamais connectee
+# d'office : sans elle le bac a sable refuse le micro et getUserMedia rend
+# NotFoundError, sans qu'une seule ligne ne parle de confinement.
+#
+# Tout est journalise dans /var/log/osmo-chromium-snap.log : la version
+# precedente envoyait stderr dans /dev/null, et une installation ratee etait
+# indiscernable d'une installation absente.
 ExecStart=/bin/bash -c 'cd /var/lib/osmo-snaps 2>/dev/null || exit 0; \
+  exec >>/var/log/osmo-chromium-snap.log 2>&1; \
+  echo "=== $(date -Is) installation des snaps ==="; \
   for a in *.assert; do [ -e "$a" ] && snap ack "$a"; done; \
-  for s in gtk-common-themes gnome-42-2204 chromium; do \
-    [ -e "$s.snap" ] && snap install "$s.snap" 2>/dev/null; \
-  done; \
+  if [ -s ordre ]; then \
+    while read -r s; do \
+      [ -n "$s" ] || continue; \
+      [ -s "$s.snap" ] || { echo "absent: $s.snap"; continue; }; \
+      snap install "$s.snap" || echo "ECHEC hors ligne: $s"; \
+    done < ordre; \
+  fi; \
   snap list chromium >/dev/null 2>&1 || snap install chromium || true; \
-  snap connect chromium:audio-record 2>/dev/null || true; \
-  snap connect chromium:audio-playback 2>/dev/null || true; \
+  for i in gpu-2404 gnome-46-2404 gtk-3-themes icon-themes sound-themes \
+           audio-record audio-playback camera removable-media; do \
+    snap connect "chromium:$i" || true; \
+  done; \
+  snap list; \
   touch /var/lib/osmo-snaps/.installe'
 
 [Install]
@@ -1463,10 +1490,55 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     apt-get purge -y firefox chromium-browser 2>/dev/null || true
     mkdir -p /var/lib/osmo-snaps
     _snap_ok=1
-    for _sn in gtk-common-themes gnome-42-2204 chromium; do
+
+    # ── LES DEPENDANCES SE LISENT DANS LE SNAP, ELLES NE SE DEVINENT PAS ────
+    # L ancienne liste etait ecrite en dur : gtk-common-themes, gnome-42-2204,
+    # chromium. Elle etait FAUSSE, et l image sortait sans navigateur.
+    # chromium 151 declare "base: core24" et reclame, par ses interfaces de
+    # contenu, mesa-2404 (gpu-2404) et gnome-46-2404 - gnome-42-2204 est la
+    # plateforme du monde core22, celle du chromium d AVANT : 557 Mo embarques
+    # que rien ne monte. Sans core24 ni mesa-2404, "snap install chromium.snap"
+    # echoue hors ligne, et le lanceur repond "chromium introuvable".
+    #
+    # On lit donc "base:" et les "default-provider:" DANS le .snap telecharge,
+    # au lieu de les recopier : la prochaine bascule de base (core26...) se
+    # fera toute seule. cups est volontairement ecarte - c est un fournisseur
+    # d impression optionnel de 200 Mo, son absence ne bloque pas le demarrage.
+    ( cd /var/lib/osmo-snaps && snap download chromium --basename=chromium ) \
+        || { echo "  [desktop] WARN: snap download chromium a echoue"; _snap_ok=0; }
+
+    #
+    # Pas une seule apostrophe ici : ce bloc tourne dans un bash -c en quotes
+    # simples (voir plus haut) - les programmes awk sont donc en guillemets,
+    # avec \$2 echappe pour qu il arrive intact a awk.
+    _base=""; _providers=""
+    if [ -s /var/lib/osmo-snaps/chromium.snap ] && command -v unsquashfs >/dev/null; then
+        unsquashfs -cat /var/lib/osmo-snaps/chromium.snap meta/snap.yaml \
+            > /tmp/chromium-snap.yaml 2>/dev/null || true
+        # || true : ce chroot tourne sous set -e, et grep qui ne retient rien
+        # sort avec 1 - une liste vide ferait echouer la construction entiere.
+        _base=$(awk "/^base:[[:space:]]/{print \$2; exit}" /tmp/chromium-snap.yaml) || true
+        _providers=$(awk "/default-provider:[[:space:]]/{print \$2}" /tmp/chromium-snap.yaml \
+                     | sort -u | grep -vx cups) || true
+        rm -f /tmp/chromium-snap.yaml
+    fi
+    [ -n "$_base" ] || _base=core24
+    [ -n "$_providers" ] || _providers="mesa-2404 gnome-46-2404 gtk-common-themes"
+    echo "  [desktop] chromium : base=$_base, contenu=$(echo $_providers)"
+
+    # snapd en tete : sur une base core2x, les snaps montent /snap/snapd et
+    # refusent de demarrer sans lui.
+    rm -f /var/lib/osmo-snaps/ordre; touch /var/lib/osmo-snaps/ordre
+    for _sn in snapd "$_base" $_providers; do
         ( cd /var/lib/osmo-snaps && snap download "$_sn" --basename="$_sn" ) \
+            && echo "$_sn" >> /var/lib/osmo-snaps/ordre \
             || { echo "  [desktop] WARN: snap download $_sn a echoue"; _snap_ok=0; }
     done
+    # En dernier, et jamais en "[ ... ] && ..." : sous set -e, un test faux
+    # en fin de bloc arreterait le chroot net.
+    if [ -s /var/lib/osmo-snaps/chromium.snap ]; then
+        echo chromium >> /var/lib/osmo-snaps/ordre
+    fi
     systemctl enable osmo-chromium-snap 2>/dev/null || true
     if [ "$_snap_ok" = "1" ]; then
         echo "  [desktop] Chromium : snap embarque ($(du -sh /var/lib/osmo-snaps 2>/dev/null | cut -f1)), installe au premier boot"
@@ -3007,6 +3079,27 @@ install -d -o "$SANDBOX_USER" -g "$SANDBOX_USER" -m 0700 "$PROFILE_ROOT/$SANDBOX
 [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1 && \
     xhost "+SI:localuser:$SANDBOX_USER" >/dev/null 2>&1 || true
 
+# LE COOKIE X, RECOPIE DANS UN FICHIER QUE osmocom PEUT LIRE.
+# Sous GDM en autologin root, XAUTHORITY ne vaut PAS /root/.Xauthority mais
+# /run/user/0/gdm/Xauthority : un fichier en 0600 root, dans un repertoire en
+# 0700 root. Le passer tel quel a runuser transmet un chemin que osmocom ne
+# peut ni ouvrir ni meme traverser. Le xhost nominatif ci-dessus suffit en
+# principe - l extension LocalUser autorise par UID, sans cookie - mais il ne
+# couvre pas les serveurs X ou elle est absente, et l echec se lit alors
+# "Authorization required, but no authorization protocol specified", ce qui
+# ne designe personne. Trois lignes de xauth ferment le sujet.
+SB_XAUTH="$PROFILE_ROOT/$SANDBOX_USER/.Xauthority"
+if [ -n "${DISPLAY:-}" ] && command -v xauth >/dev/null 2>&1; then
+    rm -f "$SB_XAUTH"
+    if xauth nextract - "$DISPLAY" 2>/dev/null \
+         | XAUTHORITY="$SB_XAUTH" xauth nmerge - 2>/dev/null \
+       && [ -s "$SB_XAUTH" ]; then
+        chown "$SANDBOX_USER:$SANDBOX_USER" "$SB_XAUTH" 2>/dev/null || true
+        chmod 0600 "$SB_XAUTH" 2>/dev/null || true
+        XAUTHORITY="$SB_XAUTH"
+    fi
+fi
+
 exec runuser -u "$SANDBOX_USER" -- env \
     DISPLAY="${DISPLAY:-}" \
     WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
@@ -3309,6 +3402,52 @@ submenu "Options (demarrage verbeux)" {
 GRUB
 echo -e "  ${GREEN}✓${NC} menu GRUB : defaut = lecture depuis le medium ; toram annonce ${CYAN}${RAM_TORAM_GB} Go${NC} de RAM"
 
+# ── /.disk/info : LE FICHIER SANS LEQUEL L'ISO S'ARRETE SUR "grub>" EN UEFI ──
+# Ce fichier vide d'apparence est ce que le GRUB signe d'Ubuntu CHERCHE pour se
+# reperer. gcdx64.efi.signed porte un disque memoire dont la configuration est,
+# mot pour mot :
+#
+#     if [ -z "$prefix" -o ! -e "$prefix" ]; then
+#         if ! search --file --set=root /.disk/info; then
+#             search --file --set=root /.disk/mini-info
+#         fi
+#         set prefix=($root)/boot/grub
+#     fi
+#     ... source $prefix/grub.cfg ... sinon source $cmdpath/grub.cfg
+#
+# Son prefixe compile vaut "/boot/grub" SANS peripherique : il se resout donc
+# sur le disque d'ou le firmware a charge le binaire, c'est-a-dire la partition
+# EFI (FAT) - qui ne contient pas /boot/grub. Le test "! -e $prefix" est vrai,
+# et tout repose alors sur la recherche de /.disk/info. Ce fichier n'existait
+# pas ici : la recherche echouait, $root restait sur la FAT, aucun grub.cfg
+# n'etait trouve, et GRUB rendait la main sur son invite "grub>".
+#
+# POURQUOI CA MARCHAIT EN MACHINE VIRTUELLE. VirtualBox demarre en BIOS par
+# defaut : c'est eltorito.img qui joue, construit ici avec -p /boot/grub sur
+# le lecteur de boot, et il trouve sa configuration sans rien chercher. Le
+# chemin UEFI - le seul qu'un portable recent emprunte - n'etait donc jamais
+# exerce. La panne n'etait pas "sur ce portable", elle etait sur TOUT UEFI.
+#
+# Les ISO Ubuntu et Debian posent ce meme fichier, pour cette meme raison.
+mkdir -p "$ISOROOT/.disk"
+printf 'osmo_egprs %s - live amd64 (%s)\n' "$VERSION" "$LABEL" > "$ISOROOT/.disk/info"
+cp "$ISOROOT/.disk/info" "$ISOROOT/.disk/mini-info"
+echo -e "  ${GREEN}✓${NC} ${CYAN}/.disk/info${NC} pose : le GRUB signe retrouve le medium en UEFI"
+
+# Les modules EFI, la ou $prefix les cherchera. Le menu genere plus haut n'use
+# que de commandes deja compilees dans le binaire signe (set, menuentry, linux,
+# initrd, submenu), mais grub-mkrescue les deposait, et leur absence transforme
+# le moindre "insmod" tape a l'invite en echec incomprehensible. 3 Mo.
+if [ -d /usr/lib/grub/x86_64-efi ]; then
+    mkdir -p "$ISOROOT/boot/grub/x86_64-efi"
+    cp -a /usr/lib/grub/x86_64-efi/*.mod /usr/lib/grub/x86_64-efi/*.lst \
+          "$ISOROOT/boot/grub/x86_64-efi/" 2>/dev/null || true
+    # ATTENTION : surtout PAS de grub.cfg dans ce repertoire. La configuration
+    # embarquee ci-dessus teste "$prefix/x86_64-efi/grub.cfg" AVANT
+    # "$prefix/grub.cfg" : un fichier ici detournerait le menu.
+    rm -f "$ISOROOT/boot/grub/x86_64-efi/grub.cfg"
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECURE BOOT - pourquoi cette etape ne peut pas rester grub-mkrescue
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3412,9 +3551,28 @@ if [ -n "$SB_SHIM" ] && [ -n "$SB_GRUB" ] && command -v mmd &>/dev/null; then
     mcopy -i "$SB_ESP" "$SB_GRUB" ::/EFI/BOOT/grubx64.efi
     [ -n "$SB_MM" ] && mcopy -i "$SB_ESP" "$SB_MM" ::/EFI/BOOT/mmx64.efi
 
-    # Stub : utile seulement si le repli grubx64 (prefixe /EFI/ubuntu) a joue.
-    printf 'search --set=root --file /boot/grub/grub.cfg\nset prefix=($root)/boot/grub\nconfigfile /boot/grub/grub.cfg\n' \
-        > "$WORK/esp-grub.cfg"
+    # Stub : DERNIER RECOURS de la configuration embarquee dans gcdx64 - elle
+    # finit par "source $cmdpath/grub.cfg", et $cmdpath est le repertoire d'ou
+    # le firmware a charge le binaire, donc /EFI/BOOT sur cette ESP. Il sert
+    # aussi tel quel au repli grubx64 (prefixe /EFI/ubuntu).
+    #
+    # "search --set=root" ne touche PAS a la variable quand il echoue : on vise
+    # donc une variable a nous, encore vide, pour pouvoir tester le resultat -
+    # et on le DIT quand rien n'est trouve, plutot que de rendre la main a une
+    # invite "grub>" que personne ne sait interpreter.
+    cat > "$WORK/esp-grub.cfg" <<'ESPCFG'
+search --no-floppy --file --set=osmodev /.disk/info
+if [ -z "$osmodev" ]; then
+    search --no-floppy --file --set=osmodev /boot/grub/grub.cfg
+fi
+if [ -n "$osmodev" ]; then
+    set root=$osmodev
+    set prefix=($osmodev)/boot/grub
+    configfile ($osmodev)/boot/grub/grub.cfg
+fi
+echo "GRUB : ni /.disk/info ni /boot/grub/grub.cfg trouves sur les disques vus."
+echo "Le medium n'est probablement pas lisible par le firmware a ce stade."
+ESPCFG
     mcopy -i "$SB_ESP" "$WORK/esp-grub.cfg" ::/EFI/ubuntu/grub.cfg
     mcopy -i "$SB_ESP" "$WORK/esp-grub.cfg" ::/EFI/BOOT/grub.cfg
 
