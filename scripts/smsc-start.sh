@@ -88,11 +88,15 @@ if [ ! -f "$RELAY_SCRIPT" ]; then
     echo -e "  ${RED}${RELAY_SCRIPT} introuvable${NC}"
     echo -e "  ${YELLOW}SMS inter-operateur desactive${NC}"
 else
+    # --node-id : la cle de routage de sms-routing.conf est le NOEUD, pas
+    # l'operateur (MSISDN = <noeud>00<operateur><rang>). Sans elle, le relais
+    # tient pour locaux les numeros des autres noeuds et n'emet jamais.
     python3 "$RELAY_SCRIPT" \
         --config "$ROUTING_CONF" \
         --port "$RELAY_PORT" \
         --mo-log "$MO_LOG" \
-        --operator-id "$OPERATOR_ID" &
+        --operator-id "$OPERATOR_ID" \
+        --node-id "${OSMO_WAN_NODE:-${WAN_NODE_ID:-1}}" &
     RELAY_PID=$!
     echo -e "  PID: ${CYAN}${RELAY_PID}${NC}"
 

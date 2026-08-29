@@ -57,6 +57,11 @@ HUB_IP=""
 # et effacerait l'identite SS7 posee juste avant. --regen retablit l'ancien
 # comportement pour qui veut repartir des gabarits.
 REGEN_GABARITS=0
+# --dsp : la chaine d'INSPECTION du Calypso. Eteinte par defaut - voir le bloc
+# « Outillage DSP » plus bas.
+DSP_MODE=0
+# --menu : demande les choix au lieu de les deviner. Voir le bloc « Menu » plus bas.
+MENU_MODE=0
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -85,6 +90,18 @@ Usage : ./start-direct.sh [options] [mode]
     --wan-id N          numero du noeud local (sinon deduit des IP locales)
     --wan-conf FICHIER  table a lire/ecrire (defaut /etc/osmo-wan.conf)
     --node N            numero de CE noeud, 1 a 9. DEDUIT AUTOMATIQUEMENT s'il
+    --menu              demande les choix au lieu de les deviner : profil,
+                        noeud, operateur, inter-STP, WAN, regeneration des
+                        configs, outillage DSP. Les valeurs proposees sont
+                        celles que le lanceur aurait prises tout seul, donc
+                        valider sans rien changer equivaut a ne pas passer
+                        l'option. Sans terminal, l'option est ignoree.
+    --dsp               outillage d'inspection du Calypso : pont I/Q
+                        calypso-ipc-device + osmo-trx-ipc, trace asm de QEMU et
+                        croisement mailbox x desassemblage DSP. ETEINT par
+                        defaut : ces trois-la servent a debugger le modele, pas
+                        a faire tourner un banc, et ils coutent un processus,
+                        deux fenetres et un journal qui grossit sans fin.
     --regen             regenere les configs depuis les gabarits (par defaut on
                         CONSERVE celles deja en place : run.sh les ecraserait)
                         est omis : environnement, puis /etc/osmo-role, puis la
@@ -150,6 +167,8 @@ while [ $# -gt 0 ]; do
         --air-mesh)     AIR_MESH=1 ;;
         --air-mesh=*)   AIR_MESH=1; AIRMESH_PORT="${1#*=}" ;;
         --regen)        REGEN_GABARITS=1 ;;
+        --dsp)          DSP_MODE=1 ;;
+        --menu)         MENU_MODE=1 ;;
         --op)           NODE_OP="${2:-1}"; shift ;;
         --op=*)         NODE_OP="${1#*=}" ;;
         --hub-ip)       HUB_IP="${2:-}"; shift ;;
@@ -379,6 +398,89 @@ if [ ! -x "$RUN_SH" ]; then
 fi
 say_end " OK " "$C_OK" "Resolution de run.sh" "$RUN_SH"
 RUN_ROOT="$(dirname "$RUN_SH")"
+# ══ --menu : on DEMANDE, au lieu de deviner ════════════════════════════════
+# Le lanceur resout tout seul le profil, le noeud, l'inter-STP, le WAN. C'est ce
+# qu'il faut pour une ISO qui demarre sans personne devant. Mais devant un banc,
+# la meme resolution silencieuse oblige a relire le script pour savoir ce qui a
+# ete choisi - et a relancer avec les bonnes options quand ce n'etait pas ca.
+#
+# Ce menu ne CHANGE aucune regle : il PRE-REMPLIT chaque question avec la valeur
+# que le lanceur aurait prise seul, et n'ecrit que ce que l'operateur modifie.
+# Valider tout sans rien toucher donne donc exactement le lancement par defaut.
+#
+# Il s'efface de lui-meme quand personne ne peut repondre (pas de terminal,
+# --dry-run, NO_MENU=1 que start.sh pose devant un conteneur) : une question
+# sans lecteur, c'est un lancement qui se fige sans le dire.
+menu_interactif() {
+    [ "${MENU_MODE:-0}" -eq 1 ] || return 0
+    [ "${NO_MENU:-0}" = "1" ] && return 0
+    [ "$DRY" -eq 1 ] && return 0
+    [ -t 0 ] || { printf "  %smenu%s       ignore : pas de terminal\n" "${C_DIM:-}" "${C_Z:-}"; return 0; }
+
+    local has_wt=0
+    command -v whiptail >/dev/null 2>&1 && has_wt=1
+
+    # Une question, une valeur par defaut, une reponse. Sans whiptail on
+    # retombe sur read : une ISO minimale n'a pas toujours newt.
+    _ask() {   # $1 = titre  $2 = question  $3 = defaut
+        local rep
+        if [ "$has_wt" -eq 1 ]; then
+            rep="$(whiptail --title "$1" --inputbox "$2" 11 70 "$3" 3>&1 1>&2 2>&3)" || rep="$3"
+        else
+            printf "  %s [%s] : " "$2" "$3" >&2
+            read -r rep </dev/tty || rep=""
+        fi
+        printf "%s" "${rep:-$3}"
+    }
+    _yesno() { # $1 = titre  $2 = question  $3 = defaut (0=oui 1=non)
+        if [ "$has_wt" -eq 1 ]; then
+            if [ "$3" -eq 0 ]; then whiptail --title "$1" --yesno "$2" 10 70; else
+                whiptail --title "$1" --defaultno --yesno "$2" 10 70; fi
+            return $?
+        fi
+        local d="o" rep
+        [ "$3" -eq 0 ] || d="n"
+        printf "  %s [%s] : " "$2" "$d" >&2
+        read -r rep </dev/tty || rep=""
+        case "${rep:-$d}" in [oOyY]*) return 0 ;; *) return 1 ;; esac
+    }
+
+    printf "  %smenu%s       --menu : les defauts proposes sont ceux du lancement automatique\n" \
+        "${C_DIM:-}" "${C_Z:-}"
+
+    PROFILE="$(_ask "Profil" \
+        "Profil de pile :\n  faketrx-qemu  coeur + BTS QEMU + BTS faketrx (defaut)\n  faketrx  qemu  virtphy  noproc  hw" \
+        "$PROFILE")"
+
+    # Le noeud est deja resolu plus haut (--node, environnement, /etc/osmo-role,
+    # table WAN) : on propose CE resultat, pas un 1 arbitraire.
+    NODE_ID="$(_ask "Noeud SS7" \
+        "Numero de ce noeud (1-9). Il fixe le point code 1.<noeud><op>.<role>,\nle routing context et les MSISDN <noeud>00<op><rang>." \
+        "${NODE_ID:-1}")"
+    NODE_OP="$(_ask "Operateur" "Operateur porte par ce noeud (1-9) :" "${NODE_OP:-1}")"
+    HUB_IP="$(_ask "Inter-STP" \
+        "Adresse du hub SS7 (vide = ne pas toucher au remote-ip en place) :" \
+        "${HUB_IP:-$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "${ROLE_FILE:-/etc/osmo-role}" 2>/dev/null)}")"
+
+    _yesno "WAN" "Monter le maillage WAN entre noeuds ?" "$([ "${WAN_MESH:-0}" -eq 1 ] && echo 0 || echo 1)" \
+        && WAN_MESH=1 || WAN_MESH=0
+
+    _yesno "Configurations" \
+        "Regenerer /etc/osmocom et /etc/asterisk depuis les gabarits ?\n\nLa pile sera ARRETEE, les fichiers sauvegardes, puis reecrits\navec l'identite du noeud ci-dessus." \
+        "$([ "${REGEN_GABARITS:-0}" -eq 1 ] && echo 0 || echo 1)" \
+        && REGEN_GABARITS=1 || REGEN_GABARITS=0
+
+    _yesno "Outillage DSP" \
+        "Activer l'inspection du Calypso ?\n\ncalypso-ipc-device + osmo-trx-ipc, trace asm, fenetre mailbox.\nUtile pour debugger le modele, inutile pour faire tourner un banc." \
+        "$([ "${DSP_MODE:-0}" -eq 1 ] && echo 0 || echo 1)" \
+        && DSP_MODE=1 || DSP_MODE=0
+
+    printf "  %smenu%s       profil=%s  noeud=%s  op=%s  hub=%s  wan=%s  regen=%s  dsp=%s\n" \
+        "${C_DIM:-}" "${C_Z:-}" "$PROFILE" "${NODE_ID:-?}" "$NODE_OP" \
+        "${HUB_IP:-inchange}" "$WAN_MESH" "$REGEN_GABARITS" "$DSP_MODE"
+}
+menu_interactif
+
 # Profil → mapping vers les profils attendus par run.sh
 case "$PROFILE" in
     faketrx-qemu|hybrid) CALYPSO_PROFILE=hybrid;   MODE=faketrx-qemu ;;
@@ -669,6 +771,46 @@ say_end " OK " "$C_OK" "Generation mobile MS#2 (faketrx)" "$MS2_CFG"
 export MOBILE_CFG_MS1="$MS1_CFG"
 export MOBILE_CFG_MS2="$MS2_CFG"
 export CALYPSO_MS2_CFG="$MS2_CFG"
+
+# --- Outillage DSP (--dsp) : ETEINT par defaut --------------------------------
+# Trois choses n'ont rien a faire dans un lancement ordinaire. Elles servent a
+# regarder DEDANS le modele Calypso, pas a faire fonctionner un banc :
+#
+#   calypso-ipc-device + osmo-trx-ipc   le pont I/Q entre QEMU et le
+#       transceiver. Un processus de plus, une memoire partagee, un socket
+#       maitre - et quand il manque, osmo-trx-ipc sort en boucle sur
+#       « socket maitre IPC absent », ce qui se lit comme une panne radio.
+#   la trace asm de QEMU (CALYPSO_ASM)  un journal qui grossit sans fin, dans
+#       un anneau qu'il faut faire tourner. `in_asm` ne dit meme pas ce qui a
+#       ete EXECUTE, seulement ce qui a ete traduit.
+#   le croisement mailbox x desassemblage (CALYPSO_MAILBOX)  une fenetre de
+#       plus, alimentee par un python relance toutes les deux secondes.
+#
+# On les eteint donc explicitement, plutot que de compter sur leurs defauts :
+# ces variables sont EXPORTEES et survivent a un run precedent dans le meme
+# shell - un banc « propre » heritait ainsi d'une trace asm allumee la veille.
+#
+# ⚠ EN COUPANT LE PONT I/Q on coupe la chaine IQ du profil hybride. C'est le
+# meme choix que fait CALYPSO_BRIDGE=pont juste en dessous, qui remplace cette
+# chaine par le pont maison. Si le banc a besoin de la chaine d'origine,
+# c'est --dsp qu'il faut passer.
+if [ "${DSP_MODE:-0}" -eq 1 ]; then
+    printf '  %sDSP%s        outillage d inspection ACTIF (--dsp) : ipc-device, trx-ipc, asm, mailbox\n' \
+        "${C_DIM:-}" "${C_Z:-}"
+    # On n'IMPOSE rien : --dsp rend la main aux reglages de l'appelant et aux
+    # defauts des modules. Poser CALYPSO_ASM ici figerait une taille d'anneau
+    # que personne n'a demandee.
+    : "${CALYPSO_ASM:=8}"
+    export CALYPSO_ASM
+    export CALYPSO_MAILBOX="${CALYPSO_MAILBOX:-1}"
+else
+    export CALYPSO_SKIP_IPC_DEVICE=1
+    export CALYPSO_SKIP_TRX_IPC=1
+    export CALYPSO_ASM=0
+    export CALYPSO_MAILBOX=0
+    printf '  %sDSP%s        outillage d inspection eteint (--dsp pour ipc-device, asm, mailbox)\n' \
+        "${C_DIM:-}" "${C_Z:-}"
+fi
 
 # --- Mode PONT TRX (CALYPSO_BRIDGE=pont) : le pont maison REMPLACE la chaine IQ --
 # Le pont (/opt/GSM/pont/pont.py) se presente comme transceiver TRX-UDP a osmo-bts-trx
@@ -1076,13 +1218,154 @@ ask_node_identity() {
 }
 ask_node_identity
 
+# ══ La regeneration des configurations, POUR DE VRAI ═══════════════════════
+# CE QUE --regen FAISAIT JUSQU'ICI : RIEN.
+# Il levait OSMO_NO_REGEN et comptait sur run_modules/08-gabarits.sh pour
+# rejouer apply_config_templates au demarrage. Ce module N'EXISTE PAS - il n'a
+# jamais existe dans run_modules/ - et run.sh ne genere aucune configuration.
+# Le message « regeneration demandee » s'affichait, la pile s'arretait, et pas
+# un octet de /etc/osmocom ne changeait. Le seul effet reel de l'option etait
+# d'arreter le banc.
+#
+# CE QU'IL FAIT MAINTENANT : la meme chose que start.sh cote docker, et que
+# build-iso.sh a la construction - c'est-a-dire la sequence complete :
+#
+#   1. apply_config_templates      substitue configs/*.cfg et *.conf dans un
+#                                  repertoire NEUF (jamais en place : une
+#                                  substitution a moitie faite sur /etc/osmocom
+#                                  laisse un banc qui ne demarre plus) ;
+#   2. apply_native_post_patches   la recette NATIVE de l'ISO - sms-routing par
+#                                  MS reel, SGSN/MSC sur l'adresse locale du
+#                                  coeur, run.sh degraisse ;
+#   3. install_configs_native      pose le resultat dans /etc/osmocom et
+#                                  /etc/asterisk.
+#
+# EN SOUS-SHELL. lib/gabarits.sh charge globals.conf et pose une trentaine de
+# variables - MCC, ARFCN, HOST_IP, N_OPERATORS, KI... - qui portent ici un tout
+# autre sens (HOST_IP est l'adresse du banc pour le lanceur, l'adresse interne
+# du coeur pour les gabarits). Les laisser fuir, c'est changer le plan radio
+# d'un run parce qu'on a demande une regeneration.
+#
+#   $1 numero de noeud   $2 numero d'operateur   $3 inter-STP (peut etre vide)
+regen_configs_natif() {
+    local node="$1" op="$2" hub="$3"
+    local tmp rc=0
+
+    # ── Le plan NATIF, celui de build-iso.sh, et non celui de docker ────────
+    # 127.0.0.2 (__CONTAINER_IP__) porte le coeur : GGSN, SGSN, UPF, la nsvc du
+    # BSC. Une adresse de boucle locale existe TOUJOURS et est prete avant tout
+    # service ; une adresse de carte peut manquer au moment ou osmo-ggsn se lie,
+    # et le bind echoue sans rapport visible avec le reseau.
+    # 127.0.0.1 (__GATEWAY_IP__) recoit le gsmtap, la ou tshark capte deja.
+    local core_ip="${OSMO_NATIVE_CORE_IP:-127.0.0.2}"
+    local gw_ip="${OSMO_NATIVE_GW_IP:-127.0.0.1}"
+
+    # ── L'identite SUIT LE NOEUD ────────────────────────────────────────────
+    # 1.<noeud><op>.<role>, le plan de network/set-node-id.sh et de build-iso.sh
+    # --node. Sans le noeud dans le point code, trois machines attachees au meme
+    # hub y presentent trois fois 1.11.2 : un point code est une ADRESSE, et
+    # deux equipements qui partagent la leur donnent du routage faux, silencieux.
+    # Le routing context suit la meme regle : c'est lui que le hub lit pour
+    # distinguer les AS, et la formule locale (op*100+50) rend la meme valeur
+    # sur tous les noeuds.
+    local mid="${node}${op}"
+    local pc_msc="1.${mid}.1" pc_stp="1.${mid}.2" pc_bsc="1.${mid}.3"
+    local shut="shutdown"
+    [ -n "$hub" ] && shut="no shutdown"
+
+    # ── Le PLMN : celui de la machine, pas celui de la table ────────────────
+    # Relu dans osmo-msc.cfg installe. Reprendre les defauts de globals.conf
+    # renommerait le reseau a chaque regeneration - OsmoDirect redevenait
+    # OsmoQEMU - et un mobile deja provisionne ne reconnait plus sa cellule.
+    local cfgdir="${OSMOCOM_CFG:-/etc/osmocom}"
+    local mcc mnc opname
+    mcc="$(awk '/^ *network country code /{print $4; exit}' "$cfgdir/osmo-msc.cfg" 2>/dev/null)"
+    mnc="$(awk '/^ *mobile network code /{print $4; exit}'  "$cfgdir/osmo-msc.cfg" 2>/dev/null)"
+    opname="$(awk '/^ *short name /{print $3; exit}'        "$cfgdir/osmo-msc.cfg" 2>/dev/null)"
+    [ -n "$mcc" ]    || mcc="${MCC:-001}"
+    [ -n "$mnc" ]    || mnc="${MNC:-01}"
+    [ -n "$opname" ] || opname="${OP_NAME:-OsmoGSM}"
+
+    # Le nombre de MS vient de coeur.env, ecrit par build-iso.sh : c'est lui qui
+    # dit combien d'abonnes le HLR provisionne, donc combien de routes SMS il
+    # faut. Au-dela, le relais rend "No route for destination".
+    local n_ms="${N_MS:-}"
+    if [ -z "$n_ms" ] && [ -r "$cfgdir/coeur.env" ]; then
+        n_ms="$(awk -F'[:=}]' '/N_MS:=/{print $3; exit}' "$cfgdir/coeur.env" 2>/dev/null)"
+    fi
+    [ -n "$n_ms" ] || n_ms=2
+
+    printf '  %splan natif%s coeur %s  gsmtap %s  PC %s  rctx %s  PLMN %s-%s (%s)  %s MS\n' \
+        "${C_DIM:-}" "${C_Z:-}" "$core_ip" "$gw_ip" "$pc_stp" \
+        "$(( node * 1000 + op * 100 + 50 ))" "$mcc" "$mnc" "$opname" "$n_ms"
+
+    tmp="$(mktemp -d)" || return 1
+
+    # ── La sauvegarde, AVANT d'ecrire ───────────────────────────────────────
+    # Une regeneration ecrase des fichiers que quelqu'un a pu retoucher a la
+    # main sur le banc. Qu'elle soit demandee ne veut pas dire qu'on accepte de
+    # perdre l'etat d'avant sans trace.
+    local sav="${LOG_DIR:-/tmp}/osmocom-avant-regen-$(date +%Y%m%d-%H%M%S).tar.gz"
+    tar czf "$sav" -C / etc/osmocom etc/asterisk 2>/dev/null && \
+        printf '  %ssauvegarde%s %s\n' "${C_DIM:-}" "${C_Z:-}" "$sav"
+
+    (
+        cd "$HERE" || exit 1
+        # AVANT de sourcer. lib/gabarits.sh fige ENCRYPTION a "a5 0" et HOST_IP
+        # a 127.0.0.1 par ":=" des qu'ils sont vides, et gc_load tient ensuite
+        # ces valeurs pour un choix de l'appelant : le banc repartait en clair
+        # apres un --regen, sans un mot.
+        : "${ENCRYPTION:=a5 1}"
+        HOST_IP="$core_ip"
+        # Le routing context et l'adresse source de l'ASP : les deux surcharges
+        # que build-iso.sh pose pour un noeud de WAN. 0.0.0.0 parce que
+        # l'adresse du noeud vient du DHCP et n'est pas forcement montee quand
+        # osmo-stp demarre - se lier a une adresse absente echoue au lancement.
+        export RCTX_INTER_OVERRIDE=$(( node * 1000 + op * 100 + 50 ))
+        export INTER_LOCAL_IP_OVERRIDE="0.0.0.0"
+        # _apply_node_ss7_addressing (appele en fin de apply_config_templates)
+        # ne rejoue set-node-id.sh que s'il sait QUI il sert, et il ne le lit
+        # que la.
+        export OSMO_ROLE=operator OSMO_WAN_NODE="$node"
+        [ -n "$hub" ] && export OSMO_HUB_IP="$hub"
+        unset OSMO_NO_REGEN
+
+        # shellcheck source=lib/gabarits.sh
+        . "$HERE/lib/gabarits.sh" || exit 1
+
+        apply_config_templates "$tmp" \
+            "$core_ip" "$gw_ip" \
+            "$op" "$pc_msc" "$pc_stp" "$pc_bsc" \
+            "$mcc" "$mnc" "$opname" \
+            "${hub:-127.0.0.1}" "$shut" "1" || exit 1
+
+        # Le noeud et la table WAN : c'est de la table que sms-routing.conf
+        # tire l'adresse de chaque noeud, et du noeud qu'il tire les MSISDN
+        # (<noeud>00<operateur><rang>).
+        apply_native_post_patches "$tmp" "$op" "$n_ms" "$core_ip" \
+            "$node" "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" || exit 1
+
+        # ── bb/ RETIRE, et ce n'est pas un oubli ───────────────────────────
+        # install_configs_native poserait $tmp/bb/mobile.cfg par-dessus
+        # /root/.osmocom/bb/mobile.cfg. Or ce fichier a deja ete ECRIT plus haut
+        # par generate_mobile_cfg, qui seul fixe le port VTY, les sockets L1CTL
+        # et l'ARFCN de CHAQUE mobile. Le gabarit, lui, est fige sur l'operateur
+        # 1 : le remettre ici rendait les deux mobiles au meme ARFCN et a la
+        # meme VTY, et le second restait muet pour toujours.
+        rm -rf "$tmp/bb"
+
+        install_configs_native "$tmp" "" || exit 1
+    ) || rc=1
+
+    rm -rf "$tmp"
+    return "$rc"
+}
+
 # ── Les gabarits : conserves, sauf --regen ──────────────────────────────────
-# run.sh appelle run_modules/08-gabarits.sh, qui rejoue apply_config_templates
-# et REGENERE tout /etc/osmocom depuis les gabarits. Dans un conteneur, ce que
-# start.sh vient d'y ecrire - point codes du noeud, inter-STP, ASP actif -
-# disparait alors au profit des valeurs par defaut. C'est ce qui rendait
-# l'identite SS7 si volatile : le fichier etait juste, puis faux 80 secondes
-# plus tard, sans que rien ne l'annonce.
+# Par defaut on ne touche a rien : dans un conteneur, ce que start.sh vient
+# d'ecrire - point codes du noeud, inter-STP, ASP actif - ne doit pas etre
+# remplace par les valeurs des gabarits, sans quoi l'identite SS7 est juste
+# puis fausse 80 secondes plus tard, sans que rien ne l'annonce.
 if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
     unset OSMO_NO_REGEN
     printf '  %sgabarits%s   regeneration demandee (--regen)\n' "${C_DIM:-}" "${C_Z:-}"
@@ -1107,39 +1390,84 @@ if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
                 say_end " OK " "$C_OK" "python3 restants termines (killall)"
         fi
     fi
-    # generate_configs.sh ne retablit l'adressage SS7 apres regeneration que
-    # s'il sait QUI il sert, et il ne le lit que dans l'environnement
-    # (OSMO_ROLE / OSMO_WAN_NODE). NODE_ID n'est qu'une variable locale du
-    # lanceur : sans ces exports, --regen rendait tous les noeuds au plan du
-    # gabarit - point-code 1.1.2 pour tout le monde, ASP vers 127.0.0.1 - et
-    # l'interco mourait au moment precis ou l'on demandait des configs neuves.
-    # On n'exporte que NODE_ID, sans repli sur WAN_NODE_ID. Partout ailleurs
-    # - ligne 800 ici, generate_configs.sh:349 - OSMO_WAN_NODE prime sur
-    # WAN_NODE_ID ; un repli en sens inverse ECRIRAIT la valeur perdante dans
-    # OSMO_WAN_NODE. Un --wan-id hors de 1-9 (rejete par detect_node_id, qui
-    # laisse alors NODE_ID vide) suffisait a effacer un OSMO_WAN_NODE valide
-    # et a faire sortir le lanceur en exit 2 sur son propre controle.
-    if [ -n "${NODE_ID:-}" ]; then
-        export OSMO_ROLE=operator
-        export OSMO_WAN_NODE="$NODE_ID"
-        [ -n "$HUB_IP" ] && export OSMO_HUB_IP="$HUB_IP"
+
+    # ── LE NOEUD, PAR DEFAUT 1 ──────────────────────────────────────────────
+    # Une regeneration produit une identite COMPLETE, jamais un plan « sans
+    # noeud ». Sans numero, apply_config_templates rendait le plan du gabarit -
+    # point-code 1.1.2 pour toute machine - et deux noeuds du meme banc se
+    # retrouvaient a la meme adresse SS7. On numerote donc toujours : le noeud
+    # resolu plus haut (--node, l'environnement, /etc/osmo-role, la table WAN),
+    # et 1 quand il n'y en a aucun. Les configurations s'incrementent alors
+    # avec lui : PC 1.<noeud><op>.<role>, routing context <noeud>*1000+..., et
+    # le segment prive 192.168.<noeud+1>.x.
+    REGEN_NODE="${NODE_ID:-1}"
+    if ! [[ "$REGEN_NODE" =~ ^[1-9]$ ]]; then
+        say_end " KO " "$C_KO" "--regen" "numero de noeud invalide : $REGEN_NODE (1 a 9)"
+        exit 2
     fi
+    REGEN_OP="${NODE_OP:-1}"
+    if ! [[ "$REGEN_OP" =~ ^[1-9]$ ]]; then
+        say_end " KO " "$C_KO" "--regen" "numero d'operateur invalide : $REGEN_OP (1 a 9)"
+        exit 2
+    fi
+    # cached_hub est LOCAL a ask_node_identity : le lire ici rendait le vide et,
+    # sans inter-STP, l'ASP repartait en shutdown apres chaque regeneration.
+    REGEN_HUB="${HUB_IP:-${OSMO_HUB_IP:-}}"
+    [ -n "$REGEN_HUB" ] || REGEN_HUB="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' \
+        "${ROLE_FILE:-/etc/osmo-role}" 2>/dev/null)"
+
+    say_begin "Regeneration des configurations (noeud $REGEN_NODE, operateur $REGEN_OP)"
+    if [ "$DRY" -eq 1 ]; then
+        say_end " -- " "$C_DIM" "Regeneration des configurations" "dry-run"
+    elif regen_configs_natif "$REGEN_NODE" "$REGEN_OP" "$REGEN_HUB"; then
+        say_end " OK " "$C_OK" "Regeneration des configurations" \
+            "/etc/osmocom + /etc/asterisk  ·  PC 1.${REGEN_NODE}${REGEN_OP}.x"
+    else
+        say_end " KO " "$C_KO" "Regeneration des configurations" \
+            "echec - les fichiers d'avant sont dans ${LOG_DIR:-/tmp}"
+        exit 1
+    fi
+
+    # ── LE HLR SUIT LA NUMEROTATION ─────────────────────────────────────────
+    # Une regeneration change les MSISDN (<noeud>00<operateur><rang>) : ceux du
+    # HLR datent du plan precedent. L'IMSI, lui, ne bouge pas - il ne porte pas
+    # le noeud, precisement pour que le Ki et l'authentification restent
+    # valables. L'etape d'abonnes ne peut donc pas se contenter de constater
+    # que l'IMSI existe : elle relit desormais AUSSI le MSISDN
+    # (run_modules/21-abonnes-hlr.sh, mod_abonnes_hlr_status) et rejoue
+    # "subscriber ... update msisdn" quand il a change.
+    #
+    # On la force en plus ici : la pile vient d'etre arretee, le HLR repartira
+    # avec run.sh, et l'etape doit s'executer meme si un cache d'etat la croit
+    # deja faite. Sans ca, l'abonne s'attachait (IMSI connu) mais restait
+    # injoignable, sans qu'une ligne ne dise que son numero avait change.
+    FORCE=1
+    printf '  %sHLR%s        abonnes a reapprovisionner : MSISDN %s..%s\n' \
+        "${C_DIM:-}" "${C_Z:-}" \
+        "$(( REGEN_NODE * 100000 + REGEN_OP * 100 + 1 ))" \
+        "$(( REGEN_NODE * 100000 + REGEN_OP * 100 + ${N_MS:-2} ))"
+
+    # Le noeud retenu vaut pour la suite du lancement : c'est celui qui vient
+    # d'etre ecrit dans les fichiers. Le laisser vide ici, c'est laisser la
+    # section « Identite SS7 » plus bas repartir sur une autre resolution et
+    # reecrire par-dessus une identite differente de celle qu'on vient de poser.
+    NODE_ID="$REGEN_NODE"
+    NODE_OP="$REGEN_OP"
+    [ -n "$REGEN_HUB" ] && HUB_IP="${HUB_IP:-$REGEN_HUB}"
+    export OSMO_ROLE=operator
+    export OSMO_WAN_NODE="$NODE_ID"
+    [ -n "$HUB_IP" ] && export OSMO_HUB_IP="$HUB_IP"
 elif [ "${RUNTIME_ENV:-native}" = "docker" ]; then
     # DANS UN CONTENEUR seulement. Les configs y sont deja ecrites par start.sh,
     # avec l'identite du noeud : les regenerer les remplace par les valeurs des
     # gabarits, et l'interco meurt.
     export OSMO_NO_REGEN=1
 else
-    # SUR UNE VM, au contraire, le module des gabarits EST le generateur : c'est
-    # lui qui applique le chiffrement, les MCC/MNC, l'ARFCN. L'en empecher
-    # laissait une configuration incomplete, et le module echouait sur ce qu'il
-    # venait lui-meme de ne pas ecrire ("le chiffrement demande n'est pas dans
-    # la configuration installee").
-    #
-    # L'identite SS7 survit malgre la regeneration : ces variables la
-    # retablissent a la fin de apply_config_templates (voir generate_configs.sh,
-    # _apply_node_ss7_addressing).
-    unset OSMO_NO_REGEN
+    # SUR UNE VM sans --regen : on CONSERVE ce qui est en place. C'est l'ISO qui
+    # a genere ces fichiers a la construction, avec la meme recette que
+    # regen_configs_natif ; les refaire a chaque demarrage ne changerait rien et
+    # ecraserait toute retouche faite sur le banc. --regen est la pour ca, et il
+    # le dit.
     if [ -n "$NODE_ID" ]; then
         export OSMO_ROLE=operator
         export OSMO_WAN_NODE="$NODE_ID"
@@ -1442,6 +1770,32 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
 fi
 
 # --- 8. lancement : exec run.sh -----------------------------------------------
+# ── LES ADRESSES QUE LES CONFIGS RECLAMENT DOIVENT EXISTER ──────────────────
+# Un demon qui se lie a une adresse absente ne demarre pas, et il le dit dans
+# SON journal, pas dans le notre :
+#     osmo-ggsn : « gtp bind-ip 192.168.2.10 » -> adresse introuvable localement
+#     osmo-sgsn : « listen 192.168.2.10 23000 » -> idem
+# Ces adresses viennent du generateur de gabarits (op_private_ip), pas du
+# reseau : rien ne les pose. Elles etaient figees dans 20-dhcp.network cote ISO,
+# donc absentes de toute machine montee autrement - et la panne se lisait comme
+# un defaut de coeur paquet.
+#
+# osmo-ip-plan.sh les EXTRAIT des configs plutot que de les recalculer (le plan
+# peut venir d'un autre generateur que le notre), choisit la carte qui fournit
+# reellement Internet, et retombe sur la boucle locale quand aucune ne mene
+# nulle part. Il ne fait rien dans un conteneur : la, c'est docker qui adresse.
+if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
+    IPPLAN="$HERE/network/osmo-ip-plan.sh"
+    if [ -r "$IPPLAN" ]; then
+        say_begin "Adresses privees du noeud"
+        _ipout="$(OSMOCOM_CFG="${OSMOCOM_CFG:-/etc/osmocom}" \
+                  OSMO_WAN_NODE="${NODE_ID:-${OSMO_WAN_NODE:-}}" \
+                  bash "$IPPLAN" --apply 2>&1)" || true
+        say_end " OK " "$C_OK" "Adresses privees du noeud" \
+            "$(printf '%s' "$_ipout" | tail -1 | sed 's/^osmo-ip-plan : //')"
+    fi
+fi
+
 say_begin "Transmission a run.sh"
 if [ $DRY -eq 1 ]; then
     say_end " -- " "$C_DIM" "Transmission a run.sh" "dry-run"

@@ -145,9 +145,40 @@ HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 # hub. Le decalage d'un rang laisse le .1 au LAN et commence les operateurs a
 # 192.168.2.0/24.
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
-op_private_ip()   { echo "192.168.$(($1 + 1)).10"; }
-op_private_gw()   { echo "192.168.$(($1 + 1)).1"; }
-op_private_net()  { echo "192.168.$(($1 + 1)).0/24"; }
+# ── L'INDEX DU SEGMENT PRIVE : LE NOEUD OU L'OPERATEUR, SELON L'HOTE ────────
+# 192.168.<index+1>.x, et tout le desaccord tenait a « index ».
+#
+#   DOCKER   un hote porte N conteneurs operateurs, chacun dans son netns. Ce
+#            qui les distingue est le NUMERO D'OPERATEUR ; le noeud, lui, est
+#            commun a tous les conteneurs de la machine. index = operateur.
+#   VM/NATIF la machine EST le noeud et ne porte qu'un operateur. Ce qui la
+#            distingue de ses voisines est le NUMERO DE NOEUD. index = noeud.
+#
+# Sans cette distinction, qemu-src/run_modules/08-gabarits.sh appelait
+# op_private_ip($OPERATOR_ID) et ecrivait 192.168.2.10 dans osmo-ggsn.cfg sur
+# TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
+# 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se
+# voyait ; sur le noeud 2, le GGSN se liait a l'adresse du noeud 1.
+# La bascule est ici, une fois, et les deux jumelles (start.sh, lib/gabarits.sh)
+# en heritent.
+_osmo_priv_index() {
+    local op="${1:-1}"
+    # Meme detection que start-direct.sh : le couple /.dockerenv +
+    # /etc/docker-entrypoint-cmd identifie un conteneur DE CE DEPOT ; le cgroup
+    # sert de repli pour un conteneur quelconque.
+    if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
+        printf '%s' "$op"; return
+    fi
+    local n="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
+    [ -n "$n" ] || n="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' \
+                        "${ROLE_FILE:-/etc/osmo-role}" 2>/dev/null)"
+    [ -n "$n" ] || n="$(sed -n 's/^PLAN_NODE=//p' "${OSMOCOM_CFG:-/etc/osmocom}/radio-plan.env" 2>/dev/null | tail -1)"
+    case "$n" in [1-9]) ;; *) n=1 ;; esac
+    printf '%s' "$n"
+}
+op_private_ip()   { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).10"; }
+op_private_gw()   { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).1"; }
+op_private_net()  { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).0/24"; }
 op_container()    { echo "osmo-operator-$1"; }
 op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
@@ -491,17 +522,22 @@ EOF
 generate_extensions_interop_out() {
     local op_id=$1
     local n_operators=$2
+    # Le prefixe porte le NOEUD : MSISDN = <noeud>00<operateur><rang>. Fige a
+    # "600", le motif n'accrochait plus rien des que le numero commencait par le
+    # numero de noeud, et les appels inter-operateurs sortaient en Congestion
+    # sans qu'une ligne ne designe le motif.
+    local _pfx; _pfx="$(osmo_msisdn_pfx "$(osmo_node_id)")"
     cat <<'EOF'
 [interop_out]
 
 EOF
-    # Un seul motif : les MSISDN font six chiffres, 600<operateur><rang>. Les
+    # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>.
     # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
     # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
     for remote_op in $(seq 1 "$n_operators"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
-exten => _600${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
+exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
  same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
  same => n,Congestion()
  same => n,Hangup()
@@ -537,7 +573,7 @@ _generate_sms_routing_conf_fallback() {
     done
     printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        for ms in 1 2; do printf '%s = %s\n' "$(( 600000 + i * 100 + ms ))" "$i"; done   # MSISDN exacts 600000+op*100+ms (600101,600102,...) - PAS de concatenation
+        for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done   # MSISDN exacts <noeud>00<op><ms> - PAS de concatenation
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
@@ -593,7 +629,7 @@ _GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate
 force_update_trees() {
     local c=$1
     echo -e "  ${GREEN}[*] Mise a jour forcee des depots (avant run.sh)...${NC}"
-    for repo in /opt/GSM/qemu-src /opt/GSM/osmo_egprs /opt/osmo-egprs-web; do
+    for repo in /opt/GSM/qemu-src /opt/GSM/osmo_egprs /opt/GSM/osmo-egprs-web; do
         if ! docker exec "$c" test -d "$repo/.git" 2>/dev/null; then
             echo -e "    ${YELLOW}$repo : pas un depot git - ignore${NC}"
             continue
@@ -1426,14 +1462,16 @@ start_bridge_mode() {
         for ms_idx in $(seq 1 "$n_ms"); do
             local msin; msin=$(printf '%04d%06d' "${op_id}" "${ms_idx}")
             local imsi="${mcc}${mnc}${msin}"
-            # MSISDN a SIX chiffres : 600000 + operateur * 100 + rang.
+            # MSISDN a SIX chiffres : <noeud>00<operateur><rang>.
             # L'ancien plan, op * 10000 + rang, commencait a 10001 - cinq
             # chiffres dont le premier EST le numero d'operateur, ce qui melait
             # le plan d'abonnes au plan de composition (les services du dialplan
             # sont a 100, 200, 500, 600, 700) et obligeait chaque motif local a
-            # dependre de l'operateur. Ici le prefixe 600 est commun, l'operateur
-            # tient sur le 4e chiffre : 600101, 600102, 600201, 600202.
-            local msisdn=$(( 600000 + op_id * 100 + ms_idx ))
+            # dependre de l'operateur. Le prefixe 600 qui l'a remplace etait
+            # commun a TOUTES les machines : deux noeuds y revendiquaient les
+            # memes numeros. Le premier chiffre porte donc le noeud, et le
+            # routage se lit dans le numero : 100101, 100102, 200101...
+            local msisdn; msisdn=$(osmo_msisdn "$(osmo_node_id)" "$op_id" "$ms_idx")
             local ki; ki=$(printf '00112233445566778899aabbccdd%02x%02x' "${ms_idx}" "${op_id}")
             echo "${op_id}:${ms_idx}:${imsi}:${msisdn}:${ki}" >> "$all_subscribers_file"
             printf '%s;%s;%s;%s;%s;%s;%s;%s %s;%s\n' \

@@ -755,9 +755,27 @@ def main():
     parser.add_argument('--port', '-p', type=int, default=RELAY_TCP_PORT)
     parser.add_argument('--mo-log')
     parser.add_argument('--operator-id', default=os.environ.get('OPERATOR_ID', '1'))
+    # --node-id : LA CLE DE ROUTAGE, et elle n'est pas l'operateur.
+    #
+    # local_operator_id etait ecrase par --operator-id juste apres la lecture du
+    # fichier, donc la cle du relais valait toujours le numero d'OPERATEUR. Avec
+    # des MSISDN qui commencent par le noeud (<noeud>00<op><ms>), sms-routing.conf
+    # est desormais indexe par NOEUD : l'operateur 1 du noeud 1 et celui du noeud
+    # 2 portaient sinon la meme cle "1", et chacun tenait les numeros de l'autre
+    # pour locaux - un SMS interop n'etait jamais emis, il etait injecte dans le
+    # HLR local qui ne connait pas l'abonne.
+    #
+    # L'operateur, lui, garde ce qui le concerne : la SC-address (le numero du
+    # centre SMS, qu'un abonne voit) et le chemin du journal MO. Les changer
+    # renommerait un fichier que d'autres outils suivent, et un numero que des
+    # mobiles ont deja en memoire.
+    parser.add_argument('--node-id',
+                        default=os.environ.get('OSMO_WAN_NODE',
+                                os.environ.get('WAN_NODE_ID', '')))
     args = parser.parse_args()
 
     op_id = args.operator_id
+    node_id = args.node_id if args.node_id not in ('', '0') else op_id
     sc_address = f"1999001{op_id}444"
     mo_log = args.mo_log or f"/var/log/osmocom/mo-sms-op{op_id}.log"
 
@@ -770,12 +788,13 @@ def main():
 
     logging.info(f"SMS Interop Relay starting")
     logging.info(f"  Operator   : {op_id}")
+    logging.info(f"  Node       : {node_id}   (cle de routage dans sms-routing.conf)")
     logging.info(f"  SC-address : {sc_address}")
     logging.info(f"  MO log     : {mo_log}")
     logging.info(f"  TCP port   : {args.port}")
 
     routing = RoutingTable(args.config)
-    routing.local_operator_id = op_id
+    routing.local_operator_id = node_id
 
     logging.info(f"  Operators  : {routing.operators}")
     logging.info(f"  Routes     : {len(routing.routes)} entries")

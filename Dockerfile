@@ -535,7 +535,14 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 # et surtout PAS la ou Dockerfile.run va faire son `git pull`. Deux arbres, deux
 # HEAD, un seul utilise. /opt/GSM/osmo_egprs est le chemin nominal, teste en
 # premier par build-iso.sh l.964 et update.sh l.329.
-RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && cd /opt/GSM/osmo_egprs && git checkout RELEASE-0.1
+# ⚠️ `git checkout RELEASE-0.1` TOUT COURT NE MARCHE PAS ICI : le depot porte
+# AUSSI un tag nomme RELEASE-0.1 (457ff2e, la pointe de main). Git resout
+# refs/tags/ AVANT le DWIM vers refs/remotes/origin/, donc on atterrissait sur
+# le TAG en HEAD detache — pas sur la branche (2ca6e24) — et le `git pull` de
+# Dockerfile.run l.125 mourait sur « You are not currently on a branch ».
+# `-B <branche> origin/<branche>` est explicite : jamais ambigu, et pose le
+# suivi amont dont le pull a besoin.
+RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && cd /opt/GSM/osmo_egprs && git checkout -B RELEASE-0.1 origin/RELEASE-0.1
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \
@@ -567,10 +574,19 @@ RUN update-alternatives --set gcc /usr/bin/gcc-11
 # Place EN FIN DE FICHIER a dessein : aucune etape du build ne depend de Node,
 # et la fin de fichier preserve le cache des couches longues de compilation.
 # L'ORDRE INTERNE DE CETTE CHAINE EST CONTRAINT — voir les ⚠️ ci-dessous.
-RUN if [ ! -d "/opt/osmo-egprs-web/" ]; then git clone https://github.com/bbaranoff/osmo-egprs-web /opt/osmo-egprs-web; fi
+# /opt/GSM et pas /opt : c'est /opt/GSM que l'ISO recupere en bloc
+# (docker cp "$CID:/opt/GSM"). Le dashboard vivait a cote, dans /opt, et devait
+# donc etre reclone une seconde fois a la construction de l'image - deux
+# sources pour le meme depot, qui n'avancaient pas ensemble.
+RUN if [ ! -d "/opt/GSM/osmo-egprs-web/" ]; then \
+      mkdir -p /opt/GSM && \
+      git clone https://github.com/bbaranoff/osmo-egprs-web /opt/GSM/osmo-egprs-web; \
+    fi
+# Compatibilite : tout ce qui nomme encore l'ancien chemin le retrouve.
+RUN ln -sfn /opt/GSM/osmo-egprs-web /opt/osmo-egprs-web
 
 # ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
-# Le dashboard /opt/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
+# Le dashboard /opt/GSM/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
 # local, pas de docker) et est servi sur :8080. Le DÉMARRAGE est géré par
 # start-direct.sh (`systemctl restart osmo-egprs-web`) — ici on ne fait
 # qu'INSTALLER le runtime + les dépendances + le unit (enable au boot).
@@ -590,17 +606,17 @@ RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-lin
     node --version
 # Dépendances JS (ws) — node_modules est versionné dans le repo, on (re)installe
 # pour garantir la cohérence ; non-fatal si déjà présent / réseau absent.
-RUN cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
+RUN cd /opt/GSM/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
 # Unit systemd (fichier versionné dans le repo osmo-nitb-for-calypso, source unique).
 # Le START reste géré par start-direct.sh (`systemctl restart osmo-egprs-web`).
 COPY services/osmo-egprs-web.service /etc/systemd/system/osmo-egprs-web.service
 RUN ln -sf /etc/systemd/system/osmo-egprs-web.service \
         /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service
 
-RUN cd /opt/osmo-egprs-web && git pull
+RUN cd /opt/GSM/osmo-egprs-web && git pull
 
 # ── Dashboard web : install-web-service.sh joue AU BOOT ───────────────────────
-# [2026-08-12] Remplace le geste manuel `bash /opt/osmo-egprs-web/install-web-service.sh`
+# [2026-08-12] Remplace le geste manuel `bash /opt/GSM/osmo-egprs-web/install-web-service.sh`
 # qu'il fallait refaire dans chaque conteneur pour armer le HTTPS.
 #
 # Ce qui reste au BUILD (deja plus haut) : node, `npm install`, le unit du
@@ -608,30 +624,30 @@ RUN cd /opt/osmo-egprs-web && git pull
 # generee au build serait la meme pour tous ceux qui tirent l'image. Le detail
 # du raisonnement est dans services/osmo-egprs-web-install.service.
 #
-# ⚠️ ORDRE : ce bloc DOIT rester APRES le `RUN cd /opt/osmo-egprs-web && git pull`
+# ⚠️ ORDRE : ce bloc DOIT rester APRES le `RUN cd /opt/GSM/osmo-egprs-web && git pull`
 # ci-dessus. La COPY ci-dessous modifie un fichier suivi par ce depot ; placee
 # avant, le `git pull` echouerait (« local changes would be overwritten »).
 #
 # SOURCE UNIQUE DU UNIT. install-web-service.sh installe le unit en le copiant
-# depuis /opt/osmo-egprs-web/osmo-egprs-web.service — la copie du depot
+# depuis /opt/GSM/osmo-egprs-web/osmo-egprs-web.service — la copie du depot
 # osmo-egprs-web, qui avait DIVERGE de celle-ci (elle avait perdu
 # `CAP_IFACE=any`, donc la capture du dashboard). On ecrase donc cette copie par
 # services/osmo-egprs-web.service : les deux emplacements servent desormais le
 # meme fichier, et le script ne peut plus reintroduire la regression.
-COPY services/osmo-egprs-web.service /opt/osmo-egprs-web/osmo-egprs-web.service
+COPY services/osmo-egprs-web.service /opt/GSM/osmo-egprs-web/osmo-egprs-web.service
 # Fail-fast : si l'amont retire le script, on le sait au build, pas au boot par
 # un HTTPS muet.
-RUN test -s /opt/osmo-egprs-web/install-web-service.sh
+RUN test -s /opt/GSM/osmo-egprs-web/install-web-service.sh
 # [2026-08-12] REJOUER L'INSTALL WEB APRES LE PULL.
 # Le `npm install` plus haut (le premier des deux) tourne AVANT le `git pull` de
-# /opt/osmo-egprs-web ci-dessus : si le
+# /opt/GSM/osmo-egprs-web ci-dessus : si le
 # pull rapatrie un package.json avec une dependance en plus, node_modules reste
 # a l'etat d'avant et le dashboard tombe au demarrage sur un `Cannot find
 # module` — au boot, dans le journal systemd, loin du build qui l'a cause. On
 # rejoue donc les dependances APRES le pull.
 # Non fatal (`|| true`) : node_modules est versionne dans le depot, un build
 # hors-ligne reste valable. Mais la sortie est conservee, pas avalee.
-RUN cd /opt/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
+RUN cd /opt/GSM/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
 # Le reste de install-web-service.sh (certificat TLS + unit + enable) est joue AU
 # BOOT par osmo-egprs-web-install.service — cf. le commentaire de ce unit : ni
 # les `systemctl` ni la generation d'une cle privee n'ont leur place au build.

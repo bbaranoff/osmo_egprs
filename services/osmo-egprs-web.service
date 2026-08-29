@@ -5,7 +5,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/osmo-egprs-web
+WorkingDirectory=/opt/GSM/osmo-egprs-web
 # Le TLS prend le 80 (demande explicite du 12/08). Le clair descend sur 8080 :
 # les deux listeners ne peuvent pas partager un port, et supprimer le clair
 # priverait `curl http://localhost` de tout point d'entree de diagnostic.
@@ -15,7 +15,7 @@ Environment=OSMO_OP_IDS=1
 # ⚠️ NE PAS RETIRER : interface de capture du dashboard (GSMTAP/SCTP). La copie
 # de ce unit qui vit dans le depot osmo-egprs-web l'avait perdue ; comme
 # install-web-service.sh reinstalle le unit depuis CE fichier (le Dockerfile le
-# recopie dans /opt/osmo-egprs-web/, cf. Dockerfile.run), la source unique est
+# recopie dans /opt/GSM/osmo-egprs-web/, cf. Dockerfile.run), la source unique est
 # ici. Sans CAP_IFACE la capture se rabat sur un defaut et l'onglet trafic se
 # tait — panne silencieuse, aucun message d'erreur.
 Environment=CAP_IFACE=any
@@ -32,9 +32,9 @@ Environment=AUDIO_SOURCE=gsm_audio.monitor
 # explicitement (un navigateur qui lit `https://<ip>` irait sur 443, ferme), et
 # `http://<ip>` ne repond plus en clair — c'est du TLS qui ecoute la.
 Environment=HTTPS_PORT=80
-Environment=TLS_CERT=/opt/osmo-egprs-web/tls/cert.pem
-Environment=TLS_KEY=/opt/osmo-egprs-web/tls/key.pem
-ExecStart=/usr/local/bin/node /opt/osmo-egprs-web/server.js --verbose
+Environment=TLS_CERT=/opt/GSM/osmo-egprs-web/tls/cert.pem
+Environment=TLS_KEY=/opt/GSM/osmo-egprs-web/tls/key.pem
+ExecStart=/usr/local/bin/node /opt/GSM/osmo-egprs-web/server.js --verbose
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal

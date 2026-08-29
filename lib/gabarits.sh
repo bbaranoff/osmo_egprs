@@ -43,9 +43,40 @@
 #   prive     192.168.<op+1>.x   un segment par operateur ; le +1 laisse
 #                                192.168.1.0/24 au LAN du banc.
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
-op_private_ip()   { echo "192.168.$(($1 + 1)).10"; }
-op_private_gw()   { echo "192.168.$(($1 + 1)).1"; }
-op_private_net()  { echo "192.168.$(($1 + 1)).0/24"; }
+# ── L'INDEX DU SEGMENT PRIVE : LE NOEUD OU L'OPERATEUR, SELON L'HOTE ────────
+# 192.168.<index+1>.x, et tout le desaccord tenait a « index ».
+#
+#   DOCKER   un hote porte N conteneurs operateurs, chacun dans son netns. Ce
+#            qui les distingue est le NUMERO D'OPERATEUR ; le noeud, lui, est
+#            commun a tous les conteneurs de la machine. index = operateur.
+#   VM/NATIF la machine EST le noeud et ne porte qu'un operateur. Ce qui la
+#            distingue de ses voisines est le NUMERO DE NOEUD. index = noeud.
+#
+# Sans cette distinction, qemu-src/run_modules/08-gabarits.sh appelait
+# op_private_ip($OPERATOR_ID) et ecrivait 192.168.2.10 dans osmo-ggsn.cfg sur
+# TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
+# 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se
+# voyait ; sur le noeud 2, le GGSN se liait a l'adresse du noeud 1.
+# La bascule est ici, une fois, et les deux jumelles (start.sh, lib/gabarits.sh)
+# en heritent.
+_osmo_priv_index() {
+    local op="${1:-1}"
+    # Meme detection que start-direct.sh : le couple /.dockerenv +
+    # /etc/docker-entrypoint-cmd identifie un conteneur DE CE DEPOT ; le cgroup
+    # sert de repli pour un conteneur quelconque.
+    if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
+        printf '%s' "$op"; return
+    fi
+    local n="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
+    [ -n "$n" ] || n="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' \
+                        "${ROLE_FILE:-/etc/osmo-role}" 2>/dev/null)"
+    [ -n "$n" ] || n="$(sed -n 's/^PLAN_NODE=//p' "${OSMOCOM_CFG:-/etc/osmocom}/radio-plan.env" 2>/dev/null | tail -1)"
+    case "$n" in [1-9]) ;; *) n=1 ;; esac
+    printf '%s' "$n"
+}
+op_private_ip()   { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).10"; }
+op_private_gw()   { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).1"; }
+op_private_net()  { echo "192.168.$(($(_osmo_priv_index "$1") + 1)).0/24"; }
 op_netns()        { echo "osmo-op$1"; }
 op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
@@ -89,14 +120,19 @@ EOF
 }
 generate_extensions_interop_out() {
     local op_id=$1 n_operators=$2 remote_op
+    # Le prefixe porte le NOEUD : MSISDN = <noeud>00<operateur><rang>. Fige a
+    # "600", le motif ne matchait plus rien des que le numero commencait par le
+    # numero de noeud - les appels inter-operateurs sortaient en Congestion
+    # sans qu'aucune ligne ne dise que c'est le motif qui n'accroche pas.
+    local _pfx; _pfx="$(osmo_msisdn_pfx "$(osmo_node_id)")"
     printf '[interop_out]\n\n'
-    # Un seul motif : les MSISDN font six chiffres, 600<operateur><rang>. Les
+    # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>. Les
     # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
     # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
     for remote_op in $(seq 1 "$n_operators"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
-exten => _600${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
+exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
  same => n,Dial(PJSIP/\${EXTEN}@interop_trunk_op${remote_op},,rT)
  same => n,Congestion()
  same => n,Hangup()
@@ -126,11 +162,10 @@ _generate_sms_routing_conf_fallback() {
     for i in $(seq 1 "$n_operators"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
     printf '\n[routes]\n'
     for i in $(seq 1 "$n_operators"); do
-        # Prefixe a CINQ chiffres : la maquette numerote les abonnes i0001,
-        # i0002... (MS#1 = 10001, MS#2 = 10002). Sans lui, aucun prefixe ne
-        # couvrait ces numeros et le relais rejetait tout SMS local avec
-        # "No route for destination". Constate le 2026-07-29.
-        for ms in 1 2; do printf '%s = %s\n' "$(( 600000 + i * 100 + ms ))" "$i"; done   # MSISDN exacts 600000+op*100+ms (600101,600102,...)
+        # Les MSISDN EXACTS, pas un prefixe : un prefixe trop court avalait
+        # les numeros voisins, un prefixe absent laissait le relais rejeter
+        # tout SMS local avec "No route for destination" (2026-07-29).
+        for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done   # MSISDN exacts <noeud>00<op><ms> (100101, 100102, 200101...)
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }

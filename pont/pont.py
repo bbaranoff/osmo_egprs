@@ -416,13 +416,31 @@ def xcch_encode_4(l2_23):
 # NE PAS coder en dur : on LIT le channel-description depuis osmo-bsc.cfg.
 # Fallback = table normative GSM 05.02 (TS0 = CCCH+SDCCH/4).
 def load_ts_config(path):
-    """Retourne {tn: phys_chan_config} lu du 1er 'trx' d'osmo-bsc.cfg."""
+    """Retourne {tn: phys_chan_config} lu du PREMIER trx de la PREMIERE bts.
+
+    C'est osmo-bsc.cfg qui fait autorite sur le plan des slots : y ecrire
+    « phys_chan_config SDCCH8 » sur le timeslot 1, ou « TCH/F », doit suffire a
+    ce que le pont suive. Rien n'est code en dur ici, le repli ne sert qu'a un
+    fichier absent.
+
+    ⚠️ ON S'ARRETE A LA PREMIERE BTS. La version precedente annoncait « 1er trx »
+    dans sa docstring mais parcourait le fichier ENTIER : la seconde BTS (le
+    side-car, qui declare ses propres timeslot 0 et 1) ecrasait la premiere.
+    Tant que les deux portaient le meme plan, rien ne se voyait ; le jour ou on
+    change le TS1 de la BTS principale, le pont prend celui du side-car et le
+    dedie tombe a cote - sans qu'une ligne ne le signale."""
     ts = {}
     try:
         cur = None
+        n_bts = 0
         for line in open(path, encoding="utf-8", errors="ignore"):
             s = line.strip()
-            if s.startswith("timeslot "):
+            if s.startswith("bts "):
+                n_bts += 1
+                if n_bts > 1:
+                    break                     # la suite appartient a une autre BTS
+                cur = None
+            elif s.startswith("timeslot "):
                 cur = int(s.split()[1])
             elif s.startswith("phys_chan_config") and cur is not None:
                 ts[cur] = s.split(None, 1)[1].strip(); cur = None
@@ -443,6 +461,11 @@ BCCH_FN51     = [2, 6, 12, 16]          # BCCH bloc (info système) fn%51
 class Stats:
     def __init__(s):
         s.n_dl_bursts=0; s.n_dl_decoded=0; s.n_dl_crc_fail=0
+        # Blocs dedies ecartes parce que le dedie est sur un AUTRE slot. A
+        # comparer a n_dl_crc_fail : c'est la part de bruit qu'on ne paie plus.
+        s.n_dl_ded_skip=0
+        # Bursts de remplissage (dummy burst de C0) ecartes avant tout decodage.
+        s.n_dl_dummy=0
         s.n_ul_sent=0;   s.n_ul_out_of_window=0; s.n_rach=0
         s.n_tch_dl=0;    s.n_tch_ul=0;           s.n_tch_crc=0
         s.n_a5_dl=0;     s.n_a5_ul=0
@@ -455,6 +478,10 @@ class Stats:
         s.n_tch_ul_court=0               # slots montants tronques (doit rester 0)
         s.n_tch_ul_drop=0                # trames voix jetees : file pleine
         s.n_tch_ul_vole=0                # voix cedee a une FACCH (normatif)
+        # Trames REELLEMENT ecrasees dans l'anneau avant qu'on les lise. A
+        # distinguer de n_tch_ul_drop, qui compte ce que la file d'aval refuse :
+        # ici c'est perdu en AMONT, et aucune file n'y peut rien.
+        s.n_tch_ul_perdu=0
         s.n_tch_burst=0                  # bursts TCH montants reellement emis
         s.n_tap_dl=0;    s.n_tap_ul=0     # trames L2 mirroitees vers l'analyseur
     def log(s, msg): print("[pont] %s" % msg, flush=True)
@@ -1046,8 +1073,30 @@ def tch_ul_loop():
             w, n = struct.unpack("<II", hdr)
             if not w or not n:
                 time.sleep(0.02); continue
-            if last == 0 or (w - last) > n:      # retard > 1 tour : on saute
-                last = max(0, w - 1)
+            # ── LE RATTRAPAGE JETAIT CE QU'IL POUVAIT ENCORE LIRE ───────────
+            # Deux situations distinctes etaient traitees par la meme ligne, et
+            # la seconde y perdait 15 trames sur 16.
+            #
+            #   PREMIER TOUR (last == 0) : l'anneau vit dans /dev/shm, il
+            #     SURVIT a un redemarrage du pont. Ce qu'il contient appartient
+            #     a la session precedente. Rejouer meme une seule de ces trames
+            #     injecte 20 ms de voix d'un appel deja fini. On se cale donc
+            #     sur w : rien d'ancien.
+            #
+            #   DEPASSEMENT ((w - last) > n) : on a pris du retard et les plus
+            #     vieilles trames ont ete ECRASEES. Mais les n dernieres, elles,
+            #     sont toujours la. « last = w - 1 » n'en gardait qu'UNE et
+            #     jetait les 15 autres - 300 ms de voix parfaitement lisibles,
+            #     a chaque hoquet du thread. C'est ce qui restait du son
+            #     robotise apres l'ajout de la file : la file absorbe la gigue
+            #     EN AVAL, elle ne peut rien pour ce que la lecture a deja
+            #     jete EN AMONT.
+            #     On repart donc de la plus ancienne trame ENCORE VALIDE.
+            if last == 0:
+                last = w                          # session precedente : on ignore
+            elif (w - last) > n:
+                ST.n_tch_ul_perdu += (w - last) - n
+                last = w - n                      # tout ce qui reste lisible
             while last < w:
                 last += 1
                 sl = os.pread(fd, TCH_UL_SLOT, 8 + ((last - 1) % n) * TCH_UL_SLOT)
@@ -1309,18 +1358,82 @@ def _block_key(tn, phys, fn):
             return (tn, fn - (m51 - b))     # clé = FN du 1er burst du bloc
     return None
 
-def _dcch_active_ss(tn, plan):
-    """Sous-voie qui NOUS appartient sur ce slot, ou None si on l'ignore.
+# Sentinelle : « ce slot ne porte AUCUN dedie a nous, et on le SAIT ».
+# Distincte de None, qui veut dire « on ne sait pas, on traite tout ».
+_DCCH_AUCUN = object()
 
-    Rend None (donc : on traite tout, comme avant) tant que le firmware n'a pas
-    positivement designe CE slot avec CETTE combinaison. Le gate ne peut donc
-    que RETRECIR un perimetre connu, jamais fermer une porte par ignorance."""
+def _dcch_active_ss(tn, plan):
+    """Sous-voie qui NOUS appartient sur ce slot.
+
+    Trois reponses, et la troisieme manquait :
+      ss          -> c'est notre sous-voie sur ce slot, ne decoder qu'elle
+      None        -> on NE SAIT PAS (dcch_cfg pas encore lu) : on traite tout,
+                     comme avant. Une porte ne se ferme pas sur une ignorance.
+      _DCCH_AUCUN -> on SAIT que le dedie est ailleurs : ce slot n'a aucun bloc
+                     dedie qui nous concerne.
+
+    POURQUOI LA TROISIEME. Un banc porte les DEUX combinaisons a la fois : TS0
+    en SDCCH/4 combine (avec BCCH et CCCH) et TS1 en SDCCH/8. Le dedie n'est que
+    sur l'un des deux. Sans cette reponse, le slot qui ne le porte pas retombait
+    sur None - « traite tout » - et le pont decodait les huit sous-voies vides
+    de l'autre plan. Mesure sur ce banc : 906 blocs sur 960 traces portaient sur
+    les bases 26/36/46 du SDCCH/4 de TS0, ou personne n'est jamais venu. Toutes
+    echouaient au CRC, par construction.
+    Deux consequences, et la seconde compte :
+      - crc_fail ne voulait plus rien dire : 65 % d'echec annonces, dont ~94 %
+        de blocs vides. On cherchait une panne radio dans un compteur de bruit.
+      - c'etait du xcch_decode_4 pur (4 x 116 iterations) paye ~40 fois par
+        seconde pour rien, sur le meme thread qui doit tenir le relais de bursts
+        a l'heure. Le temps rendu ici va au temps reel."""
     kind, ss, dtn = _dcch_cfg()
-    if dtn != tn:
+    # Repli (dcch_cfg absent ou tronque) : (0,0,0) est indiscernable d'un vrai
+    # SDCCH/4 SS0 TS0. On ne conclut rien.
+    if not _dcch_ok:
         return None
+    if dtn != tn:
+        return _DCCH_AUCUN
     if (PLAN_SD8 if kind else PLAN_SD4) is not plan:
+        # Le firmware designe bien ce slot, mais avec l'AUTRE combinaison. Le
+        # plan physique et l'avis du firmware se contredisent : on ne tranche
+        # pas, on traite tout - et l'ecart se verra dans les compteurs.
         return None
     return ss % plan.n_sub
+
+# ── LE DUMMY BURST : NE PAS LE COMPTER COMME UN ECHEC ───────────────────────
+# osmo-bts-trx remplit TOUS les timeslots de C0 avec le dummy burst
+# (src/osmo-bts-trx/scheduler_trx.c:198 « Initialize all timeslots on C0/TRX0
+# with dummy burst »), pour que la porteuse balise garde une puissance
+# constante. Un slot dedie INACTIF emet donc en permanence ce motif fige de la
+# TS 05.02 5.2.6 -- qui ne porte aucune donnee et ne peut, par construction,
+# passer aucun CRC.
+#
+# On les envoyait quand meme dans xcch_decode_4, et chaque bloc comptait comme
+# un crc_fail. Mesure : notre SDCCH TS1/0 affichait 161 decodages sur 676
+# tentatives, soit 76 pour cent d'echec -- alors que les 515 blocs manquants
+# n'etaient pas des blocs, c'etait du remplissage. Le compteur accusait la
+# radio pour un silence normatif, et gr-gsm a d'ailleurs un bloc entier pour ca
+# (dummy_burst_filter).
+#
+# La sequence est REPRISE de la source d'osmo-bts, pas retapee : deux copies
+# d'une constante de 148 bits finissent toujours par diverger sur un chiffre.
+# Tolerance : le motif arrive tel quel du TRXD (bits durs), donc une egalite
+# stricte suffirait ; on laisse quelques bits d'ecart pour rester juste si un
+# jour la source devient bruitee.
+_DUMMY_BURST = (0,0,0,1,1,1,1,1,0,1,1,0,1,1,1,0,1,1,0,0,0,0,0,1,0,1,0,0,1,0,0,1,1,1,0,0,0,0,0,1,0,0,1,0,0,0,1,0,0,0,0,0,0,0,1,1,1,1,1,0,0,0,1,1,1,0,0,0,1,0,1,1,1,0,0,0,1,0,1,1,1,0,0,0,1,0,1,0,1,1,1,0,1,0,0,1,0,1,0,0,0,1,1,0,0,1,1,0,0,1,1,1,0,0,1,1,1,1,0,1,0,0,1,1,1,1,1,0,0,0,1,0,0,1,0,1,1,1,1,1,0,1,0,1,0,0,0,0)
+_DUMMY_TOL = int(os.environ.get("PONT_DUMMY_TOL", "8"))
+
+def _is_dummy(burst148):
+    """Vrai si ce burst est le dummy burst normatif (remplissage de C0)."""
+    if len(burst148) < 148:
+        return False
+    n = 0
+    for i in range(148):
+        # burst148 : 0x01 = bit 1, tout le reste = bit 0 (domaine DL brut).
+        if (1 if burst148[i] == 0x01 else 0) != _DUMMY_BURST[i]:
+            n += 1
+            if n > _DUMMY_TOL:
+                return False
+    return True
 
 def _acc_dl(tn, phys, fn, burst148):
     k = _block_key(tn, phys, fn)
@@ -1341,6 +1454,15 @@ def _acc_dl(tn, phys, fn, burst148):
     # Le shunt, lui, ne presente QUE la fenetre de la sous-voie active
     # (calypso_dsp_shunt_set_dcch) : le pont s'aligne sur la meme discipline.
     _act = _dcch_active_ss(tn, plan)
+    if _act is _DCCH_AUCUN:
+        # Le dedie est sur un AUTRE slot : ici, les bases dediees ne portent
+        # personne. On ne les decode pas - c'est du calcul certain pour un
+        # resultat certain (echec CRC). Le reste du slot (BCCH, CCCH, SACCH
+        # commun) continue de passer normalement.
+        if base51 in plan.ded_bases:
+            ST.n_dl_ded_skip += 1
+            return
+        _act = None
     if _act is not None:
         if base51 in plan.sdcch_dl and base51 != plan.sdcch_dl[_act]:
             return                   # SDCCH d'un autre abonne
@@ -1354,6 +1476,12 @@ def _acc_dl(tn, phys, fn, burst148):
     # A5 : seulement le canal DEDIE. Les bases dependent de la combinaison —
     # sur un SDCCH/8, {22,26,32,36,42,46} designe du VIDE et laissait tout le
     # dedie en clair (donc indecodable des que le reseau chiffre).
+    # Remplissage de C0 : rien a decoder, et surtout rien a compter comme echec.
+    # Test AVANT l'A5 : le dummy n'est jamais chiffre, et le passer au keystream
+    # le rendrait meconnaissable.
+    if _is_dummy(burst148):
+        ST.n_dl_dummy += 1
+        return
     if base51 in plan.ded_bases:
         burst148 = a5_apply(burst148, fn, False)
     d = _DL_ACC.setdefault(k, {"fn0": k[1], "b": []})
@@ -1498,8 +1626,24 @@ CFILE_OSR  = int(os.environ.get("PONT_CFILE_OSR", "4"))
 # Python PAR BURST (~250 000/s) rien que pour fabriquer sa vue en bits, et il se
 # coupait de toute facon tout seul faute d'espace disque (« airrec descendant :
 # moins de 1024 Mo libres — COUPE ») -- on payait donc le calcul sans rien
-# enregistrer. PONT_AIRREC=1 le rallume quand on en a besoin.
-AIRREC      = os.environ.get("PONT_AIRREC", "0") not in ("0", "", "no")
+# enregistrer.
+#
+# [2026-08-29] DEFAUT REMIS A 1, ET LA RAISON DE 0 N'EXISTE PLUS.
+# Ce basculement a coute deux fonctions d'un coup, sans que rien ne relie la
+# cause a l'effet :
+#   - /root/record.cfile ne s'ecrivait plus. Le service web sait DECOUPER des
+#     tranches dedans (rec.js) mais pas le creer : « Capture IQ : absent,
+#     AIRREC est coupe » a chaque essai.
+#   - le montant /tmp/iq_fft_ms.fifo n'avait plus de producteur : la pane
+#     « MS » du dashboard restait vide, et il ne restait qu'UN spectre sur les
+#     deux.
+# Or l'argument de 27/08 - « il se coupait tout seul faute d'espace » - visait
+# un etat corrige la VEILLE : le 26/08, AIRREC_MAX est passe de 16 Gio a 512 Mo
+# et l'ecriture est devenue un BUFFER ROULANT (on tronque et on recommence).
+# Le disque ne peut donc plus se remplir, et la coupure qui justifiait le
+# defaut a 0 ne peut plus se produire. Reste le cout CPU, reel et assume : il
+# achete l'enregistrement et le spectre montant. PONT_AIRREC=0 pour l'eteindre.
+AIRREC      = os.environ.get("PONT_AIRREC", "1") not in ("0", "", "no")
 # [2026-08-16] SUR DISQUE, PLUS EN RAM. /dev/shm ne fait que 8 Go et porte
 # AUSSI les journaux du run : a 17,3 Mo/s (descendant + montant) il etait
 # plein en ~6 minutes, ce qui imposait un decoupage en segments. L'overlay
@@ -2105,6 +2249,9 @@ def emit_with_timing(tn, target_fn, bursts, cipher=False, tch=False):
 # celle du /4, et slot d'emission fige a 0.
 _dcch_fd = None
 
+# Vrai des que calypso_dcch_cfg a ete LU (seq non nul) ; faux tant qu'on en est
+# reduit au repli. Voir _dcch_cfg() et _dcch_active_ss().
+_dcch_ok = False
 def _dcch_cfg():
     """(kind, ss, tn) du canal dedie actif — lu, jamais suppose.
 
@@ -2119,12 +2266,13 @@ def _dcch_cfg():
     echouait EN SILENCE : kc_read() rendait « pas de Kc » (A5 mort), tch_cfg_read()
     restait fige (TCH jamais arme), _tch_dl_open() levait. On garde donc UN fd
     persistant et on ne fait que des pread, comme tch_ul_loop pour l'anneau."""
-    global _dcch_fd
+    global _dcch_fd, _dcch_ok
     try:
         if _dcch_fd is None:
             _dcch_fd = os.open(DCCH_CFG, os.O_RDONLY)
         b = os.pread(_dcch_fd, 16, 0)
         if len(b) >= 8 and struct.unpack_from("<I", b, 0)[0]:
+            _dcch_ok = True
             return (b[4] & 1, b[5] & 7, b[6] & 7)
     except OSError as e:
         # Une sonde muette rend son silence indecidable (regle du projet) :
@@ -2139,6 +2287,12 @@ def _dcch_cfg():
         if ST.n_dcch_err == 1:
             ST.log("dcch_cfg illisible (%s) — dedie suppose SDCCH/4 SS0 TS0 "
                    "jusqu'a nouvel ordre" % e)
+    # ⚠️ (0,0,0) est un REPLI, pas une lecture — et il est indiscernable d'un
+    # vrai « SDCCH/4 SS0 TS0 ». Tant que personne ne faisait la difference, la
+    # seule conduite sure etait de tout traiter. _dcch_ok permet desormais de
+    # distinguer les deux, donc de fermer une porte sur une CONNAISSANCE et non
+    # sur une ignorance.
+    _dcch_ok = False
     return (0, 0, 0)
 
 def _dcch_plan():
@@ -2433,6 +2587,7 @@ def th_stats():
         ST.log("STATS dl_bursts=%d dl_dec=%d crc_fail=%d | ul_sent=%d hors_fenetre=%d rach=%d | FN=%u"
                % (ST.n_dl_bursts, ST.n_dl_decoded, ST.n_dl_crc_fail,
                   ST.n_ul_sent, ST.n_ul_out_of_window, ST.n_rach, now_fn())
+               + " | dummy=%d dedie_hors=%d" % (ST.n_dl_dummy, ST.n_dl_ded_skip)
                + " | TCH dl=%d ul=%d crc=%d" % (ST.n_tch_dl, ST.n_tch_ul, ST.n_tch_crc)
                + " | A5 dl=%d ul=%d" % (ST.n_a5_dl, ST.n_a5_ul)
                + " | FACCH dl=%d ul=%d gap=%d" % (ST.n_facch_dl, ST.n_facch_ul, ST.n_tch_gap)
@@ -2445,9 +2600,9 @@ def th_stats():
                + " | AIRREC dl=%dtr/%dbu ul=%dtr/%dbu"
                  % (_AR_DL.n_frames, _AR_DL.n_bursts,
                     _AR_UL.n_frames, _AR_UL.n_bursts)
-               + " | TCHUL bursts=%d file_v=%d file_f=%d drop=%d vol=%d"
+               + " | TCHUL bursts=%d file_v=%d file_f=%d drop=%d vol=%d perdu=%d"
                  % (ST.n_tch_burst, len(_tch_q_voice), len(_tch_q_facch),
-                    ST.n_tch_ul_drop, ST.n_tch_ul_vole))
+                    ST.n_tch_ul_drop, ST.n_tch_ul_vole, ST.n_tch_ul_perdu))
         # Detail par base de bloc (GSM 05.02) : montre d'ou vient le crc_fail.
         # 2=BCCH  6/12/16=CCCH  22/26/32/36=SDCCH  42/46=SACCH.
         if ST.n_by_base:

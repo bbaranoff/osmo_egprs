@@ -240,6 +240,45 @@ rand_imei() {
     printf '%s%d' "$body" "$(( (10 - sum % 10) % 10 ))"
 }
 
+# ── LE PLAN DE NUMEROTATION, EN UN SEUL ENDROIT ──────────────────────────────
+#
+#   MSISDN = <noeud> 00 <operateur> <rang du MS sur 2 chiffres>
+#            noeud 1, operateur 1, MS 1  ->  100101
+#            noeud 1, operateur 1, MS 2  ->  100102
+#            noeud 2, operateur 1, MS 1  ->  200101
+#
+# POURQUOI LE NOEUD EN TETE. Le plan precedent commencait par un 6 fixe
+# (600000 + op*100 + ms) : le numero ne disait donc RIEN de la machine qui le
+# porte. Sur un banc a plusieurs noeuds, l'operateur 1 du noeud 1 et l'operateur
+# 1 du noeud 2 revendiquaient tous deux 600101 - le meme abonne a deux endroits,
+# et un SMS ou un appel qui part chez le premier qui repond. Le premier chiffre
+# devient donc l'adresse du noeud, et le routage (SMS comme dialplan) se lit
+# directement dans le numero.
+#
+# CE QUI NE CHANGE PAS, ET C'EST VOULU : l'IMSI (MCC MNC <op sur 4> <ms sur 6>)
+# et le Ki (00 11 ... dd <ms> <op>). Ces deux-la sont derives a l'IDENTIQUE dans
+# quatre endroits - ici pour mobile.cfg, start-direct.sh pour les mobiles,
+# run_modules/21-abonnes-hlr.sh et start.sh pour le HLR - et ils doivent rester
+# d'accord au bit pres, sans quoi l'authentification echoue sur un Kc different
+# des deux cotes, sans autre trace qu'un rejet de CIPHER MODE. On ne touche donc
+# qu'au MSISDN, qui n'entre dans aucun calcul de securite.
+osmo_msisdn_pfx() { printf '%s00' "${1:-1}"; }                       # <noeud>00
+osmo_msisdn()     { printf '%d' "$(( ${1:-1} * 100000 + ${2:-1} * 100 + ${3:-1} ))"; }
+
+# Le noeud tel que le voit la generation : l'environnement d'abord (c'est ce que
+# start.sh passe a un conteneur et ce que start-direct.sh exporte avant un
+# --regen), /etc/osmo-role ensuite, 1 par defaut. JAMAIS vide : un plan de
+# numerotation sans noeud, c'est le plan de tout le monde.
+osmo_node_id() {
+    local n="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
+    if [ -z "$n" ] && [ -r "${ROLE_FILE:-/etc/osmo-role}" ]; then
+        n="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' \
+             "${ROLE_FILE:-/etc/osmo-role}" 2>/dev/null)"
+    fi
+    case "$n" in [1-9]) ;; *) n=1 ;; esac
+    printf '%s' "$n"
+}
+
 # ── La substitution des gabarits - implementation UNIQUE ─────────────────────
 #  Signature inchangee, pour rester compatible avec les deux appelants :
 #    apply_config_templates DEST CONTAINER_IP GATEWAY_IP OP_ID \
@@ -286,6 +325,13 @@ apply_config_templates() {
         ''|'-') echo "  ERREUR : MNC vide pour l'operateur $op_id" >&2; return 1 ;;
     esac
     local inter_stp=${11} inter_stp_shutdown=${12} n_operators=${13}
+
+    # Le noeud entre dans le plan de numerotation : MSISDN = <noeud>00<op><ms>.
+    # Il n'entre PAS dans l'IMSI ni dans le Ki - ceux-la sont derives a
+    # l'identique dans quatre endroits et doivent le rester (voir osmo_msisdn).
+    local node msisdn_pfx
+    node="$(osmo_node_id)"
+    msisdn_pfx="$(osmo_msisdn_pfx "$node")"
 
     mkdir -p "$dest/osmocom" "$dest/asterisk" "$dest/bb"
     local f bn
@@ -403,6 +449,8 @@ apply_config_templates() {
         printf '# d etre poses dans les configurations voisines. start-direct.sh le\n'
         printf '# lit pour accorder les mobiles et pour piloter le side-car.\n'
         printf 'OPERATOR_ID=%s\n'      "$op_id"
+        printf 'PLAN_NODE=%s\n'        "$node"
+        printf 'PLAN_MSISDN_PFX=%s\n'  "$msisdn_pfx"
         printf 'PLAN_MCC=%s\n'         "$mcc"
         printf 'PLAN_MNC=%s\n'         "$mnc"
         printf 'PLAN_ARFCN=%s\n'       "$arfcn"
@@ -442,6 +490,7 @@ apply_config_templates() {
             -e "s|__INTER_STP_SHUTDOWN__|${inter_stp_shutdown}|g" \
             -e "s|__INTER_LOCAL_IP__|${inter_local_ip}|g" \
             -e "s|__SIP_REMOTE_IP__|${sip_remote_ip}|g" \
+            -e "s|__MSISDN_PFX__|${msisdn_pfx}|g" \
             -e "s|__OPERATOR_ID__|${op_id}|g" \
             -e "s|__PC_MSC__|${pc_msc}|g" -e "s|__PC_STP__|${pc_stp}|g" -e "s|__PC_BSC__|${pc_bsc}|g" \
             -e "s|__RCTX_MSC__|${rctx_msc}|g" -e "s|__RCTX_STP__|${rctx_stp}|g" \
@@ -468,12 +517,16 @@ apply_config_templates() {
 
     generate_pjsip_interop_trunks     "$op_id" "$n_operators" >> "$dest/asterisk/pjsip.conf"
     generate_extensions_interop_out   "$op_id" "$n_operators" >> "$dest/asterisk/extensions.conf"
-    # Routes SMS (fallback = generateur par defaut). Condition d'echec : les
-    # MSISDN reels (op*10000+1, +2) absents OU route parasite (op0000/op000).
+    # Routes SMS (fallback = generateur par defaut). Condition d'echec : le
+    # MSISDN reel du premier MS absent OU route parasite (op0000/op000).
     # Si non remplie -> regen.
+    # Le controle suivait encore "600000 + op*100 + 1" alors que le generateur
+    # ecrit desormais <noeud>00<op><ms> : il ne trouvait plus la ligne qu'il
+    # venait d'ecrire et regenerait a chaque fois - sans effet visible, mais
+    # c'est exactement le genre de test qui finit par masquer une vraie panne.
     _src="$dest/osmocom/sms-routing.conf"
     _generate_sms_routing_conf_fallback "$op_id" "$n_operators" >  "$_src"
-    if ! grep -q "^$(( 600000 + op_id * 100 + 1 )) = " "$_src" 2>/dev/null \
+    if ! grep -q "^$(osmo_msisdn "$node" "$op_id" 1) = " "$_src" 2>/dev/null \
        || grep -qE "^${op_id}0000? = " "$_src" 2>/dev/null; then
         _generate_sms_routing_conf_fallback "$op_id" "$n_operators" >  "$_src"
     fi
@@ -581,6 +634,158 @@ _apply_node_ss7_addressing() {
         # voyait qu'a l'ASP qui ne s'attachait jamais.
         return 1
     fi
+}
+
+# ── sms-routing.conf : LE ROUTAGE SE LIT DANS LE NUMERO ──────────────────────
+# La cle de routage est le NOEUD, pas l'operateur, et c'est le premier chiffre
+# du MSISDN (<noeud>00<op><ms>). Avant, [operators] portait une entree par
+# operateur pointant sur op_backbone_ip - 172.20.0.11, une adresse du plan
+# DOCKER absente de toute VM - et l'operateur 1 du noeud 1 comme celui du noeud
+# 2 revendiquaient la meme cle "1". Sur un banc a plusieurs noeuds, un SMS
+# partait donc chez le premier qui repondait, quand il partait.
+#
+# Les adresses viennent de la TABLE WAN (/etc/osmo-wan.conf), la seule source
+# qui sache ou joignent reellement les autres noeuds. Sans table - un banc a un
+# seul noeud - il ne reste qu'une entree, la notre.
+#
+#   $1 fichier  $2 noeud  $3 operateur  $4 nb de MS  $5 IP locale du coeur
+#   $6 table WAN
+_write_sms_routing_native() {
+    local out="$1" node="$2" op_id="$3" n_ms="$4" host_ip="$5" wanf="$6"
+    local spec="" ent id ip nops n o m
+    local -a ids=() 
+
+    # WAN_NODES="id:ip:indicatif[:operateurs] ..." - lu sans sourcer la table :
+    # ce fichier pose aussi WAN_NODE_ID et WAN_OPS, qui ecraseraient ceux de
+    # l'appelant.
+    if [ -r "$wanf" ]; then
+        spec="$(sed -n 's/^WAN_NODES=//p' "$wanf" | tr -d '"'"'"'' | tail -1)"
+    fi
+
+    # NOTRE adresse, celle par laquelle les autres noeuds nous joignent. La
+    # table d'abord (c'est un choix explicite), la route ensuite, la boucle
+    # locale en dernier - un banc isole doit quand meme router ses SMS.
+    local self_ip=""
+    for ent in $spec; do
+        IFS=: read -r id ip _ nops <<< "$ent"
+        [ "$id" = "$node" ] && self_ip="$ip"
+    done
+    if [ -z "$self_ip" ]; then
+        self_ip="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+    fi
+    [ -n "$self_ip" ] || self_ip="$host_ip"
+
+    {
+        printf '# sms-routing.conf - ecrit par generate_configs.sh.\n'
+        printf '# Cle de routage = NUMERO DE NOEUD, premier chiffre du MSISDN.\n'
+        printf '# MSISDN = <noeud>00<operateur><rang du MS sur 2 chiffres>\n\n'
+        printf '[local]\n'
+        printf 'operator_id = %s\n' "$node"
+        printf 'sc_address  = 1999001%s444\n\n' "$op_id"
+        printf '[operators]\n'
+        if [ -n "$spec" ]; then
+            for ent in $spec; do
+                IFS=: read -r id ip _ nops <<< "$ent"
+                [ -n "$id" ] || continue
+                [ "$id" = "$node" ] && ip="$self_ip"
+                printf '%s = %s\n' "$id" "$ip"
+            done
+        else
+            printf '%s = %s\n' "$node" "$self_ip"
+        fi
+        printf '\n[routes]\n'
+        if [ -n "$spec" ]; then
+            for ent in $spec; do
+                IFS=: read -r id ip _ nops <<< "$ent"
+                [ -n "$id" ] || continue
+                # nops non renseigne = 3 champs dans l'entree. Le "${nops:-1}"
+                # d'un case teste la valeur ETENDUE, pas la variable : il ne
+                # corrigeait donc rien et seq recevait une borne vide.
+                nops="${nops:-1}"
+                case "$nops" in ''|*[!0-9]*) nops=1 ;; esac
+                for o in $(seq 1 "$nops"); do
+                    for m in $(seq 1 "$n_ms"); do
+                        printf '%s = %s\n' "$(osmo_msisdn "$id" "$o" "$m")" "$id"
+                    done
+                done
+            done
+        else
+            for m in $(seq 1 "$n_ms"); do
+                printf '%s = %s\n' "$(osmo_msisdn "$node" "$op_id" "$m")" "$node"
+            done
+        fi
+        printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
+    } > "$out"
+}
+
+# ── Les retouches NATIVES : la recette de l'ISO, en UN SEUL endroit ──────────
+# Ce que build-iso.sh posait a la main APRES apply_config_templates, et que
+# personne ne rejouait ensuite. C'est la difference entre "les gabarits sont
+# substitues" et "la machine a une configuration qui demarre" :
+#
+#   sms-routing.conf  le fallback des gabarits enumere les operateurs sur
+#                     op_backbone_ip (172.20.0.11) - une adresse du plan
+#                     DOCKER, qui n'existe sur aucune VM - et n'y met que deux
+#                     routes par operateur. En natif tout boucle sur l'adresse
+#                     locale du coeur, et il faut UNE route par MS reellement
+#                     embarque, sans quoi le relais rend "No route for
+#                     destination" des le troisieme.
+#   osmo-sgsn.cfg     "gtp local-ip" est fige a 127.0.0.1 dans le gabarit ; en
+#                     natif le GGSN ecoute sur l'adresse du coeur. Le SGSN
+#                     annoncait une adresse et le GGSN en servait une autre.
+#   osmo-msc.cfg      "hlr remote-ip", meme histoire.
+#   run.sh            "trxcon <options>" et "mobile <options>" reduits au seul
+#                     binaire : sur l'ISO ce sont les modules qui decident des
+#                     options, pas la ligne heritee de l'image docker.
+#
+# Sans cette fonction, une regeneration rendait des configurations SUBSTITUEES
+# mais NATIVEMENT FAUSSES : le SGSN se liait a une adresse qu'il n'a pas, le
+# relais SMS visait le plan docker - et rien ne le disait avant le demarrage
+# suivant. Elle est donc appelee des DEUX cotes, sur la meme arborescence :
+#   build-iso.sh        sur $TEMP_CONFIG puis sur $ROOTFS/etc (construction)
+#   start-direct.sh     sur le repertoire temporaire d'un --regen (execution)
+# Idempotente : la rejouer sur un arbre deja retouche ne change rien.
+#
+#   $1  racine qui porte osmocom/ : $TEMP_CONFIG, $ROOTFS/etc, /etc
+#   $2  numero d'operateur      (defaut 1)
+#   $3  nombre de MS embarques  (defaut 2)
+#   $4  adresse locale du coeur (defaut 127.0.0.2)
+#   $5  numero de noeud         (defaut : osmo_node_id)
+#   $6  table WAN a lire        (defaut /etc/osmo-wan.conf)
+apply_native_post_patches() {
+    local dest="${1:?apply_native_post_patches : racine manquante}"
+    local op_id="${2:-1}" n_ms="${3:-2}" host_ip="${4:-127.0.0.2}"
+    local node="${5:-$(osmo_node_id)}" wanf="${6:-${WAN_CONF_FILE:-/etc/osmo-wan.conf}}"
+    local cfg="$dest/osmocom"
+    [ -d "$cfg" ] || return 0
+    [ "$n_ms" -ge 1 ] 2>/dev/null || n_ms=1
+    case "$node" in [1-9]) ;; *) node=1 ;; esac
+
+    _write_sms_routing_native "$cfg/sms-routing.conf" \
+        "$node" "$op_id" "$n_ms" "$host_ip" "$wanf"
+
+    if [ -f "$cfg/osmo-sgsn.cfg" ]; then
+        sed -i \
+            -e "s/^\([[:space:]]*gtp[[:space:]]\+local-ip[[:space:]]\+\).*/\1${host_ip}/" \
+            -e "s/^\([[:space:]]*gsup[[:space:]]\+remote-ip[[:space:]]\+\).*/\1${host_ip}/" \
+            -e "/^[[:space:]]*bind udp local\$/,/^[[:space:]]*!\$/ s/^\([[:space:]]*listen[[:space:]]\+\).*/\1${host_ip} 23000/" \
+            "$cfg/osmo-sgsn.cfg"
+    fi
+
+    if [ -f "$cfg/osmo-msc.cfg" ]; then
+        sed -i \
+            -e "/^hlr\$/,/^!\$/ s/^\([[:space:]]*remote-ip[[:space:]]\+\).*/\1${host_ip}/" \
+            "$cfg/osmo-msc.cfg"
+    fi
+
+    if [ -f "$cfg/run.sh" ]; then
+        sed -i \
+            -e 's#^[[:space:]]*\([^[:space:]]*/\)\?trxcon\([[:space:]].*\)\?$#trxcon#' \
+            -e 's#^[[:space:]]*\([^[:space:]]*/\)\?mobile\([[:space:]].*\)\?$#mobile#' \
+            "$cfg/run.sh"
+    fi
+    chmod +x "$cfg"/*.sh 2>/dev/null || true
+    return 0
 }
 
 # ── Affichage de l'effectif ──────────────────────────────────────────────────

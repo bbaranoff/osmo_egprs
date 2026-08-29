@@ -482,31 +482,28 @@ if [ "$ISO_ROLE" = "interstp" ]; then
     echo -e "  ${GREEN}✓${NC} hub SS7 pour ${CYAN}${_hub_nodes}${NC} noeud(s) × ${ISO_WAN_OPS:-1} operateur(s)"
 fi
 
-# ── Routage SMS ──────────────────────────────────────────────────────────────
+# ── Les retouches NATIVES ────────────────────────────────────────────────────
 # APRES apply_config_templates, et non avant : celui-ci ecrase systematiquement
-# sms-routing.conf avec le fallback de lib/gabarits.sh.
+# sms-routing.conf, osmo-sgsn.cfg et osmo-msc.cfg avec ce que disent les
+# gabarits - c'est-a-dire le plan DOCKER.
 #
-# Ce fallback ne convient pas a l'ISO sur deux points :
-#   - [operators] pointe sur op_backbone_ip (172.20.0.11), une adresse du plan
-#     docker ; l'ISO tourne en natif, tout boucle sur HOST_IP.
-#   - [routes] enumere des prefixes fixes (i000, i0000, i001..i005) qui ne
-#     suivent pas ISO_N_MS : au-dela du 5e MS, "No route for destination".
-#
-# On reecrit donc la meme structure, mais avec UNE route par MS reellement
-# embarque. MSISDN = 600000 + op * 100 + ms, la formule du depot (21-abonnes-hlr.sh,
-# scripts/sms-routing-setup.sh) - pour ISO_N_MS=2 : 10001 et 10002.
-ISO_SMS_SC="1999001${ISO_OP_ID}444"
-{
-    printf '# sms-routing.conf - Fallback\n\n'
-    printf '[local]\noperator_id = %s\nsc_address  = %s\n\n' "$ISO_OP_ID" "$ISO_SMS_SC"
-    printf '[operators]\n%s = %s\n\n' "$ISO_OP_ID" "$HOST_IP"
-    printf '[routes]\n'
-    for ms in $(seq 1 "$ISO_N_MS"); do
-        printf '%s = %s\n' "$(( 600000 + ISO_OP_ID * 100 + ms ))" "$ISO_OP_ID"
-    done
-    printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
-} > "$TEMP_CONFIG/osmocom/sms-routing.conf"
-echo -e "  ${GREEN}✓${NC} sms-routing.conf : ${CYAN}${ISO_N_MS}${NC} route(s) MS, operateur ${ISO_OP_ID} = ${CYAN}${HOST_IP}${NC}"
+# Cette recette vivait ICI, en deux morceaux (le sms-routing juste apres la
+# substitution, les sed du SGSN et du MSC trois cents lignes plus bas), et
+# NULLE PART ailleurs. Une ISO en sortait juste ; une machine qui regenerait
+# ses configs ensuite - ./start-direct.sh --regen - en sortait fausse, sans
+# qu'un seul message ne le dise. Elle est desormais dans generate_configs.sh,
+# une fois, et les deux chemins l'appellent (voir apply_native_post_patches).
+# La table WAN telle que cette ISO l'embarquera : c'est elle qui donne a
+# sms-routing.conf l'adresse de CHAQUE noeud. Sans elle (ISO d'un banc isole),
+# le generateur n'ecrit que notre propre entree.
+ISO_WAN_TMP=""
+if [ -n "$ISO_WAN_NODES" ]; then
+    ISO_WAN_TMP="$(mktemp)"
+    printf 'WAN_NODES="%s"\n' "$ISO_WAN_NODES" > "$ISO_WAN_TMP"
+fi
+apply_native_post_patches "$TEMP_CONFIG" "$ISO_OP_ID" "$ISO_N_MS" "$HOST_IP" \
+    "${ISO_NODE:-1}" "${ISO_WAN_TMP:-/nonexistent}"
+echo -e "  ${GREEN}✓${NC} retouches natives : sms-routing (${CYAN}${ISO_N_MS}${NC} route(s) MS), SGSN, MSC vers ${CYAN}${HOST_IP}${NC}"
 
 if [ "$ISO_ROLE" = "interstp" ]; then
     ISO_RUN_IMAGE="osmocom-stp-iso"
@@ -899,74 +896,83 @@ fi
 echo -e "${GREEN}[5c/9] Ajustements osmocom dans le rootfs...${NC}"
 echo -e "${GREEN}[5d/9] Patch configs ISO...${NC}"
 
-if [ -f "$ROOTFS/etc/osmocom/osmo-sgsn.cfg" ]; then
-    sed -i \
-        -e 's/^\([[:space:]]*gtp[[:space:]]\+local-ip[[:space:]]\+\).*/\1127.0.0.2/' \
-        -e 's/^\([[:space:]]*gsup[[:space:]]\+remote-ip[[:space:]]\+\).*/\1127.0.0.2/' \
-        -e '/^[[:space:]]*bind udp local$/,/^[[:space:]]*!$/ s/^\([[:space:]]*listen[[:space:]]\+\).*/\1127.0.0.2 23000/' \
-        "$ROOTFS/etc/osmocom/osmo-sgsn.cfg"
-fi
+# LA MEME recette que sur $TEMP_CONFIG, rejouee sur le rootfs. Elle est
+# idempotente : ce qui est deja juste ne bouge pas. On la rejoue quand meme
+# parce que /etc/osmocom du rootfs vient de l'IMAGE docker (docker cp a
+# l'etape 5), pas de $TEMP_CONFIG - l'image peut porter des fichiers que la
+# substitution n'a pas traverses.
+apply_native_post_patches "$ROOTFS/etc" "$ISO_OP_ID" "$ISO_N_MS" "$HOST_IP" \
+    "${ISO_NODE:-1}" "${ISO_WAN_TMP:-/nonexistent}"
 
-if [ -f "$ROOTFS/etc/osmocom/osmo-msc.cfg" ]; then
-    sed -i \
-        -e '/^hlr$/,/^!$/ s/^\([[:space:]]*remote-ip[[:space:]]\+\).*/\1127.0.0.2/' \
-        "$ROOTFS/etc/osmocom/osmo-msc.cfg"
-fi
-
-echo -e "  ${GREEN}✓${NC} patch SGSN + MSC applique"
-
-# run.sh: reduire toute ligne "trxcon options..." a "trxcon"
-#         et toute ligne "mobile options..." a "mobile"
-if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
-    sed -i \
-        -e 's#^[[:space:]]*\([^[:space:]]*/\)\?trxcon\([[:space:]].*\)\?$#trxcon#' \
-        -e 's#^[[:space:]]*\([^[:space:]]*/\)\?mobile\([[:space:]].*\)\?$#mobile#' \
-        "$ROOTFS/etc/osmocom/run.sh"
-    # Garde-fou : sous set -e, un run.sh absent tuait la construction tout au bout
-# de l'etape 5. Le fichier vient de l'image, pas du depot : s'il manque, c'est
-# l'image qu'il faut regarder, pas une heure de build qu'il faut perdre.
 if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
     chmod +x "$ROOTFS/etc/osmocom/run.sh"
 else
+    # Garde-fou : sous set -e, un run.sh absent tuait la construction tout au
+    # bout de l'etape 5. Le fichier vient de l'image, pas du depot : s'il
+    # manque, c'est l'image qu'il faut regarder, pas une heure de build qu'il
+    # faut perdre.
     echo -e "  ${YELLOW}!${NC} /etc/osmocom/run.sh absent de l'image ${CYAN}${ISO_SRC_IMAGE}${NC}"
 fi
-fi
 
-echo -e "  ${GREEN}✓${NC} patch SGSN + run.sh applique"
+echo -e "  ${GREEN}✓${NC} retouches natives rejouees sur le rootfs (SGSN, MSC, sms-routing, run.sh)"
 mkdir -p "$ROOTFS/usr/bin"
 cp -a "$ROOTFS/usr/local/bin/." "$ROOTFS/usr/bin/" 2>/dev/null || true
 
 mkdir -p "$ROOTFS/root/.osmocom/bb"
-if [ -f "$ROOTFS/opt/osmo_egprs/mobile.cfg" ]; then
-    cp "$ROOTFS/opt/osmo_egprs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
-elif [ -f "$ROOTFS/opt/osmo_egprs/configs/mobile.cfg" ]; then
-    cp "$ROOTFS/opt/osmo_egprs/configs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
+if [ -f "$ROOTFS/opt/GSM/osmo_egprs/mobile.cfg" ]; then
+    cp "$ROOTFS/opt/GSM/osmo_egprs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
+elif [ -f "$ROOTFS/opt/GSM/osmo_egprs/configs/mobile.cfg" ]; then
+    cp "$ROOTFS/opt/GSM/osmo_egprs/configs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
 elif [ -f "$ROOTFS/etc/osmocom/mobile.cfg" ]; then
     cp "$ROOTFS/etc/osmocom/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
 fi
 
-if ! chroot "$ROOTFS" getent passwd osmocom >/dev/null 2>&1; then
-    chroot "$ROOTFS" useradd -m -s /bin/bash osmocom 2>/dev/null || true
-fi
+# ── PAS D'UTILISATEUR osmocom : ROOT, ET RIEN D'AUTRE ───────────────────────
+# L'image portait un compte "osmocom" force a l'UID 0 (usermod -o -u 0). Un
+# compte qui EST root sans le dire coute plus qu'il ne rapporte :
+#   - GDM refuse toute session pour l'uid 0, il fallait donc neutraliser la
+#     regle PAM "user != root" pour qu'un autologin sur ce compte aboutisse ;
+#   - deux noms pour le meme uid donnent deux HOME (/home/osmocom et /root) et
+#     donc deux .osmocom/bb : les mobiles ecrits dans l'un, lus dans l'autre ;
+#   - "ls -l" affiche tantot root tantot osmocom pour un meme proprietaire,
+#     selon l'ordre de /etc/passwd - de quoi chercher longtemps un probleme de
+#     droits qui n'existe pas.
+# Cette image tourne en root, assume : on SUPPRIME le compte et on rend les
+# unites systemd a root. Les .service viennent des paquets Osmocom amont, qui
+# posent "User=osmocom / Group=osmocom" ; sans compte, ils echouent au
+# demarrage sur "Failed to determine user credentials" - un demon qui ne part
+# pas, et rien dans son propre journal pour le dire.
+sed -i -e 's/^User=osmocom$/User=root/' -e 's/^Group=osmocom$/Group=root/' \
+       "$ROOTFS/lib/systemd/system"/osmo-*.service \
+       "$ROOTFS/etc/systemd/system"/osmo-*.service 2>/dev/null || true
 
-chroot "$ROOTFS" usermod -o -u 0 -g 0 osmocom 2>/dev/null || true
+chroot "$ROOTFS" userdel -r osmocom 2>/dev/null || true
+chroot "$ROOTFS" groupdel osmocom  2>/dev/null || true
+rm -rf "$ROOTFS/home/osmocom"
+# /var/lib/osmocom (bases HLR, etats GTP) et /var/log/osmocom appartenaient au
+# compte supprime : sans ce chown ils gardent un UID orphelin, et l'ecriture
+# echoue des le premier demarrage ("Unable to create file").
+chown -R 0:0 "$ROOTFS/root/.osmocom" "$ROOTFS/var/lib/osmocom" \
+             "$ROOTFS/var/log/osmocom" 2>/dev/null || true
 
-mkdir -p "$ROOTFS/home/osmocom"
-chown -R 0:0 "$ROOTFS/home/osmocom" "$ROOTFS/root/.osmocom" 2>/dev/null || true
-
-echo -e "  ${GREEN}✓${NC} user osmocom + /usr/bin + mobile.cfg prets"
+echo -e "  ${GREEN}✓${NC} compte osmocom supprime (tout tourne en root) + /usr/bin + mobile.cfg prets"
 
 chmod +x "$ROOTFS/etc/osmocom/run.sh"
 
 # ── Etape 6 : Injection du dashboard web ───────────────────────────────────
 echo -e "${GREEN}[6/9] Dashboard web (git clone)...${NC}"
-WEB="$ROOTFS/opt/osmo-egprs-web"
+WEB="$ROOTFS/opt/GSM/osmo-egprs-web"
 WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
-WEB_BRANCH="${OSMO_WEB_BRANCH:-test}"
+# main, PAS "test". La branche de travail du depot web partait dans toutes les
+# ISO : une image gravee recevait ce qui n'etait pas encore relu, et deux ISO
+# construites a deux semaines d'ecart n'embarquaient pas le meme dashboard sans
+# qu'aucune option ne l'ait demande. OSMO_WEB_BRANCH=test reste possible, mais
+# il faut le vouloir.
+WEB_BRANCH="${OSMO_WEB_BRANCH:-main}"
 
 mkdir -p "$WEB/web"
 # Source AUTORITAIRE = le VRAI git bbaranoff/osmo-egprs-web (clone ci-dessous).
-# La copie locale /opt/osmo-egprs-web n'est plus utilisee que comme override
+# La copie locale /opt/GSM/osmo-egprs-web n'est plus utilisee que comme override
 # EXPLICITE : OSMO_WEB_LOCAL=/chemin ./build-iso.sh. Sinon -> git.
 # Le patch natif plus bas est idempotent (skip si server.js est deja en mode natif).
 LOCAL_WEB="${OSMO_WEB_LOCAL:-}"
@@ -1058,60 +1064,46 @@ fi
 
 # ── Etape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
 echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
-P="$ROOTFS/opt/osmo_egprs"
-# [2026-08-14] `lib` ajoute : scripts/audio-chain.sh source lib/audio.sh.
-# Sans ce repertoire l'ISO embarquait un wrapper qui ne pouvait pas se sourcer.
-# [2026-08-25] `network` et `tools` AJOUTES a la liste. Sans eux, les `cp
-# "$DIR/network/..." "$P/network/..."` de la boucle suivante echouaient - le
-# repertoire cible n'existait pas - et comme ils sont dans une chaine `&&`,
-# l'echec ne disait rien : l'ISO partait SANS aucun script WAN, et le seul
-# symptome etait un "introuvable" au moment d'en avoir besoin.
-# [2026-08-27] `pont` RETIRE de la liste : Dockerfile.run ne fait plus de
-# `COPY pont/pont.py`, le pont est pris dans le depot embarque.
-mkdir -p "$P"/{scripts,configs,checks,helpers,lib,network,tools,data}
-# set_stp_ip.sh et network/set-node-id.sh MANQUAIENT : ce sont les deux scripts
-# que start-direct.sh appelle des qu'on lui donne --node. Sans set-node-id.sh il
-# refuse net ("network/set-node-id.sh absent", exit 1) - et c'est pourtant CE
-# chemin que le message de login et le lien osmo-start-direct annoncent. Sans
-# set_stp_ip.sh, le noeud monte mais son ASP inter-STP reste sur 127.0.0.1 en
-# shutdown : l'interco SS7 ne s'etablit jamais, sans un mot pour le dire.
-for f in start.sh start-direct.sh start-interstp.sh build.sh set_stp_ip.sh \
-         network/loopback.sh network/set-node-id.sh \
-         tools/vty-menu.sh tools/vty-connect.exp \
-         network/firewall-wan.sh network/setup-wan-interop.sh network/setup-wan-sms.sh \
-         network/wan-nodes.sh network/setup-wan-mesh.sh network/setup-vbox-interco.sh; do
-    [ -f "$DIR/$f" ] && cp "$DIR/$f" "$P/$f" && chmod +x "$P/$f"
-done
-ln -sf /opt/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
-# [2026-08-16] `pont` AJOUTE A LA LISTE. Dockerfile.run contient desormais
-# `COPY pont/pont.py`, donc sans ce repertoire dans la charge de l'ISO le
-# `docker build -f Dockerfile.run .` echoue net au premier demarrage.
-# `network` AJOUTE A LA LISTE : le mkdir plus haut le cree, mais rien ne le
-# remplissait au-dela des quelques fichiers nommes un a un ci-dessus. Les
-# scripts WAN s'appellent entre eux (set-node-id.sh lit wan-nodes.sh,
-# set_ip_vm.sh...) : en copier une partie donne un repertoire qui a l'air
-# complet et casse au premier renvoi vers un voisin absent.
-for d in scripts configs checks helpers lib pont network data; do
-    [ -d "$DIR/$d" ] && cp -r "$DIR/$d/." "$P/$d/" && find "$P/$d" -name "*.sh" -exec chmod +x {} \;
-done
-[ -f "$DIR/Dockerfile" ]     && cp "$DIR/Dockerfile"     "$P/"
-[ -f "$DIR/Dockerfile.run" ] && cp "$DIR/Dockerfile.run" "$P/"
-ln -sf /opt/osmo_egprs/start.sh "$ROOTFS/usr/local/bin/osmo-start-lab"
-[ -f "$DIR/launch/osmo-launch.sh" ] && cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
-ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
-
-# [2026-08-03] start-in-iso.sh a ete supprime : start-direct.sh le remplace.
-# L'ancien bloc fabriquait, en son absence, un stub qui refusait de demarrer
-# ("Veuillez fournir un script start-in-iso.sh complet") - l'ISO partait donc
-# avec un lanceur inutilisable. On embarque le vrai lanceur.
-if [ -f "$DIR/start-direct.sh" ]; then
-    cp "$DIR/start-direct.sh" "$P/start-direct.sh"
-    chmod +x "$P/start-direct.sh"
-    echo -e "  ${GREEN}✓${NC} /opt/osmo_egprs/start-direct.sh copie"
-else
+# ── UN SEUL ARBRE DU DEPOT : /opt/GSM/osmo_egprs ────────────────────────────
+# Ici vivait la fabrication d'un SECOND arbre, /opt/GSM/osmo_egprs : une copie
+# PARTIELLE du depot (une liste de fichiers nommes un a un, plus sept
+# repertoires), sans .git, figee a la construction. L'ISO partait donc avec
+# deux osmo_egprs :
+#
+#   /opt/GSM/osmo_egprs   l'arbre COMPLET, avec son .git, mis a jour a
+#                         l'etape [5a/9] et par "osmo-update" ensuite ;
+#   /opt/GSM/osmo_egprs       une copie partielle que plus rien ne mettait a jour.
+#
+# Et c'est le second que visaient les liens osmo-start-direct / osmo-start-lab,
+# le message de login, l'alias osmo-lab et l'unite du hub SS7. Autrement dit :
+# on mettait a jour un arbre, on en executait un autre. Tout ce qui a ete ajoute
+# au depot depuis la derniere construction - un module, un script network/, une
+# option - existait sur la machine et restait sans effet, parce que le lanceur
+# lance n'etait pas celui qu'on venait de corriger.
+#
+# Le filet que la copie apportait - "un lanceur present meme sans reseau" - est
+# conserve, mais AU MEME ENDROIT : si l'arbre complet n'a pas pu etre recupere,
+# on le remplit depuis le depot de construction, et il n'y a toujours qu'un
+# seul chemin.
+P="$ROOTFS/opt/GSM/osmo_egprs"
+if [ ! -x "$P/start-direct.sh" ]; then
+    echo -e "  ${YELLOW}!${NC} /opt/GSM/osmo_egprs sans lanceur (image perimee, clone impossible)"
+    echo -e "    -> remplissage depuis le depot de construction ${CYAN}${DIR}${NC}"
+    mkdir -p "$P"
+    # --exclude .git : on ne fabrique pas un faux depot. S'il en manquait un,
+    # c'est que le reseau a manque ; osmo-update le reconstituera.
+    tar -C "$DIR" --exclude=.git --exclude='*.iso' -cf - . | tar -C "$P" -xf -
+    find "$P" -name "*.sh" -exec chmod +x {} \;
+fi
+if [ ! -x "$P/start-direct.sh" ]; then
     echo -e "  ${RED}✗${NC} start-direct.sh introuvable - l'ISO n'aura pas de lanceur" >&2
     exit 1
 fi
+ln -sf /opt/GSM/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
+ln -sf /opt/GSM/osmo_egprs/start.sh        "$ROOTFS/usr/local/bin/osmo-start-lab"    2>/dev/null || true
+[ -f "$DIR/launch/osmo-launch.sh" ] && cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
+ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
+echo -e "  ${GREEN}✓${NC} lanceurs -> ${CYAN}/opt/GSM/osmo_egprs${NC} (arbre unique, avec .git)"
 
 # ── WAN : table des noeuds figee dans l'image ────────────────────────────────
 if [ "$ISO_WAN" = "1" ]; then
@@ -1146,6 +1138,75 @@ fi
 # en natif (start-direct.sh) : pas d'image Docker a charger, pas de ce service.
 
 # ── Etape 9 : Configuration chroot (paquets) ───────────────────────────────
+# ── Ce que le chroot ne peut pas ecrire lui-meme ────────────────────────────
+# Le script du chroot est passe a "bash -c" en QUOTES SIMPLES : rien n'y est
+# substitue a l'ecriture, ce qui est voulu, mais une seule apostrophe dans le
+# corps referme la chaine et tout ce qui suit change de sens. Les fichiers qui
+# en contiennent - un heredoc quote, une commande shell imbriquee - s'ecrivent
+# donc ICI, dans le rootfs, ou le quoting est normal. Le chroot ne fait plus que
+# les activer.
+
+# NetworkManager pilote le bureau ; ce qui appartient au coeur paquet ne lui
+# appartient pas. Sans cette regle, NM reprend apn0 ou un tun du GGSN et coupe
+# la session de donnees d'un abonne parce qu'il l'a jugee "non configuree".
+mkdir -p "$ROOTFS/etc/NetworkManager/conf.d"
+cat > "$ROOTFS/etc/NetworkManager/conf.d/10-osmo-networkd.conf" <<'NMCONF'
+# Ecrit par build-iso.sh. NetworkManager gere les cartes physiques et le
+# bureau ; les interfaces du coeur paquet restent a systemd-networkd et aux
+# scripts du banc.
+[main]
+plugins=keyfile
+
+[keyfile]
+unmanaged-devices=interface-name:apn*;interface-name:tun*;interface-name:veth*;interface-name:docker*;interface-name:br-*;interface-name:osmo*
+NMCONF
+
+# Chromium : installe au PREMIER DEMARRAGE, depuis les .snap embarques quand ils
+# sont la, depuis le magasin sinon. Voir la variante desktop du chroot.
+#
+# CHROMIUM ET PAS FIREFOX, et ce n'est pas une preference.
+# Les deux ne sont disponibles qu'en snap sur jammy - le .deb "chromium-browser"
+# comme le .deb "firefox" sont des paquets de TRANSITION qui appellent snapd.
+# Mais sur ce banc, Firefox ne capte pas le micro et Chrome oui, constate des
+# deux cotes : le tableau de bord a besoin de getUserMedia pour injecter la voix
+# dans gsm_mic, et un navigateur qui ne capture pas rend cette fonction
+# inutilisable. La cause de fond - PulseAudio en mode systeme, dont le socket
+# n'est pas la ou un snap le cherche - est corrigee par osmo-pulse-link.sh plus
+# bas, mais Chromium reste le navigateur qui fonctionne dans les deux cas.
+if [ "$ISO_DESKTOP" = "1" ]; then
+cat > "$ROOTFS/etc/systemd/system/osmo-chromium-snap.service" <<'CRSNAP'
+[Unit]
+Description=Installation de Chromium (snap) au premier demarrage
+# snapd.seeded : snapd a fini de deballer ce que l'image portait deja. Partir
+# avant, c'est installer par-dessus une graine encore en cours de montage.
+After=snapd.seeded.service network-online.target
+Wants=snapd.seeded.service
+ConditionPathExists=!/var/lib/osmo-snaps/.installe
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Hors ligne d'abord (les .snap embarques), le magasin ensuite : un banc sans
+# Internet doit quand meme avoir son navigateur.
+# audio-record n'est PAS connectee d'office par snapd : sans elle le bac a
+# sable refuse le micro et getUserMedia rend NotFoundError, sans qu'une seule
+# ligne ne parle de confinement.
+ExecStart=/bin/bash -c 'cd /var/lib/osmo-snaps 2>/dev/null || exit 0; \
+  for a in *.assert; do [ -e "$a" ] && snap ack "$a"; done; \
+  for s in gtk-common-themes gnome-42-2204 chromium; do \
+    [ -e "$s.snap" ] && snap install "$s.snap" 2>/dev/null; \
+  done; \
+  snap list chromium >/dev/null 2>&1 || snap install chromium || true; \
+  snap connect chromium:audio-record 2>/dev/null || true; \
+  snap connect chromium:audio-playback 2>/dev/null || true; \
+  touch /var/lib/osmo-snaps/.installe'
+
+[Install]
+WantedBy=multi-user.target
+CRSNAP
+echo -e "  ${GREEN}✓${NC} osmo-chromium-snap.service (Chromium par snap, au premier boot)"
+fi
+
 echo -e "${GREEN}[8/9] Configuration chroot...${NC}"
 mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
@@ -1221,7 +1282,13 @@ apt-get update -qq
 # inter-STP ne fait que router du M3UA : ni radio, ni QEMU, ni audio, ni PBX.
 # Lui installer asterisk, pulseaudio et ffmpeg, c est du poids et des services
 # en plus pour rien.
-PKGS="netcat-openbsd socat tcpdump git logrotate
+# ca-certificates EN TETE, et reinstalle explicitement plus bas. Le rootfs sort
+# de debootstrap avec le paquet mais SANS son magasin a jour : /etc/ssl/certs
+# n est peuple que par update-ca-certificates, que rien n appelait ici. Tout ce
+# qui parle en TLS depuis l image echouait alors sur "certificate verify
+# failed" - git clone https, curl, snap download, npm - et le message accuse le
+# reseau, pas le magasin vide.
+PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate
       linux-image-generic initramfs-tools
       live-boot live-boot-initramfs-tools
       libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2
@@ -1324,8 +1391,8 @@ if ! command -v node &>/dev/null; then
     apt-get install -y $APT_OPTS --no-install-recommends nodejs
 fi
 
-if [ -f /opt/osmo-egprs-web/package.json ]; then
-    cd /opt/osmo-egprs-web && npm install --production 2>/dev/null || true
+if [ -f /opt/GSM/osmo-egprs-web/package.json ]; then
+    cd /opt/GSM/osmo-egprs-web && npm install --production 2>/dev/null || true
 fi
 
 # ── VARIANTE DESKTOP : bureau, wireshark en fenetre, linphone ──────────────
@@ -1346,23 +1413,62 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # linphone (sans suffixe) est un paquet de TRANSITION vide sur jammy ; le
     # client graphique s appelle linphone-desktop. wireshark tire wireshark-qt.
     apt-get install -y $APT_OPTS \
-        ubuntu-desktop-minimal wireshark linphone-desktop \
+        ubuntu-desktop-minimal wireshark linphone-desktop snapd \
         || echo "WARN: installation du bureau incomplete"
+
+    # ── CHROMIUM : LE SNAP, PAS LE DEB ─────────────────────────────────────
+    # Sur jammy, "apt install chromium-browser" (comme "apt install firefox")
+    # pose un paquet de TRANSITION vide dont le postinst appelle
+    # "snap install ...". Dans un chroot, snapd ne tourne pas : le postinst
+    # echoue, apt le signale a peine, et l image sort avec un binaire qui
+    # n existe pas. On ne compte donc pas sur apt.
+    #
+    # On ne peut pas non plus "snap install" ici - meme raison. Ce qui marche
+    # dans un chroot, c est TELECHARGER (snap download parle au magasin en
+    # direct, il n a pas besoin du demon) et laisser l installation au premier
+    # demarrage, quand snapd tourne pour de bon. Les .snap et leurs assertions
+    # voyagent dans l image : l installation se fait alors HORS LIGNE, ce qui
+    # compte pour un banc qui n a pas toujours Internet.
+    # L unite qui les pose (osmo-chromium-snap.service) est ecrite HORS de ce
+    # chroot : le script y est en quotes simples, une apostrophe de plus et
+    # tout ce qui suit change de sens.
+    apt-get purge -y firefox chromium-browser 2>/dev/null || true
+    mkdir -p /var/lib/osmo-snaps
+    _snap_ok=1
+    for _sn in gtk-common-themes gnome-42-2204 chromium; do
+        ( cd /var/lib/osmo-snaps && snap download "$_sn" --basename="$_sn" ) \
+            || { echo "  [desktop] WARN: snap download $_sn a echoue"; _snap_ok=0; }
+    done
+    systemctl enable osmo-chromium-snap 2>/dev/null || true
+    if [ "$_snap_ok" = "1" ]; then
+        echo "  [desktop] Chromium : snap embarque ($(du -sh /var/lib/osmo-snaps 2>/dev/null | cut -f1)), installe au premier boot"
+    else
+        echo "  [desktop] Chromium : snap NON embarque - installation depuis le magasin au premier boot (reseau requis)"
+    fi
 
     systemctl set-default graphical.target
 
-    # NetworkManager arrive avec le bureau et veut piloter les interfaces, alors
-    # que TOUTE la config reseau de cette image passe par systemd-networkd
-    # (20-dhcp.network, adresses privees du WAN, activation plus haut). Deux
-    # gestionnaires sur la meme interface, c est l adresse qui saute au milieu
-    # d une session M3UA. On masque NM : le bureau s en passe (il affiche juste
-    # un indicateur reseau inerte), le reseau reste a systemd-networkd.
-    systemctl mask NetworkManager NetworkManager-wait-online 2>/dev/null || true
+    # ── NetworkManager : ACTIF ──────────────────────────────────────────────
+    # Il etait masque pour laisser systemd-networkd seul maitre des interfaces.
+    # Le cout etait un bureau sans reseau utilisable a la main : pas de choix de
+    # Wi-Fi, pas de VPN, pas de bascule d interface - il fallait editer un
+    # .network et redemarrer un service pour changer de carte.
+    #
+    # Les deux cohabitent a condition que chacun sache ce qui ne lui appartient
+    # pas. systemd-networkd garde les interfaces du banc (apn0, les tun/veth du
+    # coeur paquet) ; NetworkManager prend les cartes physiques. La regle qui le
+    # dit - /etc/NetworkManager/conf.d/10-osmo-networkd.conf - est ecrite HORS
+    # de ce chroot, dont le script est en quotes simples. Sans elle, les deux se
+    # disputent la meme carte et c est l adresse qui saute au milieu d une
+    # session M3UA.
+    systemctl unmask NetworkManager NetworkManager-wait-online 2>/dev/null || true
+    systemctl enable NetworkManager 2>/dev/null || true
 
     # ── Autologin ──────────────────────────────────────────────────────────
-    # L utilisateur osmocom de cette image porte l UID 0 (usermod -o -u 0 plus
-    # haut), et GDM refuse toute session pour l uid 0. La regle n est pas dans
-    # gdm3.conf mais dans PAM :
+    # ROOT, directement : il n y a plus de compte "osmocom" (supprime plus
+    # haut - c etait un alias d UID 0 qui se faisait passer pour un compte
+    # ordinaire). GDM, lui, refuse toute session pour l uid 0, et la regle
+    # n est pas dans gdm3.conf mais dans PAM :
     #     auth required pam_succeed_if.so user != root quiet_success
     # Sans la neutraliser, autologin ou pas, on retombe sur l ecran de connexion
     # et AUCUN mot de passe ne passe - y compris le bon.
@@ -1372,7 +1478,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     cat > /etc/gdm3/custom.conf <<GDM
 [daemon]
 AutomaticLoginEnable=true
-AutomaticLogin=osmocom
+AutomaticLogin=root
 # X11 impose : sous VirtualBox/QEMU, la session Wayland de GNOME 42 tombe sur
 # le pilote llvmpipe et rend un bureau inutilisable, quand elle demarre.
 WaylandEnable=false
@@ -1382,7 +1488,7 @@ GDM
     # rejoue a CHAQUE boot sur un live sans persistance : il faut le desarmer,
     # sinon il est la premiere - et longtemps la seule - chose a l ecran.
     rm -f /etc/xdg/autostart/gnome-initial-setup-first-login.desktop
-    for h in /root /home/osmocom; do
+    for h in /root; do
         mkdir -p "$h/.config" && echo yes > "$h/.config/gnome-initial-setup-done"
     done
 
@@ -1410,7 +1516,22 @@ GDM
     fi
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
 
-    echo "  [desktop] GNOME pret : autologin osmocom, X11, NM masque"
+    echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Chromium snap"
+fi
+
+# ── Les certificats, POUR DE BON ────────────────────────────────────────────
+# Installer ca-certificates ne suffit pas : c est update-ca-certificates qui
+# deballe /usr/share/ca-certificates/* dans /etc/ssl/certs et fabrique le
+# ca-certificates.crt que lisent OpenSSL, curl, git et snap. Dans un chroot le
+# postinst ne le fait pas toujours - et le rootfs sortait avec un magasin vide.
+# --fresh : on repart du magasin du paquet plutot que d ajouter a un etat
+# herite du debootstrap, dont on ne sait pas ce qu il contient.
+apt-get install -y $APT_OPTS --reinstall ca-certificates >/dev/null 2>&1 || true
+update-ca-certificates --fresh >/dev/null 2>&1 || update-ca-certificates || true
+if [ -s /etc/ssl/certs/ca-certificates.crt ]; then
+    echo "  certificats : $(grep -c "BEGIN CERTIFICATE" /etc/ssl/certs/ca-certificates.crt) autorites dans /etc/ssl/certs"
+else
+    echo "  WARN: /etc/ssl/certs/ca-certificates.crt vide - le TLS echouera dans l image"
 fi
 
 setcap cap_net_raw,cap_net_admin+eip $(which dumpcap) 2>/dev/null || true
@@ -1484,7 +1605,14 @@ EOF
 # Deux images, deux noms : si l'operateur et le hub inter-STP publiaient tous
 # deux `gsm`, avahi detecterait la collision et renommerait l'un en `gsm-2`
 # - un nom qui depend de l'ordre de demarrage, donc inutilisable.
-ISO_MDNS_NAME="${ISO_MDNS_NAME:-$([ "$ISO_ROLE" = "interstp" ] && echo gsm-hub || echo gsm)}"
+# ── Le nom mDNS PORTE LE NUMERO DU NOEUD ────────────────────────────────────
+# "gsm.local" etait le meme sur toutes les images. Des que deux noeuds sont sur
+# le meme LAN, avahi ne peut plus les departager : il en renomme un d office en
+# "gsm-2.local" - un nom que personne n a choisi, qui change selon l ordre
+# d allumage, et qui n a aucun rapport avec le numero de noeud. Le nom suit donc
+# le noeud : gsm_node_1.local, gsm_node_2.local...
+# Le hub, lui, est unique par construction et garde son nom propre.
+ISO_MDNS_NAME="${ISO_MDNS_NAME:-$([ "$ISO_ROLE" = "interstp" ] && echo gsm-hub || echo "gsm_node_${ISO_NODE:-1}")}"
 mkdir -p "$ROOTFS/etc/avahi"
 cat > "$ROOTFS/etc/avahi/avahi-daemon.conf" <<AVAHI
 [server]
@@ -1542,17 +1670,61 @@ DHCP=yes
 #
 # La route /16 disparait pour la meme raison : elle couvrait le plan docker
 # entier et primait sur toute route plus fine vers l'hote.
-Address=__PRIV_GW__/32
-Address=__PRIV_IP__/32
+#
+# [2026-08-29] LES ADRESSES PRIVEES NE SONT PLUS ICI.
+# Elles y etaient sous [Match] Name=en* eth*, donc posees sur TOUTE carte qui
+# repond au motif - et le motif ne dit rien de celle qui porte reellement le
+# reseau. Sur une VM a plusieurs interfaces, l'adresse se retrouvait sur le NAT
+# pendant que le pont, lui, ne l'avait pas : un pair visait 192.168.2.10 sans
+# trouver personne, alors que "ip addr" la montrait bien presente - ailleurs.
+# systemd-networkd ne sait pas exprimer « la carte qui a la route par defaut » :
+# c'est une propriete d'execution. C'est osmo-ip-plan.service qui les pose
+# maintenant, avec repli sur la boucle locale quand aucune carte ne mene nulle
+# part (voir network/osmo-ip-plan.sh).
 EOF
-sed -i -e "s|__PRIV_GW__|${ISO_PRIV_GW}|" -e "s|__PRIV_IP__|${ISO_PRIV_IP}|" \
-       "$ROOTFS/etc/systemd/network/20-dhcp.network"
 # docker RETIRE de la liste : son service n'existe plus (ISO natif) et 'systemctl
 # enable' valide tous les units d'abord → un seul manquant faisait AVORTER l'enable
 # de systemd-networkd/resolved → enp3s0 sans IP au boot. On active chaque unit
 # separement pour qu'un eventuel echec n'empeche pas les autres.
 chroot "$ROOTFS" systemctl enable systemd-networkd 2>/dev/null||true
 chroot "$ROOTFS" systemctl enable systemd-resolved 2>/dev/null||true
+
+# ── Les adresses privees du noeud, posees a l'EXECUTION ─────────────────────
+# Voir network/osmo-ip-plan.sh : il choisit la carte qui fournit reellement
+# Internet, y pose 192.168.<noeud+1>.1 et .10, et retombe sur 127.0.0.66 sur lo
+# quand aucune carte ne mene nulle part - de sorte que les configurations qui
+# nomment une adresse privee trouvent TOUJOURS quelque chose de local, au lieu
+# d'echouer au bind sur une adresse absente.
+install -Dm755 "$DIR/network/osmo-ip-plan.sh" "$ROOTFS/usr/local/sbin/osmo-ip-plan.sh"
+cat > "$ROOTFS/etc/systemd/system/osmo-ip-plan.service" <<'IPPLAN'
+[Unit]
+Description=Adresses privees du noeud sur la carte qui fournit Internet
+# APRES networkd-wait-online : avant, aucune route par defaut n'existe encore et
+# le script conclurait "aucune carte" a chaque demarrage - le repli loopback
+# serait la regle au lieu de l'exception.
+After=network-online.target systemd-networkd.service
+Wants=network-online.target
+Before=osmo-egprs-web.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/osmo-ip-plan.sh --apply
+
+[Install]
+WantedBy=multi-user.target
+IPPLAN
+# Rejoue a chaque changement de lien : un cable rebranche, un Wi-Fi qui prend le
+# relais, et la carte qui fournit Internet n'est plus la meme. Sans ca, les
+# adresses restaient sur l'ancienne - presentes, et injoignables.
+mkdir -p "$ROOTFS/etc/networkd-dispatcher/routable.d"
+cat > "$ROOTFS/etc/networkd-dispatcher/routable.d/50-osmo-ip-plan" <<'IPHOOK'
+#!/bin/sh
+exec /usr/local/sbin/osmo-ip-plan.sh --apply
+IPHOOK
+chmod +x "$ROOTFS/etc/networkd-dispatcher/routable.d/50-osmo-ip-plan"
+chroot "$ROOTFS" systemctl enable osmo-ip-plan 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} osmo-ip-plan : ${CYAN}192.168.$(( ${ISO_NODE:-1} + 1 )).1/.10${NC} sur la carte Internet, repli ${CYAN}127.0.0.66${NC}"
 
 # live-boot ecrit /root/etc/network/interfaces dans la racine montee au boot.
 # Sans ifupdown, /etc/network/ n'existe pas -> "/init: can't create
@@ -1604,7 +1776,7 @@ echo -e "  ${GREEN}✓${NC} animation SMS a l'ouverture de session (99-osmo-sms.
 
 # ── /usr/local/bin/osmo-update : la mise a jour, EN PLACE, par git ─────────
 # [2026-08-27] L'ancien mecanisme n'etait pas une mise a jour, c'etait un
-# remplacement : effacer /opt/GSM/osmo_egprs et /opt/osmo-egprs-web, recloner
+# remplacement : effacer /opt/GSM/osmo_egprs et /opt/GSM/osmo-egprs-web, recloner
 # depuis GitHub, a chaque demarrage. Il fallait un reseau pour demarrer, ce qui
 # tournait n'etait jamais ce que l'ISO portait, et tout ce qui avait ete pose
 # dans un arbre disparaissait au boot suivant.
@@ -1656,7 +1828,7 @@ fi
 # nom|chemin - les chemins que cherchent deja start-direct.sh, le dashboard et
 # environnement/paths.env. En changer un ici ne deplacerait pas ceux qui les lisent.
 REPOS="osmo_egprs|/opt/GSM/osmo_egprs
-osmo-egprs-web|/opt/osmo-egprs-web
+osmo-egprs-web|/opt/GSM/osmo-egprs-web
 qemu-src|/opt/GSM/qemu-src"
 
 WANT="${1:-}"
@@ -1740,8 +1912,8 @@ fi
 # Le dashboard tourne en service : un depot avance ne change rien tant que le
 # demon fait tourner l'ancien server.js.
 if [ "$web_moved" = "1" ]; then
-    [ -f /opt/osmo-egprs-web/package.json ] && \
-        (cd /opt/osmo-egprs-web && npm install --production >/dev/null 2>&1 || true)
+    [ -f /opt/GSM/osmo-egprs-web/package.json ] && \
+        (cd /opt/GSM/osmo-egprs-web && npm install --production >/dev/null 2>&1 || true)
     systemctl try-restart osmo-egprs-web >/dev/null 2>&1 || true
     printf "  ${G}✓${N} dashboard relance\n"
 fi
@@ -1915,8 +2087,8 @@ After=network-online.target systemd-networkd-wait-online.service
 [Service]
 Type=forking
 PIDFile=/run/osmo-interstp.pid
-ExecStart=/opt/osmo_egprs/start-interstp.sh --ip ${ISO_HUB_IP}
-ExecStop=/opt/osmo_egprs/start-interstp.sh --stop
+ExecStart=/opt/GSM/osmo_egprs/start-interstp.sh --ip ${ISO_HUB_IP}
+ExecStop=/opt/GSM/osmo_egprs/start-interstp.sh --stop
 Restart=on-failure
 RestartSec=5
 [Install]
@@ -1942,8 +2114,8 @@ Description=osmo_egprs Web Dashboard (native)
 After=network.target
 [Service]
 Type=simple
-WorkingDirectory=/opt/osmo-egprs-web
-ExecStart=/usr/bin/node /opt/osmo-egprs-web/server.js --verbose
+WorkingDirectory=/opt/GSM/osmo-egprs-web
+ExecStart=/usr/bin/node /opt/GSM/osmo-egprs-web/server.js --verbose
 Restart=always
 RestartSec=5
 Environment=HTTP_PORT=8080
@@ -2002,12 +2174,34 @@ cat > "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh" <<'ACHAIN'
 # jetee par le null-sink. Toujours exit 0 : l'audio ne doit jamais empecher la
 # pile de monter. AUDIO=0 ou AUDIO_LOCAL_LOOPBACK=0 neutralisent.
 set -u
-for r in /opt/GSM/osmo_egprs /opt/osmo_egprs /etc/osmocom/osmo_egprs; do
+for r in /opt/GSM/osmo_egprs /etc/osmocom/osmo_egprs; do
     [ -x "$r/scripts/audio-chain.sh" ] && exec "$r/scripts/audio-chain.sh" "${1:-30}"
 done
 exit 0
 ACHAIN
 chmod +x "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh"
+
+cat > "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh" <<'PLINK'
+#!/bin/sh
+# osmo-pulse-link.sh - rend le PulseAudio SYSTEME visible des applications qui
+# cherchent un socket par utilisateur, snaps compris.
+#
+# En mode systeme, PulseAudio n'ecoute que sur /run/pulse/native. Les clients,
+# eux, regardent $XDG_RUNTIME_DIR/pulse/native (soit /run/user/<uid>/pulse) -
+# et c'est ce chemin que snapd monte dans le bac a sable. Sans lui, un snap ne
+# voit AUCUN peripherique : Firefox rendait « NotFoundError » sur le micro,
+# pendant que pactl listait deux entrees en RUNNING.
+#
+# Toujours exit 0 : l'audio ne doit jamais empecher la pile de monter.
+set -u
+for d in /run/user/*; do
+    [ -d "$d" ] || continue
+    mkdir -p "$d/pulse" 2>/dev/null || continue
+    ln -sfn /run/pulse/native "$d/pulse/native" 2>/dev/null || true
+done
+exit 0
+PLINK
+chmod +x "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh"
 
 cat > "$ROOTFS/etc/systemd/system/osmo-pulse.service" <<'EOF'
 [Unit]
@@ -2017,6 +2211,18 @@ After=sound.target
 Type=forking
 ExecStart=/usr/bin/pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 --log-target=file:/var/log/osmocom/pulse-system.log
 ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
+# ── LE SOCKET LA OU LES APPLICATIONS LE CHERCHENT ───────────────────────────
+# PulseAudio tourne ici en mode SYSTEME : il n'ecoute que sur /run/pulse/native.
+# Or une application cherche $XDG_RUNTIME_DIR/pulse/native, et c'est ce
+# chemin-la - et lui seul - que snapd monte dans le bac a sable d'un snap.
+# Chromium etant un snap (voir osmo-chromium-snap.service), il ne trouverait aucun
+# serveur audio, enumerait ZERO entree, et getUserMedia rendait
+# « NotFoundError — The object can not be found here ». Le diagnostic partait
+# invariablement sur une permission micro refusee, alors que la machine a deux
+# entrees bien reelles et que Chrome, non confine, capturait au meme instant.
+# Un lien suffit ; il est pose par le demon lui-meme, donc il survit a un
+# restart du service.
+ExecStartPost=/usr/local/sbin/osmo-pulse-link.sh
 # [2026-08-14] Sans ceci, gsm_audio (module-null-sink) n'a AUCUN consommateur :
 # la voix descendante y est jetee par construction, la sortie ALSA reste
 # SUSPENDED et l'appel est muet. Le loopback est le maillon qui manquait - il
@@ -2056,19 +2262,19 @@ export VIRTUAL_ENV_DISABLE_PROMPT=1
 # coeur.env est pose dans /etc/osmocom pour survivre au reclone de boot, mais
 # environment/load.env ne va le chercher QUE dans son propre repertoire : sorti
 # de l'arbre, personne ne le lit. On le charge donc ici, ou les deux arbres en
-# heritent - l'arbre fige /opt/osmo_egprs, qui n'embarque pas environment/, et
+# heritent - l'arbre fige /opt/GSM/osmo_egprs, qui n'embarque pas environment/, et
 # l'arbre reclone /opt/GSM/osmo_egprs, ou il ne survivrait pas. set -a : sans
 # export, la valeur ne franchirait pas le fork vers start-direct.sh. L'idiome
 # ":=" du fichier laisse gagner N_MS=3 ./start-direct.sh.
 if [ -f /etc/osmocom/coeur.env ]; then set -a; . /etc/osmocom/coeur.env; set +a; fi
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
 # Trois annonces designaient trois arbres differents. Le MOTD et le message de
-# login pointent /opt/osmo_egprs (l'arbre fige, present meme sans reseau) ;
+# login pointent /opt/GSM/osmo_egprs (l'arbre fige, present meme sans reseau) ;
 # l'alias visait /opt/GSM/osmo_egprs (l'arbre reclone au demarrage). Les deux
 # fonctionnent, mais un utilisateur qui suit l'un puis l'autre ne travaille pas
 # au meme endroit. On prend le premier chemin qui existe, dans l'ordre ou ils
 # sont les plus complets.
-alias osmo-lab='cd /opt/GSM/osmo_egprs 2>/dev/null || cd /opt/osmo_egprs; ./start-direct.sh'
+alias osmo-lab='cd /opt/GSM/osmo_egprs; ./start-direct.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
 alias osmo-status='/etc/osmocom/status.sh status'
 export PATH="$HOME/.local/bin:$PATH"
@@ -2102,7 +2308,7 @@ LOGO
   # osmo-update.service effacait et reclonait au demarrage : sans reseau au boot,
   # la premiere chose que lisait l'utilisateur designait un arbre qui pouvait ne
   # pas etre la. Le reclone a disparu, l'arbre fige reste - il ne depend de rien.
-  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/osmo_egprs/start-direct.sh"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/osmo_egprs/start-direct.sh"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab Calypso/QEMU (A5/1)"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "Dashboard web  ->  http://<vm-ip>:8080"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "FFT spectres   ->  http://<vm-ip>:8081"
@@ -2410,10 +2616,10 @@ chroot "$ROOTFS" dpkg-reconfigure -f noninteractive keyboard-configuration 2>/de
 # start-direct.sh y chercherait un BSC, un MSC, une BTS qui n'existent pas.
 # Lui dicter start-direct.sh, c'est envoyer droit dans une erreur.
 if [ "$ISO_ROLE" = "interstp" ]; then
-    OSMO_START_HINT='Pour demarrer le hub SS7 : /opt/osmo_egprs/start-interstp.sh'
+    OSMO_START_HINT='Pour demarrer le hub SS7 : /opt/GSM/osmo_egprs/start-interstp.sh'
     OSMO_START_HINT2='  (etat des noeuds attaches : ./start-interstp.sh --status)'
 else
-    OSMO_START_HINT='Pour demarrer la stack : /opt/osmo_egprs/start-direct.sh --node N'
+    OSMO_START_HINT='Pour demarrer la stack : /opt/GSM/osmo_egprs/start-direct.sh --node N'
     OSMO_START_HINT2='  (N de 1 a 9 : il fixe les point codes 1.<N>1.x du noeud)'
 fi
 cat > "$ROOTFS/etc/profile.d/01-osmo-disclaimer.sh" <<KBSCRIPT

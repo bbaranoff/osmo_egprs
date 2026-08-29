@@ -6,7 +6,7 @@
 #            rejete ("IMSI unknown in HLR") et l'on croit a une panne radio.
 #            Reprend la derivation exacte de feed_hlr (start-direct.sh) :
 #              IMSI   = MCC MNC %04d(op) %06d(ms)
-#              MSISDN = 600000 + op * 100 + ms  (600101, 600102, 600201...)
+#              MSISDN = <noeud>00<op><ms>       (100101, 100102, 100201...)
 #              Ki     = 00112233445566778899aabbccdd %02x(ms) %02x(op)
 #  PREREQUIS HLR pret (VTY joignable) ; socat ou telnet pour parler au VTY.
 #  SUCCES    le DERNIER abonne de la serie est reellement relu depuis le HLR -
@@ -40,6 +40,22 @@ _abo_mnc() { printf '%s\n' "${MNC:-$(core_cfg_field "$(core_cfg osmo-msc)" '^[[:
 _abo_imsi() { printf '%s%s%04d%06d\n' "$(_abo_mcc)" "$(_abo_mnc)" "$OPERATOR_ID" "$1"; }
 _abo_ki()   { printf '00112233445566778899aabbccdd%02x%02x\n' "$1" "$OPERATOR_ID"; }
 
+# ── LE NOEUD N'ENTRE QUE DANS LE MSISDN ─────────────────────────────────────
+# IMSI et Ki gardent EXACTEMENT leur derivation : ils sont recalcules a
+# l'identique par start-direct.sh (ms_imsi/ms_ki), start.sh et le gabarit de
+# mobile.cfg. Y glisser le noeud ferait diverger le Ki du mobile de celui du
+# HLR, et l'authentification echouerait sur un Kc different des deux cotes -
+# sans autre trace qu'un CIPHER MODE rejete.
+# Le MSISDN, lui, ne sert a aucun calcul : c'est une adresse, et elle doit dire
+# de quel noeud elle vient, sinon deux noeuds revendiquent les memes numeros.
+_abo_node() {
+    local n="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
+    [ -n "$n" ] || n="$(sed -n 's/^PLAN_NODE=//p' "${OSMOCOM_CFG:-/etc/osmocom}/radio-plan.env" 2>/dev/null | tail -1)"
+    case "$n" in [1-9]) ;; *) n=1 ;; esac
+    printf '%s' "$n"
+}
+_abo_msisdn() { echo $(( $(_abo_node) * 100000 + OPERATOR_ID * 100 + $1 )); }
+
 # Relecture de l'abonne : base sqlite en lecture seule d'abord (fiable et
 # instantanee), VTY en repli si sqlite est indisponible.
 _abo_present() {
@@ -64,14 +80,37 @@ mod_abonnes_hlr_check() {
     mod_ok
 }
 
-mod_abonnes_hlr_status() { _abo_present "$(_abo_imsi "$N_MS")"; }
+# ── L'ETAT, C'EST L'IMSI *ET* SON MSISDN ────────────────────────────────────
+# Ne verifier que la presence de l'IMSI rendait cette etape aveugle a tout
+# changement de numerotation : apres un ./start-direct.sh --regen, les configs
+# repartent sur <noeud>00<op><ms> pendant que le HLR garde les MSISDN de
+# l'ancien plan. L'IMSI, lui, n'a pas bouge - le module se declarait donc
+# "deja fait" et ne mettait rien a jour. L'abonne s'attachait (l'IMSI est
+# connu) mais restait injoignable : aucun appel, aucun SMS, et rien nulle part
+# pour dire que le numero du HLR n'est plus celui du dialplan.
+# "subscriber ... update msisdn" est idempotent : relancer ne coute rien.
+_abo_msisdn_now() {
+    local imsi="$1" v=""
+    if [ -r "$HLR_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+        v="$(sqlite3 -readonly "$HLR_DB" "select msisdn from subscriber where imsi='$imsi';" 2>/dev/null)"
+        [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    fi
+    core_vty_ask "$HLR_VTY_PORT" "enable" "subscriber imsi $imsi show" 2>/dev/null \
+        | sed -n 's/.*MSISDN: *\([0-9][0-9]*\).*/\1/p' | head -1
+}
+
+mod_abonnes_hlr_status() {
+    local imsi; imsi="$(_abo_imsi "$N_MS")"
+    _abo_present "$imsi" || return 1
+    [ "$(_abo_msisdn_now "$imsi")" = "$(_abo_msisdn "$N_MS")" ]
+}
 
 mod_abonnes_hlr_start() {
     local m cmds=() imsi msisdn
     cmds+=("enable")
     for m in $(seq 1 "$N_MS"); do
         imsi="$(_abo_imsi "$m")"
-        msisdn=$(( 600000 + OPERATOR_ID * 100 + m ))
+        msisdn="$(_abo_msisdn "$m")"
         cmds+=("subscriber imsi $imsi create")
         cmds+=("subscriber imsi $imsi update msisdn $msisdn")
         cmds+=("subscriber imsi $imsi update aud2g comp128v1 ki $(_abo_ki "$m")")
@@ -82,7 +121,7 @@ mod_abonnes_hlr_start() {
     # restait pendu jusqu'au timeout, qui le tuait avec un code non nul. exit
     # ferme la session cote HLR, le client sort proprement.
     cmds+=("exit")
-    mod_say "provisionnement de $N_MS abonne(s), operateur $OPERATOR_ID, PLMN $(_abo_mcc)-$(_abo_mnc)"
+    mod_say "provisionnement de $N_MS abonne(s), noeud $(_abo_node), operateur $OPERATOR_ID, PLMN $(_abo_mcc)-$(_abo_mnc) - MSISDN $(_abo_msisdn 1)..$(_abo_msisdn "$N_MS")"
 
     # On juge le dialogue sur ce qu'il a RENDU, pas sur le code de sortie du
     # transport : selon la variante (socat, telnet netkit, busybox) celui-ci

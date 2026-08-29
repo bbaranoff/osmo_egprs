@@ -122,7 +122,10 @@ ARG QEMU_CACHE_BUST
 # supprimé : il faisait doublon avec celui de la ligne ~192, et rien entre les
 # deux ne consomme /opt/GSM/osmo_egprs. On garde le plus tardif, au plus près
 # de l'entrypoint.
-RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo_egprs && git checkout RELEASE-0.1 && git pull
+# Le tag RELEASE-0.1 masque la branche du meme nom (cf. Dockerfile l.538) :
+# fetch explicite + `checkout -B` sur origin/RELEASE-0.1, sinon HEAD detache
+# et le pull echoue.
+RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo_egprs && git fetch origin RELEASE-0.1 && git checkout -B RELEASE-0.1 origin/RELEASE-0.1
 
 # ── Rebuild QEMU (pull latest from GitHub + rebuild) ─────────────────────────
 # [2026-08-12] `ninja` NE SUFFIT PAS APRES CE PULL.

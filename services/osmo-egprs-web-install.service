@@ -20,18 +20,18 @@
 # certificat est deja la (le script est idempotent, garde de 30 jours) et il n'y
 # a pas de second demarrage.
 #
-# ⚠️ Le certificat vit dans /opt/osmo-egprs-web/tls, DANS le conteneur : il ne
+# ⚠️ Le certificat vit dans /opt/GSM/osmo-egprs-web/tls, DANS le conteneur : il ne
 # survit pas a un `docker rm` (les conteneurs sont lances avec --rm). C'est
 # voulu — il est regenere au boot suivant, avec les IP du moment dans le SAN.
 Description=Installe/rafraichit le dashboard osmo-egprs-web (runtime, unit, certificat TLS)
-Documentation=file:/opt/osmo-egprs-web/install-web-service.sh
+Documentation=file:/opt/GSM/osmo-egprs-web/install-web-service.sh
 After=network.target local-fs.target
-ConditionPathIsDirectory=/opt/osmo-egprs-web
+ConditionPathIsDirectory=/opt/GSM/osmo-egprs-web
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash /opt/osmo-egprs-web/install-web-service.sh
+ExecStart=/bin/bash /opt/GSM/osmo-egprs-web/install-web-service.sh
 # Le script peut passer par un `npm install` : large, mais borne.
 TimeoutStartSec=600
 StandardOutput=journal

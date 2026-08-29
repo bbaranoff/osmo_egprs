@@ -10,8 +10,8 @@
 #     grgsm_fft_live.py) : pas d'EOF, le write non-bloquant du relay trouve
 #     toujours un lecteur, et on ne perturbe pas la boucle relay / le camping.
 #
-#   - MS  = dsp_iq.cfile  (entrée DSP Calypso ; fichier qui grandit, pas le ring → pas de freeze)
-#   - BTS = iq_fft.fifo   (DL relay osmo-trx, LIVE)
+#   - MS  = iq_fft_ms.fifo (montant, ecrit par pont.py ; LIVE)
+#   - BTS = iq_fft.fifo    (DL relay osmo-trx, LIVE)
 #   Chaque source accepte indifféremment un .cfile (lecture tail) OU un .fifo
 #   (lecture live) : auto-détecté. Override par env CFILE_MS / CFILE_BTS.
 #
@@ -42,8 +42,11 @@ REFRESH_MS = int(os.environ.get('REFRESH_MS', '40'))
 NSEG_MAX   = int(os.environ.get('NSEG_MAX', '16'))
 
 SRC = {
-    'ms':  {'path': os.environ.get('CFILE_MS',  '/dev/shm/dsp_iq.cfile'),
-            'arfcn': os.environ.get('ARFCN_MS', '514'),  'label': 'MS — Calypso DSP (dsp_iq.cfile)'},
+    # [2026-08-29] Le montant vient de pont.py (PONT_AIRREC_UL_FIFO), pas du
+    # cfile DSP : en mode pont, /dev/shm/dsp_iq.cfile n'a aucun producteur et
+    # le spectre MS restait vide - une seule FFT vivante sur les deux.
+    'ms':  {'path': os.environ.get('CFILE_MS',  '/tmp/iq_fft_ms.fifo'),
+            'arfcn': os.environ.get('ARFCN_MS', '514'),  'label': 'MS — montant (iq_fft_ms.fifo)'},
     'bts': {'path': os.environ.get('CFILE_BTS', '/tmp/iq_fft.fifo'),
             'arfcn': os.environ.get('ARFCN_BTS', '514'), 'label': 'BTS — DL relay LIVE (iq_fft.fifo)'},
 }

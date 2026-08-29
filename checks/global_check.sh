@@ -40,11 +40,11 @@ NC='\033[0m'
 
 # ── Bibliotheque de mode (docker | natif) ─────────────────────────────────────
 # Chemin RELATIF au script : le depot vit en /home/.../osmo_egprs pendant le
-# developpement et en /opt/osmo_egprs sur l'ISO ; un chemin absolu casserait
+# developpement et en /opt/GSM/osmo_egprs sur l'ISO ; un chemin absolu casserait
 # l'un des deux. Le second candidat couvre le cas d'un appel par lien
 # symbolique, ou dirname ne pointe pas sur checks/.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _c in "$_here/_mode.sh" /opt/osmo_egprs/checks/_mode.sh; do
+for _c in "$_here/_mode.sh" /opt/GSM/osmo_egprs/checks/_mode.sh; do
     [ -r "$_c" ] && { . "$_c"; break; }
 done
 command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }

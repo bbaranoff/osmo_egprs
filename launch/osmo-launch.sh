@@ -11,8 +11,8 @@
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-LAB_DIR="/opt/osmo_egprs"
-WEB_DIR="/opt/osmo-egprs-web"
+LAB_DIR="/opt/GSM/osmo_egprs"
+WEB_DIR="/opt/GSM/osmo-egprs-web"
 WEB_SERVICE="osmo-egprs-web"
 LOG_DIR="/var/log/osmocom"
 

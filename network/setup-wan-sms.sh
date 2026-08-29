@@ -73,7 +73,11 @@ SMSEOF2
             # Route prefixe : 66 + operateur + numero
             echo \"${WAN_PREFIX}\${j}0000 = \${wan_op_id}\" >> \"\$CONF\"
             for ms in \$(seq 1 8); do
-                msisdn=\$(( 600000 + j * 100 + ms ))
+                # <noeud>00<op><ms> : ici j numerote le pair distant, donc il
+                # est a la fois son noeud et son operateur (un operateur par
+                # noeud sur ce chemin). Fige a 600, le numero construit ne
+                # correspondait a aucun abonne du pair.
+                msisdn=\$(( j * 100000 + j * 100 + ms ))
                 echo \"${WAN_PREFIX}\${msisdn} = \${wan_op_id}\" >> \"\$CONF\"
             done
         done
