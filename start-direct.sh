@@ -379,6 +379,24 @@ fi
 #   CALYPSO_BRIDGE=ipc  ./start-direct.sh   -> le pont IPC-MS a la place
 #   CALYPSO_BRIDGE=none ./start-direct.sh   -> ni l'un ni l'autre, chaine IQ
 : "${CALYPSO_BRIDGE:=pont}"
+
+# ── LES DEFAUTS DU PONT LEGIT, EN := (SURCHARGEABLES), PAS EN export FORCE ────
+# Ces quatre variables gouvernent le shunt DSP « legit » du Calypso. On les pose
+# ICI, APRES le sourcing de environment/load.env (donc de modes.env) : si un mode
+# les a deja fixees, son choix gagne ; sinon ce sont les defauts. Le ":=" laisse
+# l'environnement l'emporter (VAR=... ./start-direct.sh), ce qu'un "export VAR=0"
+# interdirait. Le set -a les exporte vers QEMU/le shunt sans ligne "export VAR=".
+#   CALYPSO_SHUNT_NO_CANNED=0  le SCH reste REEL (le pont le decode/publie)
+#   CALYPSO_CANNED=1           SI bakes cote shunt (pas de dependance grgsm)
+#   CALYPSO_SKIP_DSP=1         on court-circuite le DSP TI (le pont fait le canal)
+#   CALYPSO_DSP_SHUNT_LEGIT=1  chemin « legit » du shunt (celui qui campe et LU)
+set -a
+: "${CALYPSO_SHUNT_NO_CANNED:=0}"
+: "${CALYPSO_CANNED:=1}"
+: "${CALYPSO_SKIP_DSP:=1}"
+: "${CALYPSO_DSP_SHUNT_LEGIT:=1}"
+set +a
+
 : "${MS_COUNT:=2}"
 : "${HOST_IP:=127.0.0.1}"
 mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb 2>/dev/null || true
@@ -835,7 +853,9 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     # avec des SI. On laisse donc le shunt FABRIQUER le FB (canned), tandis que
     # le SCH, lui, reste REEL : le pont le decode et le publie sur 4731.
     export CALYPSO_SHUNT_REAL_FB=0
-    export CALYPSO_SHUNT_NO_CANNED=0
+    # CALYPSO_SHUNT_NO_CANNED est desormais un defaut := plus haut (bloc « defauts
+    # du pont legit ») : surchargeable, et deja exporte. Ne pas le re-forcer ici
+    # par un "export ...=0" - ca ecraserait une surcharge voulue de l'operateur.
     # 65-record-drain / 66-grgsm-decode sont rallumes par ce forceur meme hors
     # full-grgsm : on le neutralise (aucune IQ a drainer ni a decoder ici).
     export CALYPSO_FORCE_DEMOD_BRIDGE=0

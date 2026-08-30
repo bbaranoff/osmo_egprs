@@ -1318,8 +1318,15 @@ apt-get update -qq
 # qui parle en TLS depuis l image echouait alors sur "certificate verify
 # failed" - git clone https, curl, snap download, npm - et le message accuse le
 # reseau, pas le magasin vide.
+# LE NOYAU : 6.8 (HWE), PAS 5.15 (GA). linux-image-generic sur jammy est fige a
+# la serie 5.15 ; le materiel recent (NIC, USB3, SDR branches en direct) y perd
+# des pilotes que la serie 6.8 porte. linux-image-generic-hwe-22.04 est le noyau
+# d activation materielle officiel de jammy (6.8.0-138, meme depot main, meme
+# cle Canonical - donc toujours signe pour Secure Boot) et tire
+# linux-modules-extra en dependance. La detection plus bas [ls vmlinuz-star,
+# sort -V, tail -1] choisit automatiquement le 6.8 pour l ISO.
 PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate
-      linux-image-generic initramfs-tools
+      linux-image-generic-hwe-22.04 initramfs-tools
       live-boot live-boot-initramfs-tools
       libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2
       libgnutls30 libgnutls28-dev libmnl-dev libmnl0
@@ -1330,7 +1337,7 @@ PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate
       liburing2 libslirp0
       iproute2 iptables net-tools lksctp-tools
       tmux telnet expect whiptail
-      lsb-release openssh-server
+      lsb-release openssh-server sudo
       console-setup keyboard-configuration locales
       psmisc
       python3 python3-venv python3-scapy
@@ -1464,11 +1471,26 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     #   efibootmgr      l entree de demarrage UEFI
     #   os-prober       les autres systemes, pour le menu GRUB
     #   qml-module-*    le diaporama pendant la copie
+    # L echec de CETTE etape ne doit PAS etre avale. calamares tire une longue
+    # chaine de dependances Qt/KDE ; si le miroir en manque une, apt sort en
+    # erreur - et un "|| echo WARN" laissait alors construire une image DESKTOP
+    # SANS installeur, exactement le "calamares marche pas" observe (ni binaire
+    # ni /etc/calamares dans le squashfs livre). On installe, PUIS on verifie
+    # que le binaire est bien la ; sinon on arrete le build.
     apt-get install -y $APT_OPTS \
         calamares squashfs-tools dosfstools efibootmgr os-prober \
         qml-module-qtquick2 qml-module-qtquick-layouts \
-        qml-module-qtquick-window2 qml-module-qtquick-controls \
-        || echo "WARN: calamares incomplet - installeur indisponible"
+        qml-module-qtquick-window2 qml-module-qtquick-controls
+    # On est DANS le chroot (ce bloc tourne sous "chroot ... bash -c") : le
+    # binaire est donc a /usr/bin/calamares, pas sous $ROOTFS (variable absente
+    # ici). set -e est actif ; l apt-get ci-dessus n a plus de "|| echo" donc un
+    # echec avorte deja - ce test attrape le cas ou apt sort 0 mais sans poser le
+    # binaire (paquet recommande saute, etc.).
+    if [ ! -x /usr/bin/calamares ]; then
+        echo "ERREUR: calamares absent du rootfs apres apt-get - build DESKTOP interrompu." >&2
+        echo "        (dependance Qt/KDE manquante au miroir ? relancer avec un cache .deb)" >&2
+        exit 1
+    fi
 
     # ── CHROMIUM : LE SNAP, PAS LE DEB ─────────────────────────────────────
     # Sur jammy, "apt install chromium-browser" (comme "apt install firefox")
@@ -2886,6 +2908,65 @@ DESKTOP
     echo -e "  ${GREEN}✓${NC} installeur ${CYAN}Calamares${NC} : /usr/local/bin/osmo-install (+ icone sur le bureau)"
 elif [ "${ISO_DESKTOP:-0}" = "1" ]; then
     echo -e "  ${YELLOW}!${NC} $_CAL_SRC absent - pas d installeur dans cette image"
+fi
+
+# ── LE LANCEUR GTK "UPDATE" -> update.sh DU DEPOT ───────────────────────────
+# Independant de Calamares : c'est une icone de bureau qui rejoue update.sh, le
+# fichier SUIVI dans le depot osmo_egprs (/opt/GSM/osmo_egprs/update.sh).
+# update.sh est une animation de TERMINAL : sa premiere ligne utile est
+# "[ -t 1 ] || exit 0", donc lance sans tty (depuis une icone GTK) il sort
+# aussitot sans rien montrer. Le lanceur l'ouvre DONC dans un emulateur de
+# terminal - gnome-terminal est tire par ubuntu-desktop-minimal - et laisse la
+# fenetre ouverte a la fin pour qu'on lise le resultat.
+if [ "${ISO_DESKTOP:-0}" = "1" ]; then
+    cat > "$ROOTFS/usr/local/bin/osmo-update-anim" <<'UPDGUI'
+#!/bin/bash
+# Rejoue l animation update.sh du depot osmo_egprs, dans une fenetre terminal.
+set -u
+SCRIPT=/opt/GSM/osmo_egprs/update.sh
+if [ ! -x "$SCRIPT" ]; then
+    command -v zenity >/dev/null 2>&1 && \
+        zenity --error --text="update.sh introuvable : $SCRIPT" 2>/dev/null
+    exit 1
+fi
+# read a la fin : sans lui, la fenetre se fermerait avant qu on lise la ligne
+# "SMS delivered". -e pour la plupart des emulateurs, "--" pour gnome-terminal.
+CMD="\"$SCRIPT\"; echo; read -n1 -rsp 'Termine - une touche pour fermer...'"
+for term in x-terminal-emulator gnome-terminal xterm; do
+    command -v "$term" >/dev/null 2>&1 || continue
+    case "$term" in
+        gnome-terminal) exec "$term" --title="osmo_egprs update" -- bash -c "$CMD" ;;
+        *)              exec "$term" -T "osmo_egprs update" -e bash -c "$CMD" ;;
+    esac
+done
+# Aucun emulateur : dernier recours, on joue directement (utile en tty).
+exec "$SCRIPT"
+UPDGUI
+    chmod +x "$ROOTFS/usr/local/bin/osmo-update-anim"
+
+    cat > "$ROOTFS/usr/share/applications/osmo-update.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Update osmo_egprs
+Name[fr]=Mise a jour osmo_egprs
+Comment=Rejouer update.sh du depot osmo_egprs
+Comment[fr]=Rejouer update.sh du depot osmo_egprs
+Exec=/usr/local/bin/osmo-update-anim
+Icon=system-software-update
+Terminal=false
+Categories=System;
+Keywords=update;sms;osmo;
+DESKTOP
+
+    for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
+        install -d "$_h/Bureau" "$_h/Desktop"
+        cp "$ROOTFS/usr/share/applications/osmo-update.desktop" "$_h/Bureau/"  2>/dev/null || true
+        cp "$ROOTFS/usr/share/applications/osmo-update.desktop" "$_h/Desktop/" 2>/dev/null || true
+        chmod +x "$_h/Bureau/osmo-update.desktop" "$_h/Desktop/osmo-update.desktop" 2>/dev/null || true
+    done
+    chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
+
+    echo -e "  ${GREEN}✓${NC} lanceur GTK ${CYAN}update${NC} : /usr/local/bin/osmo-update-anim (+ icone sur le bureau)"
 fi
 
 # ── L ERREUR DE SYNTAXE DE LA COPIE EN RAM ──────────────────────────────────
